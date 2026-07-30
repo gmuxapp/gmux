@@ -107,7 +107,7 @@ func TestProductionSpawnerExecTransfersPreparedLease(t *testing.T) {
 	script := filepath.Join(dir, "lease-runner")
 	body := fmt.Sprintf(`#!/usr/bin/python3
 import os, socket, time
-fd = int(os.environ["GMUX_SOCKET_LEASE_FD"])
+fd = int(os.environ["_GMXINTERNAL_SOCKET_LEASE_FD"])
 os.fstat(fd)
 s = socket.socket(socket.AF_UNIX)
 s.bind(%q)

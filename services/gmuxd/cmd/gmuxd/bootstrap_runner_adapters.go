@@ -563,7 +563,7 @@ func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLa
 	cmd.Env = sessionenv.Strip(captureLoginEnv(req.GmuxBin, req.CWD))
 	if req.LeaseFile != nil {
 		cmd.ExtraFiles = append(cmd.ExtraFiles, req.LeaseFile)
-		cmd.Env = append(cmd.Env, "GMUX_SOCKET_LEASE_FD=3")
+		cmd.Env = append(cmd.Env, "_GMXINTERNAL_SOCKET_LEASE_FD=3")
 	}
 	// Stdio is wired explicitly, and to nothing.
 	//

@@ -236,8 +236,7 @@ func probeSocket(socketPath string) bool {
 // Two paths, distinguished by whether the runner-reported id is
 // already known to the store:
 //
-//   - **Re-registration** (id already in store). Resume — where the
-//     daemon passed GMUX_RESUME_ID to the runner per ADR 0003 — and
+//   - **Re-registration** (id already in store). Resumed sessions and
 //     daemon-restart-with-surviving-runner both land here. The
 //     existing record is mutated in place: runtime fields (alive,
 //     pid, socket, status, started/exit times, binary hash, runner

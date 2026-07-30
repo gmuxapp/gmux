@@ -521,11 +521,12 @@ func (c *wsClient) write(typ websocket.MessageType, data []byte) error {
 
 // Config for creating a new PTY server.
 type Config struct {
-	Command        []string
-	CommandWrapper []string // internal argv prefix applied after adapter command extension
-	Cwd            string
-	Env            []string
-	ExtraFiles     []*os.File // inherited control fds for internal command wrappers
+	Command           []string
+	CommandWrapper    []string // internal argv prefix applied after adapter command extension
+	CommandWrapperEnv []string // private env consumed and unset by the internal wrapper before exec
+	Cwd               string
+	Env               []string
+	ExtraFiles        []*os.File // inherited control fds for internal command wrappers
 	// Listener is the pre-bound Unix socket the server serves
 	// HTTP/WebSocket on. Required. Callers obtain one via
 	// BindSocket so they can react to ErrSocketInUse (e.g.,
@@ -630,7 +631,7 @@ func New(cfg Config) (*Server, error) {
 
 	if len(cfg.CommandWrapper) > 0 {
 		wrapped := append(append([]string{}, cfg.CommandWrapper...), cmd.Args...)
-		wrappedEnv := cmd.Env
+		wrappedEnv := append(cmd.Env, cfg.CommandWrapperEnv...)
 		cmd = exec.Command(wrapped[0], wrapped[1:]...)
 		cmd.Dir = cfg.Cwd
 		cmd.Env = wrappedEnv
@@ -1891,20 +1892,18 @@ func buildChildEnv(parent, extra []string, version string) []string {
 		version = "dev"
 	}
 	env := make([]string, 0, len(parent)+len(extra)+5)
-	for _, e := range parent {
-		// GMUX_RESUME_ID is a private daemon→runner directive (see
-		// ADR 0003). Inheriting it into PTY children would let a
-		// nested `gmux foo` invocation inside a session try to
-		// re-bind the parent runner's id; it'd survive on the
-		// collision fallback, but that's exactly the safety-net
-		// dependency the dedicated env var name was supposed to
-		// avoid. Strip on the way out.
-		if strings.HasPrefix(e, "GMUX_RESUME_ID=") {
-			continue
+	for _, layer := range [][]string{parent, extra} {
+		for _, e := range layer {
+			key := e
+			if i := strings.IndexByte(e, '='); i >= 0 {
+				key = e[:i]
+			}
+			if strings.HasPrefix(key, "_GMXINTERNAL_") {
+				continue
+			}
+			env = append(env, e)
 		}
-		env = append(env, e)
 	}
-	env = append(env, extra...)
 	env = append(env,
 		"TERM_PROGRAM=gmux",
 		"TERM_PROGRAM_VERSION="+version,

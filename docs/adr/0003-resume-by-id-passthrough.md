@@ -81,7 +81,7 @@ if sessionID == "" {
 }
 ```
 
-The original incarnation of this ADR used a `GMUX_RESUME_ID`
+The original incarnation of this ADR used a `_GMXINTERNAL_RESUME_ID`
 environment variable for the same purpose. The mechanism moved to
 a CLI flag once the runner grew a real flag parser: `ps` now shows
 the directive directly, the daemon↔runner contract is
@@ -89,10 +89,10 @@ greppable, and the runner doesn't need an env-strip step in
 `buildChildEnv` to keep the directive from leaking into
 grandchildren (POSIX runner semantics in the parser already stop
 at the first positional, so a child command's own argv can't
-collide with the daemon's `--resume-id`). The env var is still
-honoured as a fallback when the flag is absent so a brand-new
-runner paired with an older daemon (rolling upgrade) keeps
-working; it will be removed in a future release.
+collide with the daemon's `--resume-id`). The private `_GMXINTERNAL_RESUME_ID` remains a same-build fallback,
+but it does not provide old-daemon/new-runner compatibility: an older
+daemon sends the former environment name, which a newer runner no longer
+reads. The daemon and runner should be upgraded together.
 
 `--resume-id` is orthogonal to the `GMUX_SESSION_ID` the runner
 exports to its child process. `GMUX_SESSION_ID` is the
@@ -389,18 +389,17 @@ negative sizes) without ad-hoc parsing, and doesn't need an
 env-strip step in `buildChildEnv` since POSIX runner semantics
 in the parser already stop at the first positional, so a child
 command's own argv can't collide with the daemon's directives.
-The legacy `GMUX_RESUME_ID` env var is honoured as a fallback for
-the one rolling-upgrade direction that can realistically happen
-in practice: a new runner binary paired with a still-old daemon
-(e.g. the user's host-installed gmux auto-updated faster than a
-containerised gmuxd). The reverse direction (new daemon emitting
-`--resume-id` to an old runner that doesn't know the flag) is
-not guarded; it would break /resume and /restart until the
-runner catches up. This is acceptable because gmux and gmuxd
-ship as a single release and `scripts/install.sh` replaces both
-binaries atomically; an operator who upgrades only the daemon is
-off the supported path. The fallback will be removed in a future
-release.
+The private `_GMXINTERNAL_RESUME_ID` env var remains as a legacy
+same-build fallback, but current daemon launch paths use `--resume-id`.
+It does not provide old-daemon/new-runner compatibility because an old
+daemon sends the former environment name. Cross-version flag compatibility
+is not guaranteed: gmux and gmuxd ship as a single release and
+`scripts/install.sh` replaces both binaries atomically.
+
+An already-running old runner can still be observed by a new daemon through
+its metadata. Its runner version and binary hash remain available to the UI,
+which marks the session as outdated and offers the normal restart path; the
+environment fallback is not involved in that skew direction.
 
 The same mechanism (`--initial-cols` / `--initial-rows`) carries
 the last-known PTY dimensions through the fork so child processes

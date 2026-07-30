@@ -28,7 +28,7 @@ var preserve = map[string]bool{
 }
 
 // Strip returns env with gmux session-identity variables removed: the
-// bare GMUX marker and every GMUX_* variable except the configuration
+// bare GMUX marker, every _GMXINTERNAL_* variable, and every GMUX_* variable except the configuration
 // vars in preserve. GMUXD_* daemon config is untouched (it does not
 // match the GMUX_ prefix — the character after GMUX is 'D', not '_').
 //
@@ -42,7 +42,7 @@ func Strip(env []string) []string {
 		if i := strings.IndexByte(e, '='); i >= 0 {
 			key = e[:i]
 		}
-		if key == "GMUX" {
+		if key == "GMUX" || strings.HasPrefix(key, "_GMXINTERNAL_") {
 			continue
 		}
 		if strings.HasPrefix(key, "GMUX_") && !preserve[key] {

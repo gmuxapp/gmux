@@ -23,7 +23,7 @@ func main() {
 	log.SetPrefix("gmux: ")
 	log.SetFlags(0)
 
-	// Consume GMUX_HANDSHAKE_FD before anything can fork: a lazily-read
+	// Consume _GMXINTERNAL_HANDSHAKE_FD before anything can fork: a lazily-read
 	// env var leaks into the session's environment and makes any nested
 	// gmux close an arbitrary fd of its own (see handshake.go).
 	captureHandshakeFD()
