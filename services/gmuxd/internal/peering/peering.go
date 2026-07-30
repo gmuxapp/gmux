@@ -138,7 +138,7 @@ type PeerInfo struct {
 	Local bool `json:"local,omitempty"`
 	// Source records how the peer was added: "tailscale" (auto-discovered
 	// on the tailnet), "devcontainer" (auto-discovered Docker container),
-	// or "manual" (peers.json / POST /v1/peers). Used by the UI to group
+	// or "manual" (state.db / POST /v1/peers). Used by the UI to group
 	// hosts; empty for the synthesized self row.
 	Source string `json:"source,omitempty"`
 	// NodeID is the peer's stable opaque identity (ADR 0007), reported
