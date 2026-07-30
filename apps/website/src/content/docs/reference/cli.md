@@ -775,10 +775,11 @@ Peers:
 
 ### `gmux version` · `gmux help`
 
-Print the version, or the usage summary. `gmux help` accepts a trailing verb
-name (it prints the full usage either way) — except the `agent` namespace,
-which has real per-verb help: `gmux agent help` prints the namespace guide,
-and `gmux agent prompt|logs|cancel --help` (or `gmux help agent …`) prints
+Print the version, or help. `gmux help <verb>` prints that verb's dedicated
+page when one exists; an unknown topic falls back to the top-level usage
+summary. `gmux help daemon` delegates to gmuxd's help. The `agent` namespace
+also has nested help: `gmux agent help` prints the namespace guide, and
+`gmux agent prompt|logs|cancel --help` (or `gmux help agent …`) prints
 per-verb detail.
 
 ## gmuxd

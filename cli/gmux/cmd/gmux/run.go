@@ -499,15 +499,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	if !interactive {
 		// The payload rule (ADR 0028 amendment): stdout carries the child's
 		// output and nothing else, so `gmux -- pnpm build | tail` reads the
-		// build, not gmux metadata. The session id goes to stderr — printed
-		// before the child runs, so a watcher can still attach or tail while
-		// the command is starting. LocalOut relays the PTY stream to stdout
+		// build, not gmux metadata. LocalOut relays the PTY stream to stdout
 		// with escapes stripped and CRLF normalised; the UI and scrollback
 		// keep the full escape stream.
-		fmt.Fprintln(os.Stderr, sessionID)
-		if stdinHasPendingData(os.Stdin) {
-			fmt.Fprintf(os.Stderr, "gmux: stdin is not forwarded into the session; use 'gmux send %s'.\n", sessionID)
-		}
 		ptyCfg.LocalOut = newANSIStrippingWriter(os.Stdout)
 	}
 
@@ -533,6 +527,15 @@ func runSession(args []string, attach bool, dir runDirectives) {
 			localTty.Detach()
 		}
 		log.Fatalf("failed to start: %v", err)
+	}
+
+	if !interactive {
+		// Publish only after the child and PTY exist. Before New succeeds the
+		// reserved id does not name a runnable or addressable session.
+		fmt.Fprintln(os.Stderr, sessionID)
+		if stdinHasPendingData(os.Stdin) {
+			fmt.Fprintf(os.Stderr, "gmux: stdin is not forwarded into the session; use 'gmux send %s'.\n", sessionID)
+		}
 	}
 
 	state.SetRunning(srv.Pid())

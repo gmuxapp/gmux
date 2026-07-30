@@ -524,7 +524,7 @@ func deliverPrompt(sess cliSession, mode string, noWait bool, timeoutSecs int, p
 	// the wait, not the turn. `--no-wait` still blocks — on admission, or on
 	// delivery for a mode that joins a running turn — and the notice is just as
 	// true for it: the session keeps running either way.
-	stopNotice := noticeInterruptedWait(os.Stderr, sess.ID, os.Stdout, false)
+	stopNotice := noticeInterruptedWait(os.Stdout, false)
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(body)))
 	stopNotice()
 	if err != nil {

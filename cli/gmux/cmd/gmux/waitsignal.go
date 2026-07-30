@@ -48,8 +48,8 @@ import (
 //
 // The returned function uninstalls the handler; callers defer it so a
 // long-running process (the test binary) does not accumulate handlers.
-func noticeInterruptedWait(w io.Writer, sessionID string, options ...any) func() {
-	stop, observed := observeInterruptedWait(w, sessionID, options...)
+func noticeInterruptedWait(out io.Writer, quiet bool) func() {
+	stop, observed := observeInterruptedWait(out, quiet)
 	return func() {
 		stop()
 		select {
@@ -66,17 +66,7 @@ func noticeInterruptedWait(w io.Writer, sessionID string, options ...any) func()
 // addition to the ordinary stop function it exposes the first observed signal
 // so the caller can suppress buffered reports while the asynchronous death
 // path is still completing (notably when SIGINT was inherited as ignored).
-func observeInterruptedWait(w io.Writer, _ string, options ...any) (func(), <-chan os.Signal) {
-	out := w
-	quiet := false
-	if len(options) > 0 {
-		if v, ok := options[0].(io.Writer); ok {
-			out = v
-		}
-	}
-	if len(options) > 1 {
-		quiet, _ = options[1].(bool)
-	}
+func observeInterruptedWait(out io.Writer, quiet bool) (func(), <-chan os.Signal) {
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	done := make(chan struct{})
