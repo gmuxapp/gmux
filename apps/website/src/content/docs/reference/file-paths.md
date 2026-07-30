@@ -27,7 +27,7 @@ Created by gmuxd. Lives under `~/.local/state/gmux` (or `$XDG_STATE_HOME/gmux`).
 | `~/.local/state/gmux/auth-token` | Bearer token for TCP authentication |
 | `~/.local/state/gmux/state.db`, `state.db-wal`, `state.db-shm` | Central SQLite database (ADR 0026) — sessions, projects, peers, and their tokens. Owner-only (0600); backups contain peer tokens and must be treated as secrets. Use `gmux daemon state backup <path>` for consistent online backups |
 | `~/.local/state/gmux/node-id` | Stable, opaque per-node identity (ADR 0007), generated on first start. Not a secret, but back it up with `auth-token` — if it changes, peers see a different host |
-| `~/.local/state/gmux/sessions/<session-id>/scrollback`, `scrollback.0` | Terminal scrollback (written by the runner). For dead sessions this is a cache: an aggregate budget (`GMUX_SCROLLBACK_CACHE_MB`, default 256 MB) evicts oldest-first while the session row in `state.db` survives |
+| `~/.local/state/gmux/sessions/<session-id>/scrollback`, `scrollback.0` | Terminal scrollback (written by the runner). For dead sessions this is a cache: an aggregate budget (`sessions.scrollback_cache_mb` in `host.toml`, default 256 MB) evicts oldest-first while the session row in `state.db` survives |
 | `~/.local/state/gmux/shell-sessions/` | Shell adapter per-session state files |
 | `~/.local/state/gmux/gmuxd.log` | Daemon log (when started via `gmux daemon start`) |
 | `~/.local/state/gmux/tsnet/` | Tailscale state directory (when remote access is enabled) |

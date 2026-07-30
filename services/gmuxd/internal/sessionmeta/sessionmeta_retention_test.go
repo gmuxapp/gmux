@@ -309,37 +309,10 @@ func TestSweepUndatableCorpseSurvives(t *testing.T) {
 	}
 }
 
-// --- env overrides -------------------------------------------------
-
-func TestDefaultRetentionEnvOverride(t *testing.T) {
-	t.Setenv(envRetentionDays, "5")
-	t.Setenv(envRetentionCount, "10")
-	t.Setenv(envScrollbackCacheMB, "64")
+func TestDefaultRetention(t *testing.T) {
 	p := DefaultRetention()
-	if p.MaxAge != 5*24*time.Hour {
-		t.Errorf("MaxAge: got %v, want 5d", p.MaxAge)
-	}
-	if p.MaxCount != 10 {
-		t.Errorf("MaxCount: got %d, want 10", p.MaxCount)
-	}
-	if p.ScrollbackCacheBytes != 64<<20 {
-		t.Errorf("ScrollbackCacheBytes: got %d, want 64MiB", p.ScrollbackCacheBytes)
-	}
-
-	t.Setenv(envRetentionDays, "0")
-	t.Setenv(envScrollbackCacheMB, "0")
-	if got := DefaultRetention().MaxAge; got != 0 {
-		t.Errorf("days=0 should disable age limit, got %v", got)
-	}
-	if got := DefaultRetention().ScrollbackCacheBytes; got != 0 {
-		t.Errorf("cache=0 should disable scrollback cap, got %d", got)
-	}
-
-	// Overflowing day count falls back to the default rather than
-	// wrapping to a negative duration.
-	t.Setenv(envRetentionDays, "100000000000")
-	if got := DefaultRetention().MaxAge; got != DefaultMaxAge {
-		t.Errorf("overflowing days should fall back to %v, got %v", DefaultMaxAge, got)
+	if p.MaxAge != DefaultMaxAge || p.MaxCount != DefaultMaxCount || p.ScrollbackCacheBytes != DefaultScrollbackCacheBytes {
+		t.Fatalf("DefaultRetention() = %+v", p)
 	}
 }
 

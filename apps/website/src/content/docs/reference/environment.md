@@ -16,12 +16,8 @@ Variables that affect the daemon.
 | `XDG_CONFIG_HOME` | Base directory for config files. | `~/.config` |
 | `XDG_STATE_HOME` | Base directory for runtime state (socket, auth token). | `~/.local/state` |
 | `GMUXD_TS_HOSTNAME` | Seed the requested Tailscale node name at *first* registration (advanced/multi-instance setups); ignored once registered. | `gmux-<hostname>` |
-| `GMUX_SESSION_RETENTION_DAYS` | Age out dead shell sessions (no conversation file) older than N days. `0` = unlimited. | `30` |
-| `GMUX_SESSION_RETENTION_MAX` | Keep at most N dead shell sessions. `0` = unlimited. | `200` |
-| `GMUX_SCROLLBACK_CACHE_MB` | Aggregate cap on dead-session scrollback; evicted oldest-first (session metadata survives). `0` = unlimited. | `256` |
 | `GMUXD_DEV_PROXY` | Proxy frontend requests to a Vite dev server (development only). | *(none)* |
 
-(The retention variables use the `GMUX_` prefix, not `GMUXD_`.)
 
 ### Bind address
 

@@ -64,7 +64,7 @@ Its one job is **connect-time replay for live sessions**: when a client attaches
 
 Independently, the runner appends every raw chunk to `$XDG_STATE_HOME/gmux/sessions/<id>/scrollback` (`packages/scrollback`). The format is raw PTY bytes with no framing. It's an append-only active file that rotates to `scrollback.0` when it exceeds 1 MiB, bounding disk usage at 2 MiB per session.
 
-The tee is deliberately dumb — clears and alt-screen switches are stored verbatim; whoever replays the bytes interprets them. Because it lives on disk, it survives runner exit and backs **dead-session replay**. For dead sessions it's treated as an evictable cache: an aggregate budget (`GMUX_SCROLLBACK_CACHE_MB`, default 256 MB) evicts scrollback oldest-first while the session metadata survives (ADR 0016).
+The tee is deliberately dumb — clears and alt-screen switches are stored verbatim; whoever replays the bytes interprets them. Because it lives on disk, it survives runner exit and backs **dead-session replay**. For dead sessions it's treated as an evictable cache: the `sessions.scrollback_cache_mb` host configuration (default 256 MB) sets an aggregate budget that evicts scrollback oldest-first while the session metadata survives (ADR 0016).
 
 ## Four viewing paths
 

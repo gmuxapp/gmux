@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -22,6 +25,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if !cfg.Discovery.Devcontainers {
 		t.Error("discovery.devcontainers should default to true")
+	}
+	if cfg.Sessions.RetentionDays != 30 || cfg.Sessions.RetentionMax != 200 || cfg.Sessions.ScrollbackCacheMB != 256 {
+		t.Errorf("sessions defaults = %+v", cfg.Sessions)
 	}
 }
 
@@ -48,6 +54,78 @@ allow = ["alice@github", "bob@github"]
 	}
 	if len(cfg.Tailscale.Allow) != 2 {
 		t.Fatalf("allow = %v, want 2 entries", cfg.Tailscale.Allow)
+	}
+}
+
+func TestLoadSessions(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `[sessions]
+retention_days = 7
+retention_max = 42
+scrollback_cache_mb = 512
+`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sessions.RetentionDays != 7 || cfg.Sessions.RetentionMax != 42 || cfg.Sessions.ScrollbackCacheMB != 512 {
+		t.Errorf("sessions = %+v", cfg.Sessions)
+	}
+}
+
+func TestLoadValidatesSessions(t *testing.T) {
+	maxDays := effectiveIntMax(math.MaxInt64 / int64(24*time.Hour))
+	maxMB := effectiveIntMax(int64(math.MaxInt64 >> 20))
+	maxInt := int64(^uint(0) >> 1)
+	zero := SessionsConfig{}
+
+	tests := []struct {
+		name         string
+		body         string
+		wantErr      bool
+		wantSessions *SessionsConfig
+	}{
+		{"explicit zero", "retention_days = 0\nretention_max = 0\nscrollback_cache_mb = 0", false, &zero},
+		{"negative retention days", "retention_days = -1", true, nil},
+		{"negative retention max", "retention_max = -1", true, nil},
+		{"negative scrollback cache", "scrollback_cache_mb = -1", true, nil},
+		{"maximum retention days", fmt.Sprintf("retention_days = %d", maxDays), false, nil},
+		{"retention days maximum plus one", fmt.Sprintf("retention_days = %d", maxDays+1), true, nil},
+		{"maximum retention count", fmt.Sprintf("retention_max = %d", maxInt), false, nil},
+		{"maximum scrollback cache", fmt.Sprintf("scrollback_cache_mb = %d", maxMB), false, nil},
+		{"scrollback cache maximum plus one", fmt.Sprintf("scrollback_cache_mb = %d", maxMB+1), true, nil},
+		{"TOML integer decode overflow", "retention_max = 9223372036854775808", true, nil},
+	}
+	if maxInt < math.MaxInt64 {
+		tests = append(tests, struct {
+			name         string
+			body         string
+			wantErr      bool
+			wantSessions *SessionsConfig
+		}{"retention count maximum plus one", fmt.Sprintf("retention_max = %d", maxInt+1), true, nil})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, "[sessions]\n"+tt.body+"\n")
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() succeeded with sessions %+v, want error", cfg.Sessions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if tt.wantSessions != nil && cfg.Sessions != *tt.wantSessions {
+				t.Errorf("sessions = %+v, want %+v", cfg.Sessions, *tt.wantSessions)
+			}
+		})
 	}
 }
 
@@ -364,6 +442,9 @@ func TestLoadDiscoveryDefaults(t *testing.T) {
 	}
 	if !cfg.Discovery.Devcontainers {
 		t.Error("discovery.devcontainers should default to true")
+	}
+	if cfg.Sessions.RetentionDays != 30 || cfg.Sessions.RetentionMax != 200 || cfg.Sessions.ScrollbackCacheMB != 256 {
+		t.Errorf("sessions defaults = %+v", cfg.Sessions)
 	}
 }
 

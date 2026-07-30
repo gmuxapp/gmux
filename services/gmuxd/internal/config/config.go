@@ -10,11 +10,13 @@ package config
 import (
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -26,6 +28,7 @@ type Config struct {
 
 	Tailscale TailscaleConfig `toml:"tailscale"`
 	Discovery DiscoveryConfig `toml:"discovery"`
+	Sessions  SessionsConfig  `toml:"sessions"`
 
 	// NOTE: there is no `[[peers]]` array (removed in ADR 0007). Manually
 	// added peers are now runtime state in peers.json (see internal/
@@ -76,6 +79,13 @@ type DiscoveryConfig struct {
 	// insecure to auto-connect; tailnet peers are now added manually via
 	// "Connect to host".
 	Devcontainers bool `toml:"devcontainers"`
+}
+
+// SessionsConfig controls retention of dead sessions and their scrollback cache.
+type SessionsConfig struct {
+	RetentionDays     int `toml:"retention_days"`
+	RetentionMax      int `toml:"retention_max"`
+	ScrollbackCacheMB int `toml:"scrollback_cache_mb"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -171,6 +181,18 @@ func validate(cfg Config) error {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
 
+	maxRetentionDays := effectiveIntMax(math.MaxInt64 / int64(24*time.Hour))
+	if cfg.Sessions.RetentionDays < 0 || int64(cfg.Sessions.RetentionDays) > maxRetentionDays {
+		return fmt.Errorf("sessions.retention_days must be between 0 and %d", maxRetentionDays)
+	}
+	if cfg.Sessions.RetentionMax < 0 {
+		return fmt.Errorf("sessions.retention_max must be non-negative")
+	}
+	maxScrollbackCacheMB := effectiveIntMax(int64(math.MaxInt64 >> 20))
+	if cfg.Sessions.ScrollbackCacheMB < 0 || int64(cfg.Sessions.ScrollbackCacheMB) > maxScrollbackCacheMB {
+		return fmt.Errorf("sessions.scrollback_cache_mb must be between 0 and %d", maxScrollbackCacheMB)
+	}
+
 	// Tailscale: allow list entries must look like login names or device
 	// tags. Tagged devices have no user identity, so they are allowed by
 	// tag (e.g. "tag:gmux") instead of login name.
@@ -188,6 +210,16 @@ func validate(cfg Config) error {
 	}
 
 	return nil
+}
+
+// effectiveIntMax returns the largest value that both fits in an int and does
+// not exceed the limit imposed by the value's later runtime conversion.
+func effectiveIntMax(conversionMax int64) int64 {
+	intMax := int64(^uint(0) >> 1)
+	if conversionMax < intMax {
+		return conversionMax
+	}
+	return intMax
 }
 
 // validateListen checks that the listen address is safe to bind to.
@@ -246,6 +278,11 @@ func defaults() Config {
 		Port: 8790,
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
+		},
+		Sessions: SessionsConfig{
+			RetentionDays:     30,
+			RetentionMax:      200,
+			ScrollbackCacheMB: 256,
 		},
 	}
 }

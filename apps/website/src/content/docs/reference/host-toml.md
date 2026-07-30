@@ -25,6 +25,12 @@ allow = []               # additional login names or device tags (owner is auto-
 # Auto-discover devcontainer peers. Defaults to true.
 [discovery]
 devcontainers = true     # subscribe to Docker events, register gmux containers
+
+# Dead-session retention and scrollback cache limits.
+[sessions]
+retention_days = 30
+retention_max = 200
+scrollback_cache_mb = 256
 ```
 
 ## Node identity
@@ -46,6 +52,16 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 | `port` | `number` | `8790` | 1–65535 | TCP port for the HTTP listener. |
 
 The bind address is not configurable here — it is the `GMUXD_LISTEN` environment variable (default `127.0.0.1`). See [Environment variables](/reference/environment/#bind-address).
+
+### `[sessions]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `retention_days` | `number` | `30` | Remove dead sessions without conversations after this many days. `0` disables age-based retention. |
+| `retention_max` | `number` | `200` | Keep at most this many dead sessions without conversations. `0` disables count-based retention. |
+| `scrollback_cache_mb` | `number` | `256` | Aggregate cache limit for dead-session scrollback, evicted oldest-first while metadata survives. `0` disables the limit. |
+
+All session values must be non-negative.
 
 ### `[tailscale]`
 
@@ -70,7 +86,8 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
 - **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
-- **TOML syntax is invalid**
+- **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
+- **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid
 
 This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
 
