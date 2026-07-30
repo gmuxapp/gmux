@@ -704,9 +704,10 @@ gmux daemon start      # start in the background (replaces a running instance)
 gmux daemon stop       # stop the running daemon
 gmux daemon restart    # restart; active sessions survive and are rediscovered
 gmux daemon log-path   # print the log file path (for scripting)
-gmux daemon state check       # verify database integrity (migrations, FK, SQLite integrity)
+gmux daemon state check          # verify database integrity (migrations, FK, SQLite integrity)
 gmux daemon state backup <path>  # consistent online backup (contains peer tokens — treat as secret)
-gmux daemon state export      # redacted JSON dump for bug reports
+gmux daemon state export         # redacted JSON dump for bug reports
+gmux daemon state reset --yes    # back up automatically, terminate sessions, and start clean
 ```
 
 `gmux daemon status` example:
