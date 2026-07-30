@@ -22,11 +22,11 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		d.on(func(w http.ResponseWriter, _ *http.Request) {
 			writeEnvelope(w, http.StatusAccepted, map[string]any{"admission": "accepted"})
 		})
-		stubAgentLaunch(t, "sess-abcd1234", nil)
+		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
 		stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", true, 0, &text) })
-		if code != 0 || stdout != "sess-abcd1234\n" {
+		if code != 0 || stdout != "1va8lvdv\n" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
 		}
 	})
@@ -37,11 +37,11 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 			writeEnvelope(w, http.StatusOK, map[string]any{"admission": "accepted", "outcome": "completed",
 				"exchanges": []map[string]any{{"ordinal": 1, "user": "go", "iterations": 1}}, "output": "done"})
 		})
-		stubAgentLaunch(t, "sess-abcd1234", nil)
+		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
 		stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
-		if code != 0 || !strings.HasPrefix(stdout, "sess-abcd1234\n\n[USER]: go") || !strings.Contains(stdout, "[AGENT]: done") {
+		if code != 0 || !strings.HasPrefix(stdout, "1va8lvdv\n\n[USER]: go") || !strings.Contains(stdout, "[AGENT]: done") {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
 		}
 	})
@@ -51,11 +51,11 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		d.on(func(w http.ResponseWriter, _ *http.Request) {
 			writeErrEnvelope(w, http.StatusGatewayTimeout, "admission_timeout", "not ready")
 		})
-		stubAgentLaunch(t, "sess-abcd1234", nil)
+		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
 		stdout := captureStdout(t, func() { captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) }) })
-		if code != waitExitError || stdout != "sess-abcd1234\n\n" {
+		if code != waitExitError || stdout != "1va8lvdv\n\n" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
 		}
 	})
@@ -73,7 +73,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 
 	t.Run("bad prompt is rejected before spawn", func(t *testing.T) {
 		startStubDaemon(t, localSession())
-		argv := stubAgentLaunch(t, "sess-abcd1234", nil)
+		argv := stubAgentLaunch(t, "1va8lvdv", nil)
 		empty := "   "
 		captureStderr(t, func() { _ = cmdAgentPromptNew("", "", false, 0, &empty) })
 		if *argv != nil {

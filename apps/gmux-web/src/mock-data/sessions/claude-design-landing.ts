@@ -8,7 +8,7 @@ const C10 = '\x1b[0;38;2;255;255;255m'
 const C11 = '\x1b[0;38;2;136;136;136m'
 
 export default {
-  id: 'sess-claude-01',
+  id: '16jyedwd',
   created_at: ago(10),
   command: ['claude'],
   cwd: '/home/user/dev/my-project',
@@ -26,7 +26,7 @@ export default {
   unread: true,
   project_slug: 'my-project',
   last_output_at: ago(3),
-  socket_path: '/tmp/gmux-sessions/sess-claude-01.sock',
+  socket_path: '/tmp/gmux-sessions/16jyedwd.sock',
   // Sized to 34 columns: the landing page's mobile hero captures this
   // session at a viewport that fits exactly 34 xterm columns, so lines
   // must stay ≤34 chars to fill the terminal without wrapping. The

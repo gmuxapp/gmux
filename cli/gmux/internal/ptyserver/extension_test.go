@@ -60,7 +60,7 @@ func TestReconnectReplaysConversationRef(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")
-	sessFile := filepath.Join(dir, "2026-06-19_sess-reconnect.jsonl")
+	sessFile := filepath.Join(dir, "2026-06-19_16zvlmc6.jsonl")
 
 	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
@@ -121,7 +121,7 @@ func TestReconnectReplaysSlug(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")
-	sessFile := filepath.Join(dir, "2026-06-19_sess-slugreplay.jsonl")
+	sessFile := filepath.Join(dir, "2026-06-19_1g8mkjz8.jsonl")
 
 	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
@@ -178,8 +178,8 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")
-	fileA := filepath.Join(dir, "2026-06-19_sess-A.jsonl")
-	fileB := filepath.Join(dir, "2026-06-19_sess-B.jsonl")
+	fileA := filepath.Join(dir, "2026-06-19_10qld4kp.jsonl")
+	fileB := filepath.Join(dir, "2026-06-19_1ktpfl72.jsonl")
 	for _, f := range []string{fileA, fileB} {
 		if err := os.WriteFile(f, []byte(`{"type":"session"}`+"\n"), 0o644); err != nil {
 			t.Fatal(err)

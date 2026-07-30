@@ -225,7 +225,7 @@ gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 
 `send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` and `gmux agent` (including `agent logs`) do not (local only — run `gmux agent` in a session on the owning host instead).
 
-Every verb accepts id prefixes, full session ids, or slugs, so the eight-character short form `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
+Every verb accepts id prefixes, full session ids, or slugs, so the full eight-character ID `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
 
 ## Parallel orchestration
 

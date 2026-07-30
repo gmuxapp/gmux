@@ -74,13 +74,10 @@ export function sessionPath(
   projectPeer?: string,
   forceId = false,
 ): string {
-  // Fallback for an untitled session (no slug yet): the full gmux session
-  // id. It's already short and URL-safe (`sess-<8 hex>`) and unique, unlike
-  // a truncation — `id.slice(0, 8)` would keep only `sess-` + 3 hex (~4096
-  // values), and resolveSessionFromPath's prefix match returns the first
-  // hit, so two untitled sessions could collide onto one URL. Resolution
-  // still works: `s.id.startsWith(slug)` matches the full id exactly.
-  const slug = !forceId && session.slug ? session.slug : session.id
+  // Slugs occupy the plain session slot. The URL-only `~` sigil gives an
+  // immutable ID a disjoint, exact-match form for untitled sessions and slug
+  // collisions; it is deliberately not CLI syntax because shells expand `~`.
+  const slug = !forceId && session.slug ? session.slug : `~${session.id}`
   const ownerPrefix = projectPeer ? `/@${projectPeer}` : ''
   // Mid-path session-host segment is needed only when the session
   // lives on a different host than the project owner.
@@ -170,16 +167,14 @@ export function resolveSessionFromPath(
     return alive?.id ?? adapterSessions[0]?.id ?? null
   }
 
-  // Full match: /:project/:adapter/:slug. Exact immutable IDs take
-  // precedence over human slugs, including a slug-vs-ID cross-collision.
-  const fullId = adapterSessions.find(s => s.id === parsed.slug)
-  if (fullId) return fullId.id
-
+  // Full match: a leading `~` is the exact immutable-ID form; every other
+  // value is an exact human slug. IDs are never prefix-scanned in URLs.
+  if (parsed.slug.startsWith('~')) {
+    const id = parsed.slug.slice(1)
+    return adapterSessions.find(s => s.id === id)?.id ?? null
+  }
   const exact = adapterSessions.filter(s => s.slug === parsed.slug)
-  if (exact.length === 1) return exact[0].id
-  if (exact.length > 1) return null
-  const byId = adapterSessions.filter(s => s.id.startsWith(parsed.slug!))
-  return byId.length === 1 ? byId[0].id : null
+  return exact.length === 1 ? exact[0].id : null
 }
 
 // --- View state model ---

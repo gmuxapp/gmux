@@ -9,7 +9,7 @@ import {
 describe('protocol schemas', () => {
   it('parses session (schema v2)', () => {
     const result = SessionSchema.parse({
-      id: 'sess-1',
+      id: '1vshk4fu',
       kind: 'pi',
       alive: true,
       pid: 12345,
@@ -19,7 +19,7 @@ describe('protocol schemas', () => {
       terminal_rows: 40,
     })
 
-    expect(result.id).toBe('sess-1')
+    expect(result.id).toBe('1vshk4fu')
     expect(result.alive).toBe(true)
     expect(result.status?.active).toBe(true)
     expect(result.terminal_cols).toBe(120)
@@ -28,7 +28,7 @@ describe('protocol schemas', () => {
 
   it('parses session with null status', () => {
     const result = SessionSchema.parse({
-      id: 'sess-2',
+      id: '155mk8b7',
       kind: 'generic',
       alive: false,
       status: null,
@@ -41,9 +41,9 @@ describe('protocol schemas', () => {
   it('validates session-upsert event', () => {
     const event = SessionEventSchema.parse({
       type: 'session-upsert',
-      id: 'sess-1',
+      id: '1vshk4fu',
       session: {
-        id: 'sess-1',
+        id: '1vshk4fu',
         kind: 'pi',
         alive: true,
         status: { active: true },
@@ -66,7 +66,7 @@ describe('protocol schemas', () => {
   it('validates session-remove event', () => {
     const event = SessionEventSchema.parse({
       type: 'session-remove',
-      id: 'sess-1',
+      id: '1vshk4fu',
     })
     expect(event.type).toBe('session-remove')
   })

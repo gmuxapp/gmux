@@ -906,14 +906,14 @@ func TestUpsertRemote_PreservesTitle(t *testing.T) {
 	// are off-wire). Upsert would overwrite Title with Adapter; UpsertRemote
 	// must not.
 	s.UpsertRemote(Session{
-		ID:      "sess-123@server",
+		ID:      "13hlltir@server",
 		Adapter: "codex",
 		Alive:   true,
 		Peer:    "server",
 		Title:   "fix remote bug",
 	})
 
-	got, ok := s.Get("sess-123@server")
+	got, ok := s.Get("13hlltir@server")
 	if !ok {
 		t.Fatal("expected session to exist")
 	}
@@ -929,7 +929,7 @@ func TestUpsertRemote_PreservesResumableFromSpoke(t *testing.T) {
 	// Upsert would derive Resumable from !Alive && len(Command) > 0;
 	// UpsertRemote must preserve the spoke's value.
 	s.UpsertRemote(Session{
-		ID:        "sess-1@server",
+		ID:        "1vshk4fu@server",
 		Adapter:   "pi",
 		Alive:     false,
 		Command:   []string{"pi"},
@@ -937,7 +937,7 @@ func TestUpsertRemote_PreservesResumableFromSpoke(t *testing.T) {
 		Resumable: false, // spoke says not resumable despite command
 		Title:     "archived",
 	})
-	got, _ := s.Get("sess-1@server")
+	got, _ := s.Get("1vshk4fu@server")
 	if got.Resumable {
 		t.Errorf("Resumable = true, want false (UpsertRemote must not re-derive)")
 	}
@@ -948,14 +948,14 @@ func TestUpsertRemote_CanonicalizesPaths(t *testing.T) {
 	t.Setenv("HOME", home)
 	s := New()
 	s.UpsertRemote(Session{
-		ID:      "sess-path@server",
+		ID:      "1kme6umd@server",
 		Adapter: "shell",
 		Alive:   true,
 		Peer:    "server",
 		Title:   "ok",
 		Cwd:     home + "/projects/app",
 	})
-	got, _ := s.Get("sess-path@server")
+	got, _ := s.Get("1kme6umd@server")
 	if got.Cwd != "~/projects/app" {
 		t.Errorf("Cwd = %q, want %q (canonicalization must still run)", got.Cwd, "~/projects/app")
 	}
@@ -964,7 +964,7 @@ func TestUpsertRemote_CanonicalizesPaths(t *testing.T) {
 func TestUpsertRemote_DedupsSlug(t *testing.T) {
 	s := New()
 	s.UpsertRemote(Session{
-		ID:      "sess-1@server",
+		ID:      "1vshk4fu@server",
 		Adapter: "codex",
 		Alive:   true,
 		Peer:    "server",
@@ -972,7 +972,7 @@ func TestUpsertRemote_DedupsSlug(t *testing.T) {
 		Slug:    "fix-bug",
 	})
 	s.UpsertRemote(Session{
-		ID:      "sess-2@server",
+		ID:      "155mk8b7@server",
 		Adapter: "codex",
 		Alive:   true,
 		Peer:    "server",
@@ -980,7 +980,7 @@ func TestUpsertRemote_DedupsSlug(t *testing.T) {
 		Slug:    "fix-bug",
 	})
 
-	got, _ := s.Get("sess-2@server")
+	got, _ := s.Get("155mk8b7@server")
 	if got.Slug == "fix-bug" {
 		t.Errorf("Slug = %q, want a de-duplicated value (e.g. fix-bug-2)", got.Slug)
 	}
@@ -992,7 +992,7 @@ func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
 	defer cancel()
 
 	s.UpsertRemote(Session{
-		ID:      "sess-1@server",
+		ID:      "1vshk4fu@server",
 		Adapter: "codex",
 		Alive:   true,
 		Peer:    "server",
@@ -1014,7 +1014,7 @@ func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
 
 func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 	s := Session{
-		ID:              "sess-abc",
+		ID:              "1j6y9mx6",
 		Adapter:         "pi",
 		Alive:           true,
 		RunnerVersion:   "1.2.0",
@@ -1137,7 +1137,7 @@ func TestSessionMarshalJSON_AllFieldsAppearOnWire(t *testing.T) {
 func fullyPopulatedSession() Session {
 	exit := 0
 	return Session{
-		ID:              "sess-full",
+		ID:              "1894363z",
 		Peer:            "peer-x",
 		CreatedAt:       "2026-01-01T00:00:00Z",
 		Command:         []string{"bash"},
@@ -1145,7 +1145,7 @@ func fullyPopulatedSession() Session {
 		Adapter:         "pi",
 		WorkspaceRoot:   "/tmp/work",
 		Remotes:         map[string]string{"origin": "github.com/x/y"},
-		ParentSessionID: "sess-parent",
+		ParentSessionID: "1rz9lyqa",
 		Alive:           true,
 		Pid:             42,
 		ExitCode:        &exit,
@@ -1180,7 +1180,7 @@ func fullyPopulatedSession() Session {
 // class of regression, not to test the std library's JSON encoder.
 func TestSessionMarshalJSON_LastOutputAt(t *testing.T) {
 	ts := "2026-05-23T10:30:00Z"
-	s := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastOutputAt: ts}
+	s := Session{ID: "1vshk4fu", Adapter: "pi", Alive: true, LastOutputAt: ts}
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -1197,7 +1197,7 @@ func TestSessionMarshalJSON_LastOutputAt(t *testing.T) {
 	// an empty string. Matters because the frontend treats "" and
 	// absent identically today but might diverge later, and empty
 	// strings on RFC3339 fields are a smell.
-	s2 := Session{ID: "sess-2", Adapter: "pi", Alive: true}
+	s2 := Session{ID: "155mk8b7", Adapter: "pi", Alive: true}
 	b2, _ := json.Marshal(s2)
 	var m2 map[string]any
 	json.Unmarshal(b2, &m2)
@@ -1215,7 +1215,7 @@ func TestSessionMarshalJSON_LastOutputAt(t *testing.T) {
 // someone adds an UnmarshalJSON later.
 func TestSessionRoundTrip_LastOutputAt(t *testing.T) {
 	ts := "2026-05-23T10:30:00Z"
-	original := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastOutputAt: ts}
+	original := Session{ID: "1vshk4fu", Adapter: "pi", Alive: true, LastOutputAt: ts}
 	b, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -1669,11 +1669,11 @@ func TestUpdateBindDoesNotResurrectRemovedSession(t *testing.T) {
 	}
 
 	s := New()
-	s.Upsert(Session{ID: "sess-race", Adapter: "claude", Alive: true})
+	s.Upsert(Session{ID: "1kc5cwpd", Adapter: "claude", Alive: true})
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- s.Update("sess-race", func(sess *Session) {
+		done <- s.Update("1kc5cwpd", func(sess *Session) {
 			sess.ConversationRef = fifo
 		})
 	}()
@@ -1686,7 +1686,7 @@ func TestUpdateBindDoesNotResurrectRemovedSession(t *testing.T) {
 	}
 
 	// Dismiss the session while Update is stuck describing.
-	if !s.Remove("sess-race") {
+	if !s.Remove("1kc5cwpd") {
 		t.Fatal("remove should have found the session")
 	}
 
@@ -1696,7 +1696,7 @@ func TestUpdateBindDoesNotResurrectRemovedSession(t *testing.T) {
 	if got := <-done; got {
 		t.Fatal("Update should report false after a concurrent Remove")
 	}
-	if _, ok := s.Get("sess-race"); ok {
+	if _, ok := s.Get("1kc5cwpd"); ok {
 		t.Fatal("removed session must not be resurrected by a stale bind write-back")
 	}
 }

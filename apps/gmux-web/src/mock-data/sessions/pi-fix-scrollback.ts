@@ -8,7 +8,7 @@ const MAGENTA = '\x1b[35m'
 const GRAY = '\x1b[90m'
 
 export default {
-  id: 'sess-pi-scroll',
+  id: '1h46pdtl',
   created_at: ago(5),
   command: ['pi'],
   cwd: '/home/user/dev/my-project',

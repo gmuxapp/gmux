@@ -94,7 +94,7 @@ func TestHandshakeDeadlineCaptureAndUnset(t *testing.T) {
 	resetCapture(t)
 	capturedHandshakeDeadline = time.Time{}
 	capturedHandshakeInvalid = false
-	_, w := pipePair(t)   // write end → control
+	_, w := pipePair(t)     // write end → control
 	gateR, _ := pipePair(t) // read end → gate (child reads gate token)
 	holdR, _ := pipePair(t) // read end → hold (child drains until parent closes)
 	deadline := time.Now().Add(time.Second).Truncate(time.Nanosecond)
@@ -125,7 +125,7 @@ func TestHandshakeMalformedAndExpiredDeadlineCancel(t *testing.T) {
 			resetCapture(t)
 			capturedHandshakeDeadline = time.Time{}
 			capturedHandshakeInvalid = false
-			_, w := pipePair(t)      // write end → control
+			_, w := pipePair(t)     // write end → control
 			gateR, _ := pipePair(t) // read end → gate
 			holdR, _ := pipePair(t) // read end → hold
 			t.Setenv(handshakeFDEnv, strconv.Itoa(int(w.Fd())))
@@ -184,7 +184,7 @@ func TestAwaitDetachedHandshakeOwnsProcessUntilResult(t *testing.T) {
 		write string
 	}{
 		{"eof terminates and reaps", ""},
-		{"partial ack near deadline terminates and reaps", "sess-accepted"},
+		{"partial ack near deadline terminates and reaps", "157q2gcm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, r, w := start()
@@ -208,11 +208,11 @@ func TestAwaitDetachedHandshakeOwnsProcessUntilResult(t *testing.T) {
 		cmd, r, w := start()
 		pid := cmd.Process.Pid
 		defer r.Close()
-		go func() { _, _ = io.WriteString(w, fmt.Sprintf("TARGET %d\nsess-ok\n", pid)); _ = w.Close() }()
+		go func() { _, _ = io.WriteString(w, fmt.Sprintf("TARGET %d\n1bgg97j3\n", pid)); _ = w.Close() }()
 		_, gate := pipePair(t)
 		_, hold := pipePair(t)
 		id, err := awaitDetachedHandshake(cmd, r, gate, hold, time.Now().Add(time.Second), 100*time.Millisecond)
-		if err != nil || id != "sess-ok" {
+		if err != nil || id != "1bgg97j3" {
 			t.Fatalf("id=%q err=%v", id, err)
 		}
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -312,7 +312,7 @@ func TestForegroundRegistrationCompletesQuicklyWhenDaemonUnavailable(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), foregroundRegistrationBudget)
 	defer cancel()
 	start := time.Now()
-	got := registerWithGmuxd(ctx, "sess-fg-budget-test", "/tmp/fg-budget-test.sock")
+	got := registerWithGmuxd(ctx, "18gbpniy", "/tmp/fg-budget-test.sock")
 	elapsed := time.Since(start)
 
 	if got != registerUnavailable {

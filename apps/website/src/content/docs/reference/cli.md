@@ -71,7 +71,7 @@ without polling. `-d` must come before `--`.
 Sessions are **local by default**: a bare id only ever matches a session on
 this machine, so you can't accidentally act on another host. To target a peer,
 suffix the id with `@<peer>` (see `gmux ls --all`). IDs are the 8-character
-short form the UI shows; verbs also accept a unique id prefix, the full id, or
+full eight-character form; verbs also accept a unique ID prefix or
 the session's slug.
 
 ### `gmux ls`

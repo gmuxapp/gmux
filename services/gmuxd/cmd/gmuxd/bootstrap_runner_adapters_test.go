@@ -76,7 +76,7 @@ func waitForRunnerConns(t *testing.T, tracker *runnerConnTracker, want int64) {
 func TestProductionRunnerMetaClosesConnections(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"id":"sess-abc","adapter":"shell","alive":true,"created_at":"2026-01-01T00:00:00Z"}`)
+		fmt.Fprint(w, `{"id":"1j6y9mx6","adapter":"shell","alive":true,"created_at":"2026-01-01T00:00:00Z"}`)
 	})
 	ep, tracker := trackedUnixRunner(t, mux)
 	client := productionRunnerClient{}
@@ -116,7 +116,7 @@ func TestProductionRunnerSubscribeFirstBuffersPreMeta(t *testing.T) {
 		<-release
 	})
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"id":"sess-abc","adapter":"shell","alive":true,"created_at":"2026-01-01T00:00:00Z"}`)
+		fmt.Fprint(w, `{"id":"1j6y9mx6","adapter":"shell","alive":true,"created_at":"2026-01-01T00:00:00Z"}`)
 	})
 	ep := unixRunner(t, mux)
 	c := productionRunnerClient{}
@@ -131,7 +131,7 @@ func TestProductionRunnerSubscribeFirstBuffersPreMeta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Registration.ID != "sess-abc" {
+	if m.Registration.ID != "1j6y9mx6" {
 		t.Fatalf("meta=%#v", m)
 	}
 	select {

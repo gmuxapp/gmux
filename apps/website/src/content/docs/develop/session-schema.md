@@ -94,7 +94,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Unique session identifier (e.g. `sess-abc123`) |
+| `id` | string | Unique session identifier (e.g. `16y0lfv7`) |
 | `created_at` | ISO 8601 | When the session was created |
 | `command` | string[] | The command being run. For resumed sessions, replaced with the resume command. |
 | `cwd` | string | Working directory |
@@ -128,7 +128,7 @@ All dead sessions with a command are resumable. On exit, adapters with native re
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `slug` | string? | Stable URL-friendly identifier, unique within (adapter, peer). Reported by the agent hook (or set via the runner's `PUT /slug` endpoint); gmuxd enforces uniqueness; the frontend falls back to the short ID when empty. |
+| `slug` | string? | Stable URL-friendly identifier, unique within (adapter, peer). Reported by the agent hook (or set via the runner's `PUT /slug` endpoint); gmuxd enforces uniqueness; the frontend falls back to the `~<full-id>` URL form when empty. |
 
 ### Display (set by child or gmux, mutable)
 
@@ -186,7 +186,7 @@ See `docs/runner-hook-protocol.md` in the repo and ADRs 0010/0011/0013/0015.
 **Option B — `PUT /status` on `$GMUX_SOCKET`** (any process; generic fallback):
 ```bash
 # gmux sets this in the child's environment
-GMUX_SOCKET=~/.local/state/gmux/run/sessions/sess-abc123.sock
+GMUX_SOCKET=~/.local/state/gmux/run/sessions/16y0lfv7.sock
 
 # Child (or a wrapper script) sets status via HTTP on the socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
@@ -201,7 +201,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
 
 ```json
 {
-  "id": "sess-abc123",
+  "id": "16y0lfv7",
   "created_at": "2026-03-14T10:00:00Z",
   "command": ["pi"],
   "cwd": "/home/user/dev/gmux",
@@ -214,7 +214,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "adapter_title": "fix auth bug",
   "status": { "active": true },
   "unread": false,
-  "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
+  "socket_path": "~/.local/state/gmux/run/sessions/16y0lfv7.sock",
   "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
   "runner_version": "2.0.0",
   "binary_hash": "a1b2c3d4e5f6..."
@@ -225,7 +225,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
 
 ```json
 {
-  "id": "sess-abc123",
+  "id": "16y0lfv7",
   "created_at": "2026-03-14T10:00:00Z",
   "command": ["pi"],
   "cwd": "/home/user/dev/gmux",
@@ -236,7 +236,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "title": "fix auth bug",
   "status": { "active": true },
   "unread": false,
-  "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
+  "socket_path": "~/.local/state/gmux/run/sessions/16y0lfv7.sock",
   "slug": "fix-auth-bug",
   "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
   "last_activity_at": "2026-03-14T10:05:00Z",

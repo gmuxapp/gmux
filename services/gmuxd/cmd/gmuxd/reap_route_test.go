@@ -162,7 +162,7 @@ func (r *protocolRunner) handOver(t *testing.T, dir string, legacy bool) *protoc
 	if err := os.Remove(r.ep); err != nil {
 		t.Fatalf("remove %s: %v", r.ep, err)
 	}
-	return startProtocolRunner(t, dir, filepath.Base(r.ep), "sess-unrelated-replacement", legacy)
+	return startProtocolRunner(t, dir, filepath.Base(r.ep), "1ni9rpbn", legacy)
 }
 
 // reapHarness converges one installed generation and then reaps whatever the
@@ -191,7 +191,7 @@ func newReapHarness(t *testing.T, session centralstore.SessionID) (*reapHarness,
 	}
 	t.Cleanup(func() { store.Close() })
 
-	installed := startProtocolRunner(t, dir, "sess-installed.sock", session, false)
+	installed := startProtocolRunner(t, dir, "1r6zxosb.sock", session, false)
 	h := &reapHarness{dir: dir}
 	boot, err := newBootstrap(BootstrapConfig{
 		Store: store, Runners: productionRunnerClient{}, Control: productionRunnerControl{},
@@ -219,9 +219,9 @@ func newReapHarness(t *testing.T, session centralstore.SessionID) (*reapHarness,
 // The baseline: the runner the decision was actually about kills itself, over
 // the conditional route, and is never addressed on /kill.
 func TestReapKillsExactlyTheClassifiedRunner(t *testing.T) {
-	const session = centralstore.SessionID("sess-contested")
+	const session = centralstore.SessionID("172idosy")
 	h, _ := newReapHarness(t, session)
-	loser := startProtocolRunner(t, h.dir, "sess-loser.sock", session, false)
+	loser := startProtocolRunner(t, h.dir, "1si1fsnc.sock", session, false)
 
 	reaped, err := h.boot.Coordinator.ReapOrphans(context.Background(), []string{loser.ep})
 	if err != nil {
@@ -242,9 +242,9 @@ func TestReapKillsExactlyTheClassifiedRunner(t *testing.T) {
 // route). The pre-protocol replacement then receives the verdict passed on B
 // and dies.
 func TestReapDoesNotKillAPreProtocolReplacement(t *testing.T) {
-	const session = centralstore.SessionID("sess-contested")
+	const session = centralstore.SessionID("172idosy")
 	h, _ := newReapHarness(t, session)
-	loser := startProtocolRunner(t, h.dir, "sess-loser.sock", session, false)
+	loser := startProtocolRunner(t, h.dir, "1si1fsnc.sock", session, false)
 
 	// The pathname changes hands inside the window between the classification
 	// and the action taken on it.
@@ -286,9 +286,9 @@ func TestReapDoesNotKillAPreProtocolReplacement(t *testing.T) {
 // The same schedule with a protocol-aware replacement: it refuses (409) rather
 // than dying, which is the case the incarnation header already covered.
 func TestReapDoesNotKillAProtocolAwareReplacement(t *testing.T) {
-	const session = centralstore.SessionID("sess-contested")
+	const session = centralstore.SessionID("172idosy")
 	h, _ := newReapHarness(t, session)
-	loser := startProtocolRunner(t, h.dir, "sess-loser.sock", session, false)
+	loser := startProtocolRunner(t, h.dir, "1si1fsnc.sock", session, false)
 
 	var replacement *protocolRunner
 	loser.afterMeta = func() { replacement = loser.handOver(t, h.dir, false) }
@@ -314,7 +314,7 @@ func TestReapDoesNotKillAProtocolAwareReplacement(t *testing.T) {
 // that is the only thing a pre-protocol runner understands.
 func TestExplicitStopUsesTheCompatibilityRoute(t *testing.T) {
 	dir := reapSocketDir(t)
-	runner := startProtocolRunner(t, dir, "sess-stop.sock", "sess-stop", false)
+	runner := startProtocolRunner(t, dir, "1whzt623.sock", "1whzt623", false)
 
 	if err := (productionRunnerControl{}).Terminate(context.Background(), runner.ep, runner.incarnation); err != nil {
 		t.Fatalf("Terminate: %v", err)
@@ -326,7 +326,7 @@ func TestExplicitStopUsesTheCompatibilityRoute(t *testing.T) {
 		t.Fatalf("an explicit stop used the conditional route (%d calls)", got)
 	}
 	// And an unnamed stop -- the pre-protocol client's shape -- still works.
-	legacy := startProtocolRunner(t, dir, "sess-stop-legacy.sock", "sess-stop-legacy", true)
+	legacy := startProtocolRunner(t, dir, "1l2nqzns.sock", "1l2nqzns", true)
 	if err := (productionRunnerControl{}).Terminate(context.Background(), legacy.ep, ""); err != nil {
 		t.Fatalf("unnamed Terminate: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestExplicitStopUsesTheCompatibilityRoute(t *testing.T) {
 // failure.
 func TestProductionReapTranslatesAnUnsupportedRoute(t *testing.T) {
 	dir := reapSocketDir(t)
-	legacy := startProtocolRunner(t, dir, "sess-legacy.sock", "sess-legacy", true)
+	legacy := startProtocolRunner(t, dir, "1u6d750s.sock", "1u6d750s", true)
 
 	err := (productionRunnerControl{}).Reap(context.Background(), legacy.ep, "incarnation-of-somebody")
 	if !errors.Is(err, sessioncoord.ErrReapUnsupported) {
@@ -364,11 +364,11 @@ func TestProductionReapTranslatesAnUnsupportedRoute(t *testing.T) {
 // TestReapDoesNotKillAPreProtocolReplacement. The decline there is stateless,
 // so silence on one sweep is silence on all of them.
 func TestRepeatedSweepsPastAPreProtocolOccupantAreSilent(t *testing.T) {
-	const session = centralstore.SessionID("sess-contested")
+	const session = centralstore.SessionID("172idosy")
 	h, _ := newReapHarness(t, session)
 	// A pre-protocol runner claiming the installed session's id: a permanent
 	// reap candidate that can never be reaped.
-	legacy := startProtocolRunner(t, h.dir, "sess-legacy-orphan.sock", session, true)
+	legacy := startProtocolRunner(t, h.dir, "1grjqma6.sock", session, true)
 
 	for range 50 {
 		if _, err := h.boot.Coordinator.ReapOrphans(context.Background(), []string{legacy.ep}); err != nil {

@@ -41,7 +41,7 @@ func startRunner(t *testing.T, sockPath string, command ...string) *Server {
 		Cwd:        "/tmp",
 		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
-		State:      session.New(session.Config{ID: "sess-test", Command: command, Cwd: "/tmp", Adapter: "shell"}),
+		State:      session.New(session.Config{ID: "1c54cqk8", Command: command, Cwd: "/tmp", Adapter: "shell"}),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -51,7 +51,7 @@ func TestHarnessReorderRepublishesSessionStamps(t *testing.T) {
 	// rather than waited for from the runner transport: convergence runs
 	// under a millisecond-scale budget, and this test is about the
 	// publication seam, not about registration timing.
-	first, second := centralstore.SessionID("sess-reorder-000"), centralstore.SessionID("sess-reorder-001")
+	first, second := centralstore.SessionID("10uymur5"), centralstore.SessionID("13s6ewv5")
 	for _, id := range []centralstore.SessionID{first, second} {
 		row, reg, e := store.RegisterRunner(ctx, centralstore.RunnerRegistration{
 			ID: id, Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1,

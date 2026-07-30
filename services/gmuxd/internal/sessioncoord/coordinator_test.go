@@ -115,13 +115,36 @@ func (c *freshRunnerClient) Meta(context.Context, string) (RunnerMeta, error) {
 	return c.meta, nil
 }
 
+func TestDirectRegistrationRejectsDurableIDButDiscoveryRemainsExempt(t *testing.T) {
+	id := centralstore.SessionID("abcd1234")
+	client := newFakeClient(liveMeta(id, "pi", ""))
+	dur := newFakeDurable(0)
+	dur.session = func(got centralstore.SessionID) (centralstore.Session, bool, error) {
+		return centralstore.Session{ID: got}, got == id, nil
+	}
+	coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "direct", AssertedID: id}); !errors.Is(err, ErrSessionIDExists) {
+		t.Fatalf("direct registration error = %v, want ErrSessionIDExists", err)
+	}
+	if len(dur.registered) != 0 {
+		t.Fatalf("conflicting registration reached store commit: %+v", dur.registered)
+	}
+
+	// Discovery has no AssertedID and must remain able to re-register a
+	// retained row after daemon restart.
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "discovery"}); err != nil {
+		t.Fatalf("discovery registration: %v", err)
+	}
+}
+
 func TestRegisterRejectsInstalledGenerationBeforeTakeoverIO(t *testing.T) {
 	ref := "large-transcript"
-	meta := liveMeta("sess-prededup", "pi", ref)
+	meta := liveMeta("1ukahh0l", "pi", ref)
 	client := &freshRunnerClient{meta: meta}
 	dur := newFakeDurable(1)
 	dur.listSessions = func() ([]centralstore.Session, error) {
-		return []centralstore.Session{{ID: "sess-prededup", Adapter: "pi", ConversationRef: ref}}, nil
+		return []centralstore.Session{{ID: "1ukahh0l", Adapter: "pi", ConversationRef: ref}}, nil
 	}
 	resolver := &fakeResolver{infos: map[string]ConversationInfo{lineageKey("pi", ref): {ID: "conversation"}}}
 	coord := New(nil, client, dur, &fakeDirtySink{}, nil, WithConversationTakeover(resolver))
@@ -164,17 +187,17 @@ func TestRegisterRejectsInstalledGenerationBeforeTakeoverIO(t *testing.T) {
 	// ExpectedID is replacement provenance even if Replace was omitted. It
 	// must reach authorization rather than return an occupancy-dependent
 	// generation collision.
-	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "unauthorized", ExpectedID: "sess-prededup"}); !errors.Is(err, ErrReplaceWithoutClaim) {
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "unauthorized", ExpectedID: "1ukahh0l"}); !errors.Is(err, ErrReplaceWithoutClaim) {
 		t.Fatalf("ExpectedID without claim error=%v", err)
 	}
 
-	claim, release, err := coord.claim("sess-prededup", "test-replace")
+	claim, release, err := coord.claim("1ukahh0l", "test-replace")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
 	beforeLists := dur.listSessionCalls
-	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "replacement", Replace: true, ExpectedID: "sess-prededup", Claim: claim}); err != nil {
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "replacement", Replace: true, ExpectedID: "1ukahh0l", Claim: claim}); err != nil {
 		t.Fatal(err)
 	}
 	if dur.listSessionCalls != beforeLists+1 {
@@ -389,7 +412,7 @@ func (s *fakeDirtySink) count() int {
 }
 
 // sid returns a deterministic SessionID for tests.
-func sid(n int) centralstore.SessionID { return centralstore.SessionID(fmt.Sprintf("sess-%04d", n)) }
+func sid(n int) centralstore.SessionID { return centralstore.SessionID(fmt.Sprintf("%08d", n)) }
 
 // aliveTrue/aliveFalse are helper pointers.
 var (
@@ -1672,7 +1695,7 @@ func TestExitApplyStaleRetryExhausted(t *testing.T) {
 // filesystem path segment) is rejected before any commit, fence, or registry
 // change, for every Register caller.
 func TestRegisterRejectsInvalidSessionID(t *testing.T) {
-	for _, bad := range []string{"", "no-prefix", "sess-", "sess-../../etc", "sess-a/b", "../sess-x"} {
+	for _, bad := range []string{"", "no-prefix", "too-short", "bad/../../etc", "1mw5c5n9/b", "../1108gm0e"} {
 		meta := RunnerMeta{
 			Registration: centralstore.RunnerRegistration{ID: centralstore.SessionID(bad), Alive: true},
 		}

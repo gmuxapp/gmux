@@ -18,7 +18,7 @@ func TestTailIsAlwaysRaw(t *testing.T) {
 		_, _ = w.Write([]byte("$ ls\nfile.txt\n"))
 	})
 	stdout := captureStdout(t, func() {
-		if code := cmdTail("abcd1234", 42); code != 0 {
+		if code := cmdTail("1va8lvdv", 42); code != 0 {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -26,7 +26,7 @@ func TestTailIsAlwaysRaw(t *testing.T) {
 		t.Errorf("stdout = %q", stdout)
 	}
 	req := d.lastRequest(t)
-	if req.path != "/v1/sessions/sess-abcd1234/scrollback" || req.query != "tail=42" {
+	if req.path != "/v1/sessions/1va8lvdv/scrollback" || req.query != "tail=42" {
 		t.Fatalf("request = %s?%s, want the scrollback read with tail=42", req.path, req.query)
 	}
 	d.mu.Lock()

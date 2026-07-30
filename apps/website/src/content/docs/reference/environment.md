@@ -86,11 +86,11 @@ These are available inside every session launched by `gmux`. Use them to detect 
 | Variable | Purpose | Example |
 |----------|---------|---------|
 | `GMUX` | Always `1` inside a gmux session. Used for nested-session detection. | `1` |
-| `GMUX_SOCKET` | Unix socket path for callbacks to the session runner. | `~/.local/state/gmux/run/sessions/sess-abc123.sock` |
-| `GMUX_SESSION_ID` | Unique session identifier. | `sess-abc123` |
+| `GMUX_SOCKET` | Unix socket path for callbacks to the session runner. | `~/.local/state/gmux/run/sessions/16y0lfv7.sock` |
+| `GMUX_SESSION_ID` | Unique session identifier. | `16y0lfv7` |
 | `GMUX_ADAPTER` | Name of the matched adapter. | `pi`, `shell` |
 | `GMUX_RUNNER_VERSION` | Version of the gmux runner hosting the session. | `2.0.0` |
-| `GMUX_SESSION_SOCK` | Socket the agent extension/hook posts session + turn events to (same socket as `GMUX_SOCKET`; a separate variable so hooks stay decoupled from the general child API). Set only for adapters that ship a hook (pi, claude, codex); absent if `GMUX_NO_AGENT_HOOK` is set. | `~/.local/state/gmux/run/sessions/sess-abc123.sock` |
+| `GMUX_SESSION_SOCK` | Socket the agent extension/hook posts session + turn events to (same socket as `GMUX_SOCKET`; a separate variable so hooks stay decoupled from the general child API). Set only for adapters that ship a hook (pi, claude, codex); absent if `GMUX_NO_AGENT_HOOK` is set. | `~/.local/state/gmux/run/sessions/16y0lfv7.sock` |
 | `EDITOR`, `VISUAL` | Defaulted to `<gmux> edit` so agents/git open files as managed editor tabs. Only set when your dotfiles don't set them. | `/usr/local/bin/gmux edit` |
 
 See [Adapter Architecture](/develop/adapter-architecture) for how to use the child-to-runner API.

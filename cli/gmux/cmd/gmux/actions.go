@@ -108,10 +108,8 @@ func isNoMatchError(err error) bool {
 // matchSession resolves a user-supplied reference to a single session.
 //
 // A reference can be:
-//   - the full session ID ("sess-abcd1234") or full slug
-//   - the short form shown by `gmux ls` ("abcd1234", i.e. the ID with
-//     its "sess-" prefix stripped)
-//   - a unique prefix of any of the above
+//   - the full 8-character session ID or full slug
+//   - a unique prefix of either
 //   - any of the above with an "@<peer>" suffix to target a peer
 //
 // Local-by-default (ADR 0009): without an @suffix the lookup is scoped
@@ -154,7 +152,7 @@ func matchSession(sessions []cliSession, ref string) (cliSession, error) {
 	if len(candidates) > 1 {
 		ids := make([]string, 0, len(candidates))
 		for _, c := range candidates {
-			ids = append(ids, shortID(c.ID))
+			ids = append(ids, displayID(c))
 		}
 		return cliSession{}, fmt.Errorf("ambiguous session %q matches: %s", ref, strings.Join(ids, ", "))
 	}
@@ -174,15 +172,15 @@ func matchSession(sessions []cliSession, ref string) (cliSession, error) {
 		hint, peerCandidates := lookupInPool(peerPool, ref)
 		switch {
 		case hint != nil:
-			return cliSession{}, fmt.Errorf("session %q not found locally. Did you mean %s@%s?",
-				ref, shortID(hint.ID), hint.Peer)
+			return cliSession{}, fmt.Errorf("session %q not found locally. Did you mean %s?",
+				ref, displayID(*hint))
 		case len(peerCandidates) > 1:
 			// More than one peer session matches: don't pick a
 			// favorite, list them so the user knows exactly which
 			// qualified forms work.
 			qualified := make([]string, 0, len(peerCandidates))
 			for _, c := range peerCandidates {
-				qualified = append(qualified, shortID(c.ID)+"@"+c.Peer)
+				qualified = append(qualified, displayID(c))
 			}
 			return cliSession{}, fmt.Errorf("session %q not found locally; matches peer sessions: %s",
 				ref, strings.Join(qualified, ", "))
@@ -220,21 +218,31 @@ func filterByHost(sessions []cliSession, host string) []cliSession {
 // Returning a pointer for the match keeps the "not found" sentinel
 // distinct from a zero-value session (which is a valid match shape).
 func lookupInPool(pool []cliSession, ref string) (*cliSession, []cliSession) {
-	// Pass 1: exact matches take precedence.
+	// Pass 1a: an exact immutable ID wins over every slug match.
 	for i := range pool {
-		s := pool[i]
-		if s.ID == ref || s.Slug == ref || shortID(s.ID) == ref {
-			return &s, nil
+		if pool[i].ID == ref {
+			return &pool[i], nil
 		}
+	}
+	// Pass 1b: duplicate exact slugs are ambiguous rather than pool-order
+	// dependent.
+	var exactSlugs []cliSession
+	for _, s := range pool {
+		if s.Slug == ref {
+			exactSlugs = append(exactSlugs, s)
+		}
+	}
+	if len(exactSlugs) == 1 {
+		return &exactSlugs[0], nil
+	}
+	if len(exactSlugs) > 1 {
+		return nil, exactSlugs
 	}
 
 	// Pass 2: unique prefix match.
 	var matches []cliSession
 	for _, s := range pool {
-		switch {
-		case strings.HasPrefix(s.ID, ref),
-			strings.HasPrefix(shortID(s.ID), ref),
-			s.Slug != "" && strings.HasPrefix(s.Slug, ref):
+		if strings.HasPrefix(s.ID, ref) || (s.Slug != "" && strings.HasPrefix(s.Slug, ref)) {
 			matches = append(matches, s)
 		}
 	}
@@ -248,27 +256,13 @@ func lookupInPool(pool []cliSession, ref string) (*cliSession, []cliSession) {
 	}
 }
 
-// shortID returns the 8-char display form of a session id, matching
-// what the web UI uses.
-func shortID(id string) string {
-	const prefix = "sess-"
-	trimmed := strings.TrimPrefix(id, prefix)
-	if len(trimmed) > 8 {
-		trimmed = trimmed[:8]
-	}
-	return trimmed
-}
-
-// displayID returns the user-visible address for a session: shortID for
-// local sessions, shortID@peer for peer sessions. Use it in error
-// messages so the printed id matches what the user typed (and what
-// `gmux ls` shows), instead of dropping the @peer suffix and leaving them
-// wondering which session the message refers to.
+// displayID returns the one canonical user-visible session address: the full
+// ID, qualified with @peer when the session is remote.
 func displayID(s cliSession) string {
 	if s.Peer == "" {
-		return shortID(s.ID)
+		return s.ID
 	}
-	return shortID(s.ID) + "@" + s.Peer
+	return s.ID + "@" + s.Peer
 }
 
 // cmdList implements `gmux ls [--all] [--json]`.
@@ -320,7 +314,7 @@ func cmdList(all bool, asJSON bool) int {
 		if s.Alive {
 			status = "alive"
 		}
-		id := shortID(s.ID)
+		id := s.ID
 		if s.Peer != "" {
 			// The @peer suffix is part of the addressable ID, not just
 			// status flavor: copy-pasting this row's ID into
@@ -524,7 +518,7 @@ func cmdSend(ref string, text *string, keys []string, wait bool, timeoutSecs int
 		// owning daemon's event stream, which peers don't expose to
 		// the CLI yet. Bare shortID: the message names the peer itself.
 		fmt.Fprintf(os.Stderr, "gmux: send --wait is only supported for local sessions (%s is on peer %q)\n",
-			shortID(sess.ID), sess.Peer)
+			sess.ID, sess.Peer)
 		return 1
 	}
 	query := "?wait=idle"

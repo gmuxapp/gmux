@@ -220,7 +220,7 @@ Adapters provide a `slug` field via the existing child protocol (`/meta` respons
 
 - Derived from something stable in the adapter's domain: pi uses its conversation ID or first-message summary, Claude uses the session file basename, shell uses a sanitized command name or counter.
 - Unique within the adapter's namespace for that project. If the adapter produces a duplicate, gmux appends a disambiguator (e.g. `-2`).
-- Falls back to a truncated session ID (e.g. `sess-abc12`) if the adapter doesn't provide one.
+- Falls back to a truncated session ID (e.g. `11tlplz9`) if the adapter doesn't provide one.
 
 The slug is stable across kill and resume. A resumed session keeps the same slug because the adapter's stable identifier (conversation ID, session file) doesn't change. The internal session ID and process may change, but the URL-facing slug stays the same.
 

@@ -74,12 +74,12 @@ func (f *brokerFixture) doQuery(method, sessionID, rawQuery string) *http.Respon
 // runner actually emitted.
 func TestBrokerStreamsScrollbackBytes(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
+	f.addSession(t, "1vshk4fu")
 
 	want := "hello\x1b[31mred\x1b[0m\nworld\n"
-	f.writeScrollback(t, "sess-1", want)
+	f.writeScrollback(t, "1vshk4fu", want)
 
-	resp := f.do(http.MethodGet, "sess-1")
+	resp := f.do(http.MethodGet, "1vshk4fu")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -106,11 +106,11 @@ func TestBrokerStreamsScrollbackBytes(t *testing.T) {
 // 200-empty, the polling logic is just "stream until eof, append".
 func TestBrokerKnownSessionEmptyScrollbackReturns200(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-fresh")
+	f.addSession(t, "1bi7j545")
 	// Note: no writeScrollback call. Session is in store, no files
 	// on disk.
 
-	resp := f.do(http.MethodGet, "sess-fresh")
+	resp := f.do(http.MethodGet, "1bi7j545")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -140,7 +140,7 @@ func TestBrokerUnknownSession404(t *testing.T) {
 	f := newBrokerFixture(t)
 	// No session added.
 
-	resp := f.do(http.MethodGet, "sess-ghost")
+	resp := f.do(http.MethodGet, "1q0p6bru")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status: want 404, got %d", resp.StatusCode)
 	}
@@ -151,11 +151,11 @@ func TestBrokerUnknownSession404(t *testing.T) {
 // is the only writer.
 func TestBrokerRejectsNonGet(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
-	f.writeScrollback(t, "sess-1", "data")
+	f.addSession(t, "1vshk4fu")
+	f.writeScrollback(t, "1vshk4fu", "data")
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
-		resp := f.do(method, "sess-1")
+		resp := f.do(method, "1vshk4fu")
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("%s: want 405, got %d", method, resp.StatusCode)
 		}
@@ -169,9 +169,9 @@ func TestBrokerRejectsNonGet(t *testing.T) {
 // place and corrupting the visible scrollback.
 func TestBrokerConcatenatesPreviousAndActive(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
+	f.addSession(t, "1vshk4fu")
 
-	dir := f.dirFor("sess-1")
+	dir := f.dirFor("1vshk4fu")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestBrokerConcatenatesPreviousAndActive(t *testing.T) {
 		t.Fatalf("write active: %v", err)
 	}
 
-	resp := f.do(http.MethodGet, "sess-1")
+	resp := f.do(http.MethodGet, "1vshk4fu")
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "EARLIER\nLATER\n" {
 		t.Errorf("ordering: want %q, got %q", "EARLIER\nLATER\n", body)
@@ -196,9 +196,9 @@ func TestBrokerConcatenatesPreviousAndActive(t *testing.T) {
 // rotation boundary doesn't leak into the response.
 func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
+	f.addSession(t, "1vshk4fu")
 
-	dir := f.dirFor("sess-1")
+	dir := f.dirFor("1vshk4fu")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
 		t.Fatalf("write active: %v", err)
 	}
 
-	resp := f.doQuery(http.MethodGet, "sess-1", "tail=4")
+	resp := f.doQuery(http.MethodGet, "1vshk4fu", "tail=4")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -238,10 +238,10 @@ func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
 // consumption.
 func TestBrokerTailParamStripsANSI(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
-	f.writeScrollback(t, "sess-1", "\x1b[31mred line\x1b[0m\r\n\x1b[32mgreen line\x1b[0m\r\n")
+	f.addSession(t, "1vshk4fu")
+	f.writeScrollback(t, "1vshk4fu", "\x1b[31mred line\x1b[0m\r\n\x1b[32mgreen line\x1b[0m\r\n")
 
-	resp := f.doQuery(http.MethodGet, "sess-1", "tail=2")
+	resp := f.doQuery(http.MethodGet, "1vshk4fu", "tail=2")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -263,10 +263,10 @@ func TestBrokerTailParamStripsANSI(t *testing.T) {
 // overwrite. Byte-tailing would return both fragments concatenated.
 func TestBrokerTailParamCollapsesCursorOverwrites(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
-	f.writeScrollback(t, "sess-1", "loading...\rdone      \r\n")
+	f.addSession(t, "1vshk4fu")
+	f.writeScrollback(t, "1vshk4fu", "loading...\rdone      \r\n")
 
-	resp := f.doQuery(http.MethodGet, "sess-1", "tail=5")
+	resp := f.doQuery(http.MethodGet, "1vshk4fu", "tail=5")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -286,9 +286,9 @@ func TestBrokerTailParamCollapsesCursorOverwrites(t *testing.T) {
 // nothing to show.
 func TestBrokerTailParamEmptySession(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-empty")
+	f.addSession(t, "1lm71dfs")
 
-	resp := f.doQuery(http.MethodGet, "sess-empty", "tail=10")
+	resp := f.doQuery(http.MethodGet, "1lm71dfs", "tail=10")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
@@ -304,11 +304,11 @@ func TestBrokerTailParamEmptySession(t *testing.T) {
 // body would be a footgun, and `?tail=0` is meaningless.
 func TestBrokerTailParamRejectsBadValue(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
-	f.writeScrollback(t, "sess-1", "data\n")
+	f.addSession(t, "1vshk4fu")
+	f.writeScrollback(t, "1vshk4fu", "data\n")
 
 	for _, raw := range []string{"tail=abc", "tail=0", "tail=-3", "tail="} {
-		resp := f.doQuery(http.MethodGet, "sess-1", raw)
+		resp := f.doQuery(http.MethodGet, "1vshk4fu", raw)
 		// tail= with empty value is the one ambiguous case. The
 		// handler treats it as "param not given" (current behavior:
 		// stream everything) because url.Values returns the same
@@ -340,9 +340,9 @@ func TestBrokerTailParamRejectsBadValue(t *testing.T) {
 // on it fails with EISDIR. That's what TailBytes -> io.ReadAll sees.
 func TestBrokerTailParamIOErrorReturns500(t *testing.T) {
 	f := newBrokerFixture(t)
-	f.addSession(t, "sess-1")
+	f.addSession(t, "1vshk4fu")
 
-	dir := f.dirFor("sess-1")
+	dir := f.dirFor("1vshk4fu")
 	// Put a directory where the active scrollback file should be.
 	// OpenReader will Open it (success), TailBytes will ReadAll it
 	// (fails with EISDIR).
@@ -350,7 +350,7 @@ func TestBrokerTailParamIOErrorReturns500(t *testing.T) {
 		t.Fatalf("mkdir trap: %v", err)
 	}
 
-	resp := f.doQuery(http.MethodGet, "sess-1", "tail=5")
+	resp := f.doQuery(http.MethodGet, "1vshk4fu", "tail=5")
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("status: want 500, got %d (a silent 200 here would let the CLI report success on an IO error)", resp.StatusCode)
 	}

@@ -157,7 +157,7 @@ func TestCaptureHandshakeFD_RejectsNonPipeFD(t *testing.T) {
 	t.Setenv(handshakeFDEnv, strconv.Itoa(int(f.Fd())))
 
 	captureHandshakeFD()
-	handshakeAck("sess-xyz", true) // must be a no-op
+	handshakeAck("10nu1y5n", true) // must be a no-op
 
 	if capturedHandshakeFD != -1 {
 		t.Fatalf("non-pipe fd was captured: %d", capturedHandshakeFD)
@@ -202,14 +202,14 @@ func TestHandshakeAck_NoOpWithoutCapture(t *testing.T) {
 
 func TestReadHandshake_RoundTripWithHandshakeAckFD(t *testing.T) {
 	r, w := pipePair(t)
-	go handshakeAckFD(w, "sess-xyz", true)
+	go handshakeAckFD(w, "10nu1y5n", true)
 
 	id, err := readHandshake(r, time.Now().Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("readHandshake: %v", err)
 	}
-	if id != "sess-xyz" {
-		t.Fatalf("id: got %q, want %q", id, "sess-xyz")
+	if id != "10nu1y5n" {
+		t.Fatalf("id: got %q, want %q", id, "10nu1y5n")
 	}
 }
 
@@ -251,14 +251,14 @@ func TestReadHandshake_EmptyLineRejected(t *testing.T) {
 }
 
 // TestReadHandshake_PartialWriteRejected is the strict-framing
-// regression: a child that writes "sess-abc" (no newline) and dies
-// must NOT result in the parent reporting "sess-abc" as a valid id.
+// regression: a child that writes "1j6y9mx6" (no newline) and dies
+// must NOT result in the parent reporting "1j6y9mx6" as a valid id.
 // The protocol is "<id>\n" written atomically; partial bytes are a
 // failure.
 func TestReadHandshake_PartialWriteRejected(t *testing.T) {
 	r, w := pipePair(t)
 	go func() {
-		_, _ = w.Write([]byte("sess-abc")) // no newline
+		_, _ = w.Write([]byte("1j6y9mx6")) // no newline
 		_ = w.Close()
 	}()
 
@@ -287,7 +287,7 @@ func TestReadHandshake_PartialWriteRejected(t *testing.T) {
 // register, calls handshakeAck, and exits.
 func TestPipeHandshakeRoundTripViaSubprocess(t *testing.T) {
 	const childIDEnv = "GMUX_HANDSHAKE_TEST_CHILD"
-	const expectedID = "sess-fromchild"
+	const expectedID = "1jufvtav"
 
 	if os.Getenv(childIDEnv) == "1" {
 		// Mirror production: main() captures at startup, the runner
@@ -339,8 +339,8 @@ func TestPipeHandshakeRoundTripViaSubprocess(t *testing.T) {
 func TestCaptureHandshakeFD_SetsCloseOnExec(t *testing.T) {
 	resetCapture(t)
 	_, control := pipePair(t) // handshake write end
-	gateR, _ := pipePair(t)  // gate read end
-	holdR, _ := pipePair(t)  // hold read end
+	gateR, _ := pipePair(t)   // gate read end
+	holdR, _ := pipePair(t)   // hold read end
 
 	// Clear CLOEXEC to simulate receiving via ExtraFiles (dup2 clears it).
 	for _, fd := range []uintptr{control.Fd(), gateR.Fd(), holdR.Fd()} {
@@ -483,7 +483,7 @@ func fdFlagsGet(fd uintptr) int {
 // and the fd remains open and undamaged after captureHandshakeFD returns.
 func TestCaptureHandshakeFD_ValidatesGateAsReadableFIFO(t *testing.T) {
 	resetCapture(t)
-	_, control := pipePair(t)  // write end → control
+	_, control := pipePair(t) // write end → control
 	holdR, _ := pipePair(t)   // read end → hold
 
 	nonPipe, err := os.Open(os.DevNull) // char device, not a FIFO
@@ -527,7 +527,7 @@ func TestCaptureHandshakeFD_ValidatesGateAsReadableFIFO(t *testing.T) {
 func TestCaptureHandshakeFD_ValidatesHoldAsReadableFIFO(t *testing.T) {
 	resetCapture(t)
 	_, control := pipePair(t) // write end → control
-	gateR, _ := pipePair(t)  // read end → gate
+	gateR, _ := pipePair(t)   // read end → gate
 
 	nonPipe, err := os.Open(os.DevNull)
 	if err != nil {
@@ -565,9 +565,9 @@ func TestCaptureHandshakeFD_ValidatesHoldAsReadableFIFO(t *testing.T) {
 // gate==control, gate==hold, control==hold. Every pair must be rejected.
 func TestCaptureHandshakeFD_RequiresDistinctFDs(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		aliasFDEnv   string // the env var to set to the same fd as another
-		aliasWith    string // which env var to alias with ("control", "gate", "hold")
+		name       string
+		aliasFDEnv string // the env var to set to the same fd as another
+		aliasWith  string // which env var to alias with ("control", "gate", "hold")
 	}{
 		{"gate==control", handshakeGateFDEnv, "control"},
 		{"hold==control", handshakeHoldFDEnv, "control"},
@@ -575,7 +575,7 @@ func TestCaptureHandshakeFD_RequiresDistinctFDs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetCapture(t)
-			_, control := pipePair(t)  // write end → control
+			_, control := pipePair(t) // write end → control
 			gateR, _ := pipePair(t)   // read end → gate
 			holdR, _ := pipePair(t)   // read end → hold
 
@@ -617,8 +617,8 @@ func TestCaptureHandshakeFD_RequiresDistinctFDs(t *testing.T) {
 func TestCaptureHandshakeFD_ValidatesGateDirection(t *testing.T) {
 	resetCapture(t)
 	_, control := pipePair(t) // write end → control (correct)
-	_, gateW := pipePair(t)  // write end → gate (WRONG: should be read end)
-	holdR, _ := pipePair(t)  // read end → hold (correct)
+	_, gateW := pipePair(t)   // write end → gate (WRONG: should be read end)
+	holdR, _ := pipePair(t)   // read end → hold (correct)
 
 	flagsBefore := fdFlagsGet(gateW.Fd())
 
@@ -650,8 +650,8 @@ func TestCaptureHandshakeFD_ValidatesGateDirection(t *testing.T) {
 func TestCaptureHandshakeFD_ValidatesControlDirection(t *testing.T) {
 	resetCapture(t)
 	controlR, _ := pipePair(t) // read end → control (WRONG: should be write end)
-	gateR, _ := pipePair(t)   // read end → gate (correct)
-	holdR, _ := pipePair(t)   // read end → hold (correct)
+	gateR, _ := pipePair(t)    // read end → gate (correct)
+	holdR, _ := pipePair(t)    // read end → hold (correct)
 
 	deadline := time.Now().Add(time.Second)
 	t.Setenv(handshakeFDEnv, strconv.Itoa(int(controlR.Fd())))
@@ -679,7 +679,7 @@ func TestCaptureHandshakeFD_ValidatesControlDirection(t *testing.T) {
 // the write-end fd (no CloseOnExec, still open).
 func TestCaptureHandshakeFD_ValidatesHoldDirection(t *testing.T) {
 	resetCapture(t)
-	_, control := pipePair(t)  // write end → control (correct)
+	_, control := pipePair(t) // write end → control (correct)
 	gateR, _ := pipePair(t)   // read end → gate (correct)
 	_, holdW := pipePair(t)   // write end → hold (WRONG: should be read end)
 

@@ -9,17 +9,13 @@ import (
 	"testing"
 )
 
-// TestMatchSession covers the reference-resolution rules the CLI
-// documents: short form (as shown by --list), full ID, slug, and
-// unique prefixes of any of those. These cases double as the
-// compatibility contract between --list's output and the other
-// management flags — if --list prints "abcd1234", `--kill abcd1234`
-// must resolve it.
+// TestMatchSession covers the liberal reference grammar: full ID, slug, and
+// unique prefixes of either. The full ID printed by `gmux ls` must resolve.
 func TestMatchSession(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234", Slug: "fix-auth"},
-		{ID: "sess-abcd5678", Slug: "fix-bug"},
-		{ID: "sess-ef019283", Slug: "build-docs"},
+		{ID: "1va8lvdv", Slug: "fix-auth"},
+		{ID: "14zknoqk", Slug: "fix-bug"},
+		{ID: "1lp4cge2", Slug: "build-docs"},
 	}
 
 	cases := []struct {
@@ -27,12 +23,10 @@ func TestMatchSession(t *testing.T) {
 		ref    string
 		wantID string
 	}{
-		{"full id", "sess-abcd1234", "sess-abcd1234"},
-		{"short form as shown by --list", "abcd1234", "sess-abcd1234"},
-		{"exact slug", "fix-auth", "sess-abcd1234"},
-		{"unique short-form prefix", "ef01", "sess-ef019283"},
-		{"unique slug prefix", "build", "sess-ef019283"},
-		{"unique full-id prefix", "sess-ef", "sess-ef019283"},
+		{"full id", "1va8lvdv", "1va8lvdv"},
+		{"exact slug", "fix-auth", "1va8lvdv"},
+		{"unique id prefix", "1lp4", "1lp4cge2"},
+		{"unique slug prefix", "build", "1lp4cge2"},
 	}
 
 	for _, tc := range cases {
@@ -54,35 +48,33 @@ func TestMatchSession(t *testing.T) {
 // message.
 func TestMatchSessionAmbiguous(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234", Slug: "fix-auth"},
-		{ID: "sess-abcd5678", Slug: "fix-bug"},
+		{ID: "1va8lvdv", Slug: "fix-auth"},
+		{ID: "14zknoqk", Slug: "fix-bug"},
 	}
-	_, err := matchSession(sessions, "abcd")
+	_, err := matchSession(sessions, "1")
 	if err == nil {
 		t.Fatal("expected ambiguous error")
 	}
 	// Both candidates must appear in the error so the user can
 	// disambiguate by typing more characters.
 	msg := err.Error()
-	if !strings.Contains(msg, "abcd1234") || !strings.Contains(msg, "abcd5678") {
+	if !strings.Contains(msg, "1va8lvdv") || !strings.Contains(msg, "14zknoqk") {
 		t.Errorf("error should list both candidates, got: %s", msg)
 	}
 }
 
-// TestMatchSessionExactBeatsPrefix covers the corner case where the
-// user's ref is itself a valid session short id AND a prefix of
-// another: the exact match must win, otherwise the unambiguous case
-// would report ambiguity.
-func TestMatchSessionExactBeatsPrefix(t *testing.T) {
+// TestMatchSessionExactIDBeatsSlug pins the deterministic exact-match tie:
+// an immutable ID wins over another session's exact slug.
+func TestMatchSessionExactIDBeatsSlug(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd"},     // exact match for short form "abcd"
-		{ID: "sess-abcdef01"}, // also starts with "abcd"
+		{ID: "1va8lvdv"},
+		{ID: "wxyz5678", Slug: "1va8lvdv"},
 	}
-	got, err := matchSession(sessions, "abcd")
+	got, err := matchSession(sessions, "1va8lvdv")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ID != "sess-abcd" {
+	if got.ID != "1va8lvdv" {
 		t.Errorf("expected exact match to win, got %q", got.ID)
 	}
 }
@@ -91,7 +83,7 @@ func TestMatchSessionExactBeatsPrefix(t *testing.T) {
 // pointed at a session from another machine. Error, don't pick a
 // random one.
 func TestMatchSessionNoMatch(t *testing.T) {
-	sessions := []cliSession{{ID: "sess-abcd1234"}}
+	sessions := []cliSession{{ID: "1va8lvdv"}}
 	if _, err := matchSession(sessions, "zzzz"); err == nil {
 		t.Error("expected error for non-matching ref")
 	}
@@ -100,23 +92,6 @@ func TestMatchSessionNoMatch(t *testing.T) {
 	}
 	if _, err := matchSession(sessions, ""); err == nil {
 		t.Error("expected error for empty ref")
-	}
-}
-
-// TestShortID covers the conversion between gmuxd's full session IDs
-// and the display form shown by --list, which is what users type back
-// into --attach / --kill / --tail.
-func TestShortID(t *testing.T) {
-	cases := map[string]string{
-		"sess-abcd1234": "abcd1234", // normal case
-		"sess-ab":       "ab",       // unusually short (shouldn't happen, but don't crash)
-		"abcd1234":      "abcd1234", // already short — idempotent
-		"":              "",         // defensive
-	}
-	for in, want := range cases {
-		if got := shortID(in); got != want {
-			t.Errorf("shortID(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 
@@ -206,13 +181,13 @@ func stringPtr(s string) *string { return &s }
 // TestMatchSessionStrictLocalDefault locks in the rule that drove
 // the new addressing design: with no --host and no @suffix, peer
 // sessions are invisible to the lookup. A user who has only a peer
-// session with id "abcd1234" must not have `gmux --kill abcd1234`
+// session with id "1va8lvdv" must not have `gmux --kill 1va8lvdv`
 // silently kill it; they have to opt in via @peer or --host.
 func TestMatchSessionStrictLocalDefault(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
+		{ID: "1va8lvdv", Peer: "konyvtar"},
 	}
-	_, err := matchSession(sessions, "abcd1234")
+	_, err := matchSession(sessions, "1va8lvdv")
 	if err == nil {
 		t.Fatal("strict-local lookup should not see a peer-only session")
 	}
@@ -225,14 +200,14 @@ func TestMatchSessionStrictLocalDefault(t *testing.T) {
 // the strict default feels like a regression.
 func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
+		{ID: "1va8lvdv", Peer: "konyvtar"},
 	}
-	_, err := matchSession(sessions, "abcd1234")
+	_, err := matchSession(sessions, "1va8lvdv")
 	if err == nil {
-		t.Fatal("expected error for peer-only short id without --host")
+		t.Fatal("expected error for peer-only ID without --host")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "abcd1234@konyvtar") {
+	if !strings.Contains(msg, "1va8lvdv@konyvtar") {
 		t.Errorf("error should suggest qualified form, got: %s", msg)
 	}
 }
@@ -244,11 +219,11 @@ func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
 // action subcommands.
 func TestMatchSessionAtSuffixRoutes(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234"},                   // local
-		{ID: "sess-abcd1234", Peer: "konyvtar"}, // namespaced collision
-		{ID: "sess-ef019283", Peer: "bespin"},
+		{ID: "1va8lvdv"},                   // local
+		{ID: "1va8lvdv", Peer: "konyvtar"}, // namespaced collision
+		{ID: "1lp4cge2", Peer: "bespin"},
 	}
-	got, err := matchSession(sessions, "abcd1234@konyvtar")
+	got, err := matchSession(sessions, "1va8lvdv@konyvtar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,10 +239,10 @@ func TestMatchSessionAtSuffixRoutes(t *testing.T) {
 // session if a local one happened to match.
 func TestMatchSessionEmptyHostSuffixRejected(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234"},                   // local
-		{ID: "sess-abcd1234", Peer: "konyvtar"}, // peer
+		{ID: "1va8lvdv"},                   // local
+		{ID: "1va8lvdv", Peer: "konyvtar"}, // peer
 	}
-	_, err := matchSession(sessions, "abcd1234@")
+	_, err := matchSession(sessions, "1va8lvdv@")
 	if err == nil {
 		t.Fatal("expected error for trailing @ with empty host suffix")
 	}
@@ -289,17 +264,17 @@ func TestMatchSessionEmptyHostSuffixRejected(t *testing.T) {
 // id) can match multiple sessions across peers.
 func TestMatchSessionMultiplePeerMatchesGetCandidateList(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
-		{ID: "sess-ab98ef76", Peer: "bespin"},
+		{ID: "1va8lvdv", Peer: "konyvtar"},
+		{ID: "15g979sl", Peer: "bespin"},
 	}
-	_, err := matchSession(sessions, "ab")
+	_, err := matchSession(sessions, "1")
 	if err == nil {
 		t.Fatal("expected error for prefix matching multiple peer sessions")
 	}
 	msg := err.Error()
 	// Both qualified forms must appear; the user uses the message to
 	// pick the right one and retypes.
-	if !strings.Contains(msg, "abcd1234@konyvtar") || !strings.Contains(msg, "ab98ef76@bespin") {
+	if !strings.Contains(msg, "1va8lvdv@konyvtar") || !strings.Contains(msg, "15g979sl@bespin") {
 		t.Errorf("error should list both qualified candidates, got: %s", msg)
 	}
 }
@@ -330,7 +305,7 @@ func TestStripANSI(t *testing.T) {
 
 func TestIsNoMatchError(t *testing.T) {
 	// The specific "no session matches" error from matchSession is retryable.
-	sessions := []cliSession{{ID: "sess-abcd1234"}}
+	sessions := []cliSession{{ID: "1va8lvdv"}}
 	_, err := matchSession(sessions, "zzzz")
 	if err == nil {
 		t.Fatal("expected error")
@@ -341,10 +316,10 @@ func TestIsNoMatchError(t *testing.T) {
 
 	// Ambiguous errors are NOT retryable.
 	sessions = []cliSession{
-		{ID: "sess-abcd1234"},
-		{ID: "sess-abcd5678"},
+		{ID: "1va8lvdv"},
+		{ID: "14zknoqk"},
 	}
-	_, err = matchSession(sessions, "abcd")
+	_, err = matchSession(sessions, "1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -371,10 +346,10 @@ func TestIsNoMatchError(t *testing.T) {
 func TestListJSONSchemaIsStable(t *testing.T) {
 	exit := 0
 	full := cliSession{
-		ID: "sess-abcd1234", Peer: "laptop", Cwd: "/home/mg/dev/gmux",
+		ID: "1va8lvdv", Peer: "laptop", Cwd: "/home/mg/dev/gmux",
 		Adapter: "pi", Alive: true, Pid: 4242, Title: "fix auth bug",
-		Slug: "fix-auth-bug", ParentSessionID: "sess-00001111",
-		SocketPath: "/run/gmux/sess-abcd1234.sock",
+		Slug: "fix-auth-bug", ParentSessionID: "1u0xpj5g",
+		SocketPath: "/run/gmux/1va8lvdv.sock",
 		Command:    []string{"pi", "--model", "sonnet"},
 		StartedAt:  "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z",
 		ExitCode: &exit,
@@ -398,7 +373,7 @@ func TestListJSONSchemaIsStable(t *testing.T) {
 
 	// A minimal session must still answer the three questions every script
 	// asks: which session, what is running, is it still running.
-	bare := jsonKeys(t, cliSession{ID: "sess-abcd1234"})
+	bare := jsonKeys(t, cliSession{ID: "1va8lvdv"})
 	for _, k := range []string{"id", "adapter", "alive"} {
 		if _, ok := bare[k]; !ok {
 			t.Errorf("zero-value session omits always-present key %q; keys: %v", k, sortedKeys(bare))

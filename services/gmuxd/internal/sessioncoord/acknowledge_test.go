@@ -15,12 +15,12 @@ func ackCoord(dur *fakeDurable, sink *fakeDirtySink) *Coordinator {
 func TestAcknowledgeDeadCommitsAndPublishes(t *testing.T) {
 	dur := newFakeDurable(0)
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "sess-a", Version: 5, Unread: true}, true, nil
+		return centralstore.Session{ID: "1mw5c5n9", Version: 5, Unread: true}, true, nil
 	}
 	sink := &fakeDirtySink{}
 	coord := ackCoord(dur, sink)
 
-	if err := coord.AcknowledgeDead(context.Background(), "sess-a"); err != nil {
+	if err := coord.AcknowledgeDead(context.Background(), "1mw5c5n9"); err != nil {
 		t.Fatal(err)
 	}
 	if len(dur.ackCalls) != 1 || dur.ackCalls[0] != 5 {
@@ -35,9 +35,9 @@ func TestAcknowledgeDeadLiveTargetIsSilentNoOp(t *testing.T) {
 	dur := newFakeDurable(0)
 	sink := &fakeDirtySink{}
 	coord := ackCoord(dur, sink)
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-a", Generation: 1}, dead: make(chan struct{})})
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "1mw5c5n9", Generation: 1}, dead: make(chan struct{})})
 
-	if err := coord.AcknowledgeDead(context.Background(), "sess-a"); err != nil {
+	if err := coord.AcknowledgeDead(context.Background(), "1mw5c5n9"); err != nil {
 		t.Fatalf("live target must be a silent no-op: %v", err)
 	}
 	if len(dur.ackCalls) != 0 {
@@ -51,10 +51,10 @@ func TestAcknowledgeDeadLiveTargetIsSilentNoOp(t *testing.T) {
 func TestAcknowledgeDeadAlreadyClearSkipsWrite(t *testing.T) {
 	dur := newFakeDurable(0)
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "sess-a", Version: 5}, true, nil
+		return centralstore.Session{ID: "1mw5c5n9", Version: 5}, true, nil
 	}
 	coord := ackCoord(dur, &fakeDirtySink{})
-	if err := coord.AcknowledgeDead(context.Background(), "sess-a"); err != nil {
+	if err := coord.AcknowledgeDead(context.Background(), "1mw5c5n9"); err != nil {
 		t.Fatal(err)
 	}
 	if len(dur.ackCalls) != 0 {
@@ -65,7 +65,7 @@ func TestAcknowledgeDeadAlreadyClearSkipsWrite(t *testing.T) {
 func TestAcknowledgeDeadNotFound(t *testing.T) {
 	dur := newFakeDurable(0)
 	coord := ackCoord(dur, &fakeDirtySink{})
-	if err := coord.AcknowledgeDead(context.Background(), "sess-a"); !errors.Is(err, centralstore.ErrSessionNotFound) {
+	if err := coord.AcknowledgeDead(context.Background(), "1mw5c5n9"); !errors.Is(err, centralstore.ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
 	}
 }
@@ -75,7 +75,7 @@ func TestAcknowledgeDeadStaleRetryAndExhaustion(t *testing.T) {
 	dur := newFakeDurable(0)
 	version := centralstore.RowVersion(5)
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "sess-a", Version: version, Unread: true}, true, nil
+		return centralstore.Session{ID: "1mw5c5n9", Version: version, Unread: true}, true, nil
 	}
 	calls := 0
 	dur.ackResult = func(_ centralstore.SessionID, observed centralstore.RowVersion) (centralstore.MutationResult, error) {
@@ -88,7 +88,7 @@ func TestAcknowledgeDeadStaleRetryAndExhaustion(t *testing.T) {
 	}
 	sink := &fakeDirtySink{}
 	coord := ackCoord(dur, sink)
-	if err := coord.AcknowledgeDead(context.Background(), "sess-a"); err != nil {
+	if err := coord.AcknowledgeDead(context.Background(), "1mw5c5n9"); err != nil {
 		t.Fatalf("expected retry to succeed: %v", err)
 	}
 	if calls != 3 || sink.count() != 1 {
@@ -99,14 +99,14 @@ func TestAcknowledgeDeadStaleRetryAndExhaustion(t *testing.T) {
 	dur2 := newFakeDurable(0)
 	v2 := centralstore.RowVersion(5)
 	dur2.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "sess-a", Version: v2, Unread: true}, true, nil
+		return centralstore.Session{ID: "1mw5c5n9", Version: v2, Unread: true}, true, nil
 	}
 	dur2.ackResult = func(_ centralstore.SessionID, _ centralstore.RowVersion) (centralstore.MutationResult, error) {
 		v2++
 		return centralstore.MutationResult{SessionVersion: v2}, centralstore.ErrStaleVersion
 	}
 	coord2 := ackCoord(dur2, &fakeDirtySink{})
-	if err := coord2.AcknowledgeDead(context.Background(), "sess-a"); !errors.Is(err, ErrAckNotDurable) {
+	if err := coord2.AcknowledgeDead(context.Background(), "1mw5c5n9"); !errors.Is(err, ErrAckNotDurable) {
 		t.Fatalf("expected ErrAckNotDurable, got %v", err)
 	}
 }

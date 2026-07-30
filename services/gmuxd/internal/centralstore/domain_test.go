@@ -997,7 +997,7 @@ func TestRandomizedPlacementOrderModel(t *testing.T) {
 	p := addProject(t, s)
 	model := []SubjectRef{}
 	for i := 0; i < 6; i++ {
-		id := SessionID(fmt.Sprintf("s%d", i))
+		id := SessionID(fmt.Sprintf("%08d", i))
 		addSessionAt(t, s, string(id), "", UnixMillis(i))
 		if _, err := s.PlaceLocalSession(ctx, id, p); err != nil {
 			t.Fatal(err)

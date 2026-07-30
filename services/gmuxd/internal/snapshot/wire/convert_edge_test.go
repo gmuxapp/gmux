@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
@@ -17,11 +18,11 @@ func TestDecomposeReorderEdgeCases(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "1mw5c5n9", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 0},
 		}},
 		{SessionView: centralstore.SessionView{
-			Session:   centralstore.Session{ID: "sess-b", Adapter: "pi", Command: []string{"pi"}, CreatedAt: 2, StatusReported: true},
+			Session:   centralstore.Session{ID: "18wnzse2", Adapter: "pi", Command: []string{"pi"}, CreatedAt: 2, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 1},
 		}},
 	}}
@@ -37,11 +38,11 @@ func TestDecomposeReorderEdgeCases(t *testing.T) {
 		sessions []string
 		wantOK   bool
 	}{
-		{"unknown project", "unknown", []string{"sess-a"}, false},
-		{"empty order", "proj", []string{}, true},                         // empty is valid: no-op reorder
-		{"missing session", "proj", []string{"sess-missing"}, true},       // silently dropped
-		{"duplicate session", "proj", []string{"sess-a", "sess-a"}, true}, // deduped
-		{"valid reorder", "proj", []string{"sess-b", "sess-a"}, true},
+		{"unknown project", "unknown", []string{"1mw5c5n9"}, false},
+		{"empty order", "proj", []string{}, true},                             // empty is valid: no-op reorder
+		{"missing session", "proj", []string{"13stq9rd"}, true},               // silently dropped
+		{"duplicate session", "proj", []string{"1mw5c5n9", "1mw5c5n9"}, true}, // deduped
+		{"valid reorder", "proj", []string{"18wnzse2", "1mw5c5n9"}, true},
 	}
 
 	for _, tc := range cases {
@@ -61,14 +62,14 @@ func TestSessionJSONRoundTrip(t *testing.T) {
 		name string
 		s    Session
 	}{
-		{"minimal", Session{ID: "sess-1", Adapter: "shell"}},
-		{"with status", Session{ID: "sess-1", Adapter: "shell", Status: &Status{Active: true}}},
-		{"with nil status", Session{ID: "sess-1", Adapter: "shell", Status: nil}},
-		{"with remotes", Session{ID: "sess-1", Adapter: "shell", Remotes: map[string]string{"origin": "https://github.com"}}},
-		{"with empty remotes", Session{ID: "sess-1", Adapter: "shell", Remotes: map[string]string{}}},
-		{"with command", Session{ID: "sess-1", Adapter: "shell", Command: []string{"bash", "-l"}}},
-		{"with nil command", Session{ID: "sess-1", Adapter: "shell", Command: nil}},
-		{"with exit code", Session{ID: "sess-1", Adapter: "shell"}},
+		{"minimal", Session{ID: "1vshk4fu", Adapter: "shell"}},
+		{"with status", Session{ID: "1vshk4fu", Adapter: "shell", Status: &Status{Active: true}}},
+		{"with nil status", Session{ID: "1vshk4fu", Adapter: "shell", Status: nil}},
+		{"with remotes", Session{ID: "1vshk4fu", Adapter: "shell", Remotes: map[string]string{"origin": "https://github.com"}}},
+		{"with empty remotes", Session{ID: "1vshk4fu", Adapter: "shell", Remotes: map[string]string{}}},
+		{"with command", Session{ID: "1vshk4fu", Adapter: "shell", Command: []string{"bash", "-l"}}},
+		{"with nil command", Session{ID: "1vshk4fu", Adapter: "shell", Command: nil}},
+		{"with exit code", Session{ID: "1vshk4fu", Adapter: "shell"}},
 	}
 
 	for _, tc := range cases {
@@ -106,7 +107,7 @@ func TestMalformedJSONInput(t *testing.T) {
 	}
 
 	// DecomposeReorder with nil payloads should not panic
-	_, ok := conv.DecomposeReorder("proj", []string{"sess-1"}, nil, nil)
+	_, ok := conv.DecomposeReorder("proj", []string{"1vshk4fu"}, nil, nil)
 	if ok {
 		t.Error("expected false for nil payloads")
 	}
@@ -124,7 +125,7 @@ func TestLargePayloadNoPanic(t *testing.T) {
 		sessions[i] = central.SessionRow{
 			SessionView: centralstore.SessionView{
 				Session: centralstore.Session{
-					ID:             centralstore.SessionID("sess-" + string(rune('a'+i%26))),
+					ID:             centralstore.SessionID(fmt.Sprintf("%07d%c", i, rune('a'+i%26))),
 					Adapter:        "shell",
 					Command:        []string{"bash"},
 					CreatedAt:      centralstore.UnixMillis(1000 + i),
@@ -149,7 +150,7 @@ func TestLargePayloadNoPanic(t *testing.T) {
 	// Build a reorder list with all session IDs
 	order := make([]string, 1000)
 	for i := range order {
-		order[i] = "sess-" + string(rune('a'+i%26))
+		order[i] = fmt.Sprintf("%07d%c", i, rune('a'+i%26))
 	}
 
 	// This should handle the large payload without panicking
@@ -169,7 +170,7 @@ func TestInvalidSessionID(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "1mw5c5n9", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 0},
 		}},
 	}}
@@ -198,7 +199,7 @@ func TestProjectSlugEdgeCases(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "1mw5c5n9", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "my-proj", SiblingScope: "r", Position: 0},
 		}},
 	}}
@@ -225,7 +226,7 @@ func TestProjectSlugEdgeCases(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok := conv.DecomposeReorder(tc.slug, []string{"sess-a"}, local, tc.world)
+			_, ok := conv.DecomposeReorder(tc.slug, []string{"1mw5c5n9"}, local, tc.world)
 			if ok != tc.wantOK {
 				t.Errorf("DecomposeReorder(%q) = ok=%v, want %v", tc.slug, ok, tc.wantOK)
 			}

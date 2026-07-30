@@ -18,7 +18,7 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	s := openKernelStore(t)
 
 	// Registration without status facts: not reported.
-	reg := registration("sess-s", "shell", "/tmp", true, 10)
+	reg := registration("19bj3702", "shell", "/tmp", true, 10)
 	got, _, err := s.RegisterRunner(ctx, reg)
 	if err != nil {
 		t.Fatal(err)
@@ -28,19 +28,19 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	}
 
 	// Acknowledgement path never sets it (daemon-side, not runner).
-	if _, err = s.AcknowledgeDeadSession(ctx, "sess-s", got.Version); err != nil {
+	if _, err = s.AcknowledgeDeadSession(ctx, "19bj3702", got.Version); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ := s.Session(ctx, "sess-s"); v.StatusReported {
+	if v, _, _ := s.Session(ctx, "19bj3702"); v.StatusReported {
 		t.Fatal("acknowledgement must not set status-reported")
 	}
 
 	// An observation carrying an explicit active=false IS a report.
-	v, _, _ := s.Session(ctx, "sess-s")
-	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 20, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
+	v, _, _ := s.Session(ctx, "19bj3702")
+	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "19bj3702", ObservedVersion: v.Version, ObservedAt: 20, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
 		t.Fatal(err)
 	}
-	v, _, _ = s.Session(ctx, "sess-s")
+	v, _, _ = s.Session(ctx, "19bj3702")
 	if !v.StatusReported || v.Active {
 		t.Fatalf("explicit false status must set reported: %+v", v)
 	}
@@ -49,7 +49,7 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	// generation-scoped facts (Δ-1): a resumed generation that never
 	// reports must render "status": null (wait verdict "died"), not
 	// inherit the dead generation's report.
-	replacement := registration("sess-s", "shell", "/tmp", true, 30)
+	replacement := registration("19bj3702", "shell", "/tmp", true, 30)
 	replacement.NewGeneration = true
 	got, _, err = s.RegisterRunner(ctx, replacement)
 	if err != nil {
@@ -61,17 +61,17 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 
 	// ...and the new generation's own status facts re-set it (Δ-3: a
 	// reported all-false status is a valid re-entered state).
-	v, _, _ = s.Session(ctx, "sess-s")
-	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 35, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
+	v, _, _ = s.Session(ctx, "19bj3702")
+	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "19bj3702", ObservedVersion: v.Version, ObservedAt: 35, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ = s.Session(ctx, "sess-s"); !v.StatusReported || v.Active {
+	if v, _, _ = s.Session(ctx, "19bj3702"); !v.StatusReported || v.Active {
 		t.Fatalf("new generation's report must re-set the bit: %+v", v)
 	}
 
 	// A replacement generation whose registration facts carry status is
 	// reported from the start (merge runs after the reset).
-	replacement2 := registration("sess-s", "shell", "/tmp", true, 40)
+	replacement2 := registration("19bj3702", "shell", "/tmp", true, 40)
 	replacement2.NewGeneration = true
 	replacement2.Facts.Active = ptr(true)
 	if got, _, err = s.RegisterRunner(ctx, replacement2); err != nil {
@@ -82,7 +82,7 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	}
 
 	// Registration facts carrying error also report; sweep preserves.
-	reg2 := registration("sess-e", "shell", "/tmp", true, 40)
+	reg2 := registration("1q4ts9e1", "shell", "/tmp", true, 40)
 	reg2.Facts.Error = ptr(true)
 	if got, _, err = s.RegisterRunner(ctx, reg2); err != nil {
 		t.Fatal(err)
@@ -90,15 +90,15 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	if !got.StatusReported {
 		t.Fatal("registration error fact must report")
 	}
-	if _, err = s.SweepDeadSessions(ctx, []SessionID{"sess-e"}, 50); err != nil {
+	if _, err = s.SweepDeadSessions(ctx, []SessionID{"1q4ts9e1"}, 50); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ = s.Session(ctx, "sess-e"); !v.StatusReported || !v.Error {
+	if v, _, _ = s.Session(ctx, "1q4ts9e1"); !v.StatusReported || !v.Error {
 		t.Fatalf("sweep must preserve status facts: %+v", v)
 	}
 
 	// InsertSession derives the bit from active/error when unset.
-	ins, _, err := s.InsertSession(ctx, NewSession{ID: "sess-i", Adapter: "shell", CWD: "/tmp", CreatedAt: 60, Active: true})
+	ins, _, err := s.InsertSession(ctx, NewSession{ID: "1kum8jak", Adapter: "shell", CWD: "/tmp", CreatedAt: 60, Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,44 +174,44 @@ func specs2(cat ProjectCatalog) []ProjectEntrySpec {
 func TestInterruptedFactRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
-	if _, _, err := s.RegisterRunner(ctx, registration("sess-i", "pi", "/tmp", true, 10)); err != nil {
+	if _, _, err := s.RegisterRunner(ctx, registration("1kum8jak", "pi", "/tmp", true, 10)); err != nil {
 		t.Fatal(err)
 	}
-	v, _, _ := s.Session(ctx, "sess-i")
-	obs := RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 20,
+	v, _, _ := s.Session(ctx, "1kum8jak")
+	obs := RunnerObservation{ID: "1kum8jak", ObservedVersion: v.Version, ObservedAt: 20,
 		Facts: RunnerFacts{Active: ptr(false), Error: ptr(false), Interrupted: ptr(true)}}
 	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	v, _, _ = s.Session(ctx, "sess-i")
+	v, _, _ = s.Session(ctx, "1kum8jak")
 	if !v.Interrupted || v.Active || v.Error || !v.StatusReported {
 		t.Fatalf("interrupted turn end = %+v, want interrupted-only reported status", v)
 	}
 
 	// A new turn clears the interruption (the runner replaces the status
 	// wholesale; the store must not make it sticky).
-	obs = RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 30,
+	obs = RunnerObservation{ID: "1kum8jak", ObservedVersion: v.Version, ObservedAt: 30,
 		Facts: RunnerFacts{Active: ptr(true), Error: ptr(false), Interrupted: ptr(false)}}
 	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ = s.Session(ctx, "sess-i"); v.Interrupted || !v.Active {
+	if v, _, _ = s.Session(ctx, "1kum8jak"); v.Interrupted || !v.Active {
 		t.Fatalf("new turn = %+v, want active without interruption", v)
 	}
 
 	// Active+Error is representable: an active retry/rate-limit condition
 	// is not a terminal failure and must not close the turn.
-	obs = RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 40,
+	obs = RunnerObservation{ID: "1kum8jak", ObservedVersion: v.Version, ObservedAt: 40,
 		Facts: RunnerFacts{Active: ptr(true), Error: ptr(true)}}
 	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ = s.Session(ctx, "sess-i"); !v.Active || !v.Error {
+	if v, _, _ = s.Session(ctx, "1kum8jak"); !v.Active || !v.Error {
 		t.Fatalf("active error = %+v, want Active and Error together", v)
 	}
 
 	// Replacement generation resets it with the other generation-scoped facts.
-	repl := registration("sess-i", "pi", "/tmp", true, 50)
+	repl := registration("1kum8jak", "pi", "/tmp", true, 50)
 	repl.NewGeneration = true
 	repl.Facts.Interrupted = nil
 	got, _, err := s.RegisterRunner(ctx, repl)

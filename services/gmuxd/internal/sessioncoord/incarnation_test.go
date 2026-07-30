@@ -90,11 +90,11 @@ func rebind(t *testing.T, old *net.UnixListener, path string, prev socklease.Ide
 
 // Mutation: drop the socket identity capture in Register.
 func TestRegisterCarriesSocketIdentity(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-identity.sock")
+	sockPath := filepath.Join(t.TempDir(), "1zdou7bx.sock")
 	listenSock(t, sockPath)
 	want := identOf(t, sockPath)
 
-	coord := New(nil, newFakeClient(metaFor("sess-identity")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{})
+	coord := New(nil, newFakeClient(metaFor("1zdou7bx")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{})
 	closeBarrier(t, coord)
 
 	rt, err := coord.Register(context.Background(), RegisterRequest{Endpoint: sockPath})
@@ -113,7 +113,7 @@ func TestRegisterCarriesSocketIdentity(t *testing.T) {
 // as unknown rather than as some default that could accidentally compare equal
 // to another unknown one.
 func TestRegisterReportsUnknownIdentityForSyntheticEndpoint(t *testing.T) {
-	coord := New(nil, newFakeClient(metaFor("sess-synthetic")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{})
+	coord := New(nil, newFakeClient(metaFor("1o949uu4")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{})
 	closeBarrier(t, coord)
 
 	rt, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "synthetic-ep"})
@@ -134,11 +134,11 @@ func TestRegisterReportsUnknownIdentityForSyntheticEndpoint(t *testing.T) {
 // with teeth: Scan suppresses probes for the exact installed identity, so a
 // wrong identity means a live replacement runner is never probed again.
 func TestRegisterRefusesIdentityWhenPathnameMovesDuringRegistration(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-moving.sock")
+	sockPath := filepath.Join(t.TempDir(), "1gr9b1fc.sock")
 	ln := listenSock(t, sockPath)
 	before := identOf(t, sockPath)
 
-	client := newFakeClient(metaFor("sess-moving"))
+	client := newFakeClient(metaFor("1gr9b1fc"))
 	// Rebind the pathname in the middle of the registration's runner I/O.
 	client.onMeta = func() { _, _ = rebind(t, ln, sockPath, before) }
 
@@ -162,8 +162,8 @@ func TestRegisterRefusesIdentityWhenPathnameMovesDuringRegistration(t *testing.T
 // B can never win registration (A is installed) and is invisible to a
 // pathname-only comparison, so it would stay alive and unregistered forever.
 func TestReapOrphansTerminatesSamePathnameDifferentSocket(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-rebound.sock")
-	id := centralstore.SessionID("sess-rebound")
+	sockPath := filepath.Join(t.TempDir(), "13kcxk20.sock")
+	id := centralstore.SessionID("13kcxk20")
 	ln := listenSock(t, sockPath)
 	first := identOf(t, sockPath)
 
@@ -199,11 +199,11 @@ func TestReapOrphansTerminatesSamePathnameDifferentSocket(t *testing.T) {
 // The baseline the mutation above must not break: the installed generation's
 // own endpoint is never a reap target.
 func TestReapOrphansSkipsInstalledSocket(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-installed.sock")
+	sockPath := filepath.Join(t.TempDir(), "1r6zxosb.sock")
 	listenSock(t, sockPath)
 
 	control := &fakeControl{}
-	coord := New(nil, newFakeClient(metaFor("sess-installed")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{},
+	coord := New(nil, newFakeClient(metaFor("1r6zxosb")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{},
 		WithRunnerControl(control))
 	closeBarrier(t, coord)
 
@@ -226,7 +226,7 @@ func TestReapOrphansSkipsInstalledSocket(t *testing.T) {
 // probe) must never authorise the kill.
 func TestReapOrphansSkipsUnknownIdentity(t *testing.T) {
 	control := &fakeControl{}
-	coord := New(nil, newFakeClient(metaFor("sess-unknown")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{},
+	coord := New(nil, newFakeClient(metaFor("1flvcga6")), newFakeDurable(0), &fakeDirtySink{}, &fakeErrorSink{},
 		WithRunnerControl(control))
 	closeBarrier(t, coord)
 
@@ -249,8 +249,8 @@ func TestReapOrphansSkipsUnknownIdentity(t *testing.T) {
 // from one socket and the pathname now names another. Neither is provably an
 // orphan, and this branch ends in killing a process.
 func TestReapOrphansSkipsPathnameThatMovedUnderTheProbe(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-moving-probe.sock")
-	id := centralstore.SessionID("sess-moving-probe")
+	sockPath := filepath.Join(t.TempDir(), "1iuknhfo.sock")
+	id := centralstore.SessionID("1iuknhfo")
 	ln := listenSock(t, sockPath)
 	first := identOf(t, sockPath)
 
@@ -297,7 +297,7 @@ func TestReapOrphansSkipsPathnameThatMovedUnderTheProbe(t *testing.T) {
 // /kill handler refuses it (pinned separately in ptyserver). Here we pin the
 // half the coordinator owns: the expectation is sent, and it names B.
 func TestReapOrphansNamesTheClassifiedRunnerInItsReap(t *testing.T) {
-	installedID := centralstore.SessionID("sess-installed")
+	installedID := centralstore.SessionID("1r6zxosb")
 	orphanEP := "ep-orphan"
 
 	client := &multiClient{metas: map[string]RunnerMeta{
@@ -317,7 +317,7 @@ func TestReapOrphansNamesTheClassifiedRunnerInItsReap(t *testing.T) {
 		defer client.mu.Unlock()
 		client.afterMeta = nil
 		client.metas[endpoint] = RunnerMeta{
-			Registration: centralstore.RunnerRegistration{ID: "sess-unrelated-c", Adapter: "pi", Alive: true},
+			Registration: centralstore.RunnerRegistration{ID: "1vqx6gk4", Adapter: "pi", Alive: true},
 			Incarnation:  "incarnation-of-C",
 		}
 	}
@@ -351,7 +351,7 @@ func TestReapOrphansNamesTheClassifiedRunnerInItsReap(t *testing.T) {
 // protocol working, not an incident: it must not be reported as an error, and
 // it must not be counted as a reap.
 func TestReapOrphansTreatsAnUnsupportedRouteAsADecline(t *testing.T) {
-	installedID := centralstore.SessionID("sess-installed")
+	installedID := centralstore.SessionID("1r6zxosb")
 	client := &multiClient{metas: map[string]RunnerMeta{
 		"ep-orphan": {
 			Registration: centralstore.RunnerRegistration{ID: installedID, Adapter: "pi", Alive: true},
@@ -382,7 +382,7 @@ func TestReapOrphansTreatsAnUnsupportedRouteAsADecline(t *testing.T) {
 // against it cannot be bounded to the process the classification was about.
 // Unknown means no kill.
 func TestReapOrphansRefusesToKillAnUnidentifiableRunner(t *testing.T) {
-	installedID := centralstore.SessionID("sess-installed")
+	installedID := centralstore.SessionID("1r6zxosb")
 	client := &multiClient{metas: map[string]RunnerMeta{
 		// No Incarnation: a pre-protocol runner.
 		"ep-legacy-orphan": {Registration: centralstore.RunnerRegistration{ID: installedID, Adapter: "pi", Alive: true}},
@@ -407,10 +407,10 @@ func TestReapOrphansRefusesToKillAnUnidentifiableRunner(t *testing.T) {
 // with every stat agreeing -- while Subscribe reached A and Meta reached B.
 // Stat bracketing cannot see it; the runners' own identities can.
 func TestRegisterRejectsAStreamAndMetadataFromDifferentRunners(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-aba.sock")
+	sockPath := filepath.Join(t.TempDir(), "1rthyoji.sock")
 	listenSock(t, sockPath)
 
-	client := newFakeClient(metaFor("sess-aba"))
+	client := newFakeClient(metaFor("1rthyoji"))
 	// The stream came from one runner; the metadata answers as another. On
 	// the filesystem this is the A -> B -> A restoration: same inode before
 	// and after, two different processes in between.
@@ -440,7 +440,7 @@ func TestRegisterRejectsAStreamAndMetadataFromDifferentRunners(t *testing.T) {
 // Mutation: drop the incarnation comparison in Register.
 func TestRegisterSurvivesHardlinkRestoredPathname(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "sess-hardlink.sock")
+	sockPath := filepath.Join(dir, "1krgq65n.sock")
 	parked := filepath.Join(dir, "parked.sock")
 
 	// A is bound at the endpoint, and hard-linked aside so its inode can come
@@ -451,7 +451,7 @@ func TestRegisterSurvivesHardlinkRestoredPathname(t *testing.T) {
 		t.Skipf("this filesystem does not support hard-linking a bound socket: %v", err)
 	}
 
-	client := newFakeClient(metaFor("sess-hardlink"))
+	client := newFakeClient(metaFor("1krgq65n"))
 	client.stream.incarnation = "incarnation-of-A"
 	// Between Subscribe and Meta the pathname is B's, and B answers.
 	client.onMeta = func() {
@@ -506,10 +506,10 @@ func TestRegisterSurvivesHardlinkRestoredPathname(t *testing.T) {
 //
 // Mutation: keep the stat-derived identity when the incarnation is unknown.
 func TestRegisterWithoutIncarnationClaimsNoSocketIdentity(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "sess-legacy.sock")
+	sockPath := filepath.Join(t.TempDir(), "1u6d750s.sock")
 	listenSock(t, sockPath)
 
-	meta := metaFor("sess-legacy")
+	meta := metaFor("1u6d750s")
 	meta.Incarnation = "" // pre-protocol runner
 	client := newFakeClient(meta)
 

@@ -68,7 +68,7 @@ func (d *stubDaemon) lastRequest(t *testing.T) recordedRequest {
 	return d.requests[len(d.requests)-1]
 }
 func localSession() []cliSession {
-	return []cliSession{{ID: "sess-abcd1234", Adapter: "pi", Alive: true, Slug: "work"}}
+	return []cliSession{{ID: "1va8lvdv", Adapter: "pi", Alive: true, Slug: "work"}}
 }
 func writeEnvelope(w http.ResponseWriter, status int, data map[string]any) {
 	w.Header().Set("Content-Type", "application/json")

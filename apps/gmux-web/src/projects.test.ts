@@ -490,15 +490,15 @@ describe('buildProjectFolders', () => {
 })
 
 describe('isSessionVisibleInProject', () => {
-  const project: ProjectItem = { slug: 'test', match: [{ path: '/dev/test' }], sessions: ['my-session', 'sess-tracked'] }
+  const project: ProjectItem = { slug: 'test', match: [{ path: '/dev/test' }], sessions: ['my-session', '15ik4p59'] }
 
   it('alive sessions are always visible', () => {
-    const s = makeSession({ id: 'sess-new', cwd: '/dev/test', alive: true })
+    const s = makeSession({ id: '1vx41244', cwd: '/dev/test', alive: true })
     expect(isSessionVisibleInProject(s, project)).toBe(true)
   })
 
   it('dead non-resumable sessions are hidden', () => {
-    const s = makeSession({ id: 'sess-gone', cwd: '/dev/test', alive: false, resumable: false })
+    const s = makeSession({ id: '1ve25bnc', cwd: '/dev/test', alive: false, resumable: false })
     expect(isSessionVisibleInProject(s, project)).toBe(false)
   })
 
@@ -507,7 +507,7 @@ describe('isSessionVisibleInProject', () => {
     // stamped sessions, so by the time isSessionVisibleInProject
     // runs, the session already belongs in this folder. The check
     // collapses to alive-or-resumable.
-    const s = makeSession({ id: 'sess-x', cwd: '/dev/test', alive: false, resumable: true, slug: 'my-session' })
+    const s = makeSession({ id: '1108gm0e', cwd: '/dev/test', alive: false, resumable: true, slug: 'my-session' })
     expect(isSessionVisibleInProject(s, project)).toBe(true)
   })
 
@@ -515,7 +515,7 @@ describe('isSessionVisibleInProject', () => {
     // The tracked-set check was a holdover from cross-host adoption,
     // where some sessions arrived in a folder without a stamp. With
     // stamps as the sole authority, the helper no longer reads it.
-    const s = makeSession({ id: 'sess-orphan', cwd: '/dev/test', alive: false, resumable: true, slug: 'orphan' })
+    const s = makeSession({ id: '1c80rqj5', cwd: '/dev/test', alive: false, resumable: true, slug: 'orphan' })
     expect(isSessionVisibleInProject(s, project)).toBe(true)
   })
 
@@ -532,21 +532,21 @@ describe('isSessionVisibleInProject', () => {
 
 describe('parseSessionHostPath', () => {
   it('treats bare ids as local', () => {
-    expect(parseSessionHostPath('sess-abc')).toEqual({ originalId: 'sess-abc', path: [] })
+    expect(parseSessionHostPath('1j6y9mx6')).toEqual({ originalId: '1j6y9mx6', path: [] })
   })
 
   it('extracts a single peer hop', () => {
-    expect(parseSessionHostPath('sess-abc@workstation')).toEqual({
-      originalId: 'sess-abc', path: ['workstation'],
+    expect(parseSessionHostPath('1j6y9mx6@workstation')).toEqual({
+      originalId: '1j6y9mx6', path: ['workstation'],
     })
   })
 
   it('reverses nested chains to outermost-first', () => {
-    // On-the-wire (innermost-first): sess-abc@dev@workstation
-    // Means: session sess-abc lives on dev, which is workstation's peer.
+    // On-the-wire (innermost-first): 1j6y9mx6@dev@workstation
+    // Means: session 1j6y9mx6 lives on dev, which is workstation's peer.
     // UI path (root -> leaf): ['workstation', 'dev']
-    expect(parseSessionHostPath('sess-abc@dev@workstation')).toEqual({
-      originalId: 'sess-abc', path: ['workstation', 'dev'],
+    expect(parseSessionHostPath('1j6y9mx6@dev@workstation')).toEqual({
+      originalId: '1j6y9mx6', path: ['workstation', 'dev'],
     })
   })
 
@@ -615,21 +615,21 @@ describe('reorderKeysForFolder', () => {
     // shape, not strip @<peer>, or the merge logic will treat the
     // session as new and prepend it.
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/x', slug: '' }),
-      makeSession({ id: 'sess-2@container', cwd: '/x', slug: '', peer: 'container' }),
+      makeSession({ id: '1vshk4fu', cwd: '/x', slug: '' }),
+      makeSession({ id: '155mk8b7@container', cwd: '/x', slug: '', peer: 'container' }),
     ]
     const isLocal = (n: string) => n === 'container'
     expect(reorderKeysForFolder(sessions, undefined, isLocal))
-      .toEqual(['sess-1', 'sess-2@container'])
+      .toEqual(['1vshk4fu', '155mk8b7@container'])
   })
 
   it('local folder + Local peer: keeps namespaced id for titled sessions', () => {
     const sessions = [
-      makeSession({ id: 'sess-1@container', cwd: '/x', slug: 'claude-fix', peer: 'container' }),
+      makeSession({ id: '1vshk4fu@container', cwd: '/x', slug: 'claude-fix', peer: 'container' }),
     ]
     const isLocal = (n: string) => n === 'container'
     expect(reorderKeysForFolder(sessions, undefined, isLocal))
-      .toEqual(['sess-1@container'])
+      .toEqual(['1vshk4fu@container'])
   })
 })
 

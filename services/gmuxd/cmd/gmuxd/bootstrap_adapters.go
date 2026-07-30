@@ -14,6 +14,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
@@ -33,7 +34,29 @@ func (productionEndpointSource) Endpoints(context.Context) ([]string, error) {
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sock") {
-				out = append(out, filepath.Join(dir, entry.Name()))
+				endpoint := filepath.Join(dir, entry.Name())
+				// Fresh runners publish this marker under the socket namespace
+				// fence before bind becomes discoverable. Their asserted direct
+				// registration is the only path allowed to issue the identity.
+				if _, err := os.Stat(endpoint + ".registering"); err == nil {
+					lease, leaseErr := socklease.AcquireExisting(endpoint)
+					if errors.Is(leaseErr, socklease.ErrHeld) {
+						continue // live fresh runner; direct registration owns issuance
+					}
+					if leaseErr == nil {
+						_ = lease.ReleaseKeepingLockFile()
+					} else if !errors.Is(leaseErr, socklease.ErrNoLockFile) {
+						return nil, fmt.Errorf("inspect registration lease %s: %w", endpoint, leaseErr)
+					}
+					// The marker outlived its runner. Retire it so normal stale
+					// socket discovery and reaping can resume.
+					if err := os.Remove(endpoint + ".registering"); err != nil && !os.IsNotExist(err) {
+						return nil, fmt.Errorf("remove stale registration marker %s: %w", endpoint, err)
+					}
+				} else if !os.IsNotExist(err) {
+					return nil, fmt.Errorf("inspect runner registration marker %s: %w", endpoint, err)
+				}
+				out = append(out, endpoint)
 			}
 		}
 	}

@@ -105,7 +105,7 @@ func TestStartTriggersFullComposedGraphAndJoinedCancellation(t *testing.T) {
 	}
 	defer st.Close()
 	exited := centralstore.UnixMillis(5)
-	if _, _, err = st.InsertSession(ctx, centralstore.NewSession{ID: "sess-retained-trigger", Adapter: "shell", ConversationRef: "conv", CWD: "/tmp", Command: []string{"sh"}, CreatedAt: 1, ExitedAt: &exited}); err != nil {
+	if _, _, err = st.InsertSession(ctx, centralstore.NewSession{ID: "1r409kkk", Adapter: "shell", ConversationRef: "conv", CWD: "/tmp", Command: []string{"sh"}, CreatedAt: 1, ExitedAt: &exited}); err != nil {
 		t.Fatal(err)
 	}
 	fleet := newHarnessFleet(3)
@@ -118,7 +118,7 @@ func TestStartTriggersFullComposedGraphAndJoinedCancellation(t *testing.T) {
 	fleet.metas["runner-001"] = scanMeta
 	dead := fleet.metas["runner-002"]
 	dead.Registration.Alive = false
-	dead.Registration.ID = "sess-death-trigger"
+	dead.Registration.ID = "1hikla2f"
 	fleet.metas["runner-002"] = dead
 	reconciler := &barrierReconciler{calls: make(chan []sessioncoord.ReconcileCandidate, 16)}
 	endpoints := &controlledEndpoints{calls: make(chan []string, 8)}

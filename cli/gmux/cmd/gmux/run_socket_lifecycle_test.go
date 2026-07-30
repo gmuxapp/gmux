@@ -159,7 +159,7 @@ func launchEnv(stateHome, socketDir string) []string {
 	)
 }
 
-// leftoverSockets lists everything still in the runner socket directory.
+// leftoverSockets lists per-session artifacts still in the runner socket directory.
 func leftoverSockets(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -171,6 +171,9 @@ func leftoverSockets(t *testing.T, dir string) []string {
 	}
 	var out []string
 	for _, e := range entries {
+		if e.Name() == ".gmux-namespace.lock" {
+			continue
+		}
 		out = append(out, e.Name())
 	}
 	return out
@@ -232,7 +235,7 @@ func TestResumedSessionIDRebindsAfterExit(t *testing.T) {
 	stateHome := t.TempDir()
 	socketDir := filepath.Join(t.TempDir(), "sessions")
 	startFakeDaemon(t, filepath.Join(stateHome, "gmux", "gmuxd.sock"))
-	env := append(launchEnv(stateHome, socketDir), "GMUX_RESUME_ID=sess-fixed")
+	env := append(launchEnv(stateHome, socketDir), "GMUX_RESUME_ID=10khtpym")
 
 	for i := range 5 {
 		cmd := exec.Command(bin, "--", "true")
@@ -243,7 +246,7 @@ func TestResumedSessionIDRebindsAfterExit(t *testing.T) {
 		}
 		// The resume id must be honoured every time. A leaked lease would
 		// push the runner onto a freshly minted id instead.
-		want := filepath.Join(socketDir, "sess-fixed.sock")
+		want := filepath.Join(socketDir, "10khtpym.sock")
 		if !strings.Contains(string(out), "socket:   "+want) {
 			t.Fatalf("launch %d did not bind the resumed id:\n%s", i, out)
 		}

@@ -145,7 +145,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	metaGate := make(chan struct{})
 	runnerSock := filepath.Join(paths.SessionSocketDir(), "runner-switch.sock")
 	runner := startFakeRunnerServer(t, runnerSock, metaGate, map[string]any{
-		"id":             "sess-switch-test",
+		"id":             "1dehpbm1",
 		"adapter":        "shell",
 		"alive":          true,
 		"created_at":     time.Unix(1, 0).UTC().Format(time.RFC3339),
@@ -193,7 +193,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	if err := json.NewDecoder(resp.Body).Decode(&sessionsEnv); err != nil {
 		t.Fatal(err)
 	}
-	if !sessionsEnv.OK || len(sessionsEnv.Data) != 1 || sessionsEnv.Data[0].ID != "sess-switch-test" || !sessionsEnv.Data[0].Alive {
+	if !sessionsEnv.OK || len(sessionsEnv.Data) != 1 || sessionsEnv.Data[0].ID != "1dehpbm1" || !sessionsEnv.Data[0].Alive {
 		t.Fatalf("unexpected /v1/sessions payload: %+v", sessionsEnv)
 	}
 
@@ -206,7 +206,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ID != "sess-switch-test" {
+	if len(rows) != 1 || rows[0].ID != "1dehpbm1" {
 		t.Fatalf("unexpected sqlite rows: %+v", rows)
 	}
 
@@ -266,7 +266,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	if err := json.Unmarshal(data, &sessionsFrame); err != nil {
 		t.Fatal(err)
 	}
-	if len(sessionsFrame.Sessions) != 1 || sessionsFrame.Sessions[0].ID != "sess-switch-test" {
+	if len(sessionsFrame.Sessions) != 1 || sessionsFrame.Sessions[0].ID != "1dehpbm1" {
 		t.Fatalf("unexpected snapshot.sessions frame: %s", data)
 	}
 	event, data = readFirstSSEEvent(t, scanner)

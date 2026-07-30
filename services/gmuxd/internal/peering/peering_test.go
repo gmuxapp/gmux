@@ -17,36 +17,36 @@ import (
 // ── ID namespace helpers ──
 
 func TestNamespaceID(t *testing.T) {
-	if got := NamespaceID("sess-abc", "server"); got != "sess-abc@server" {
-		t.Errorf("NamespaceID = %q, want %q", got, "sess-abc@server")
+	if got := NamespaceID("1j6y9mx6", "server"); got != "1j6y9mx6@server" {
+		t.Errorf("NamespaceID = %q, want %q", got, "1j6y9mx6@server")
 	}
 }
 
 func TestParseID_Local(t *testing.T) {
-	orig, peer := ParseID("sess-abc123")
-	if orig != "sess-abc123" || peer != "" {
-		t.Errorf("ParseID local = (%q, %q), want (%q, %q)", orig, peer, "sess-abc123", "")
+	orig, peer := ParseID("16y0lfv7")
+	if orig != "16y0lfv7" || peer != "" {
+		t.Errorf("ParseID local = (%q, %q), want (%q, %q)", orig, peer, "16y0lfv7", "")
 	}
 }
 
 func TestParseID_Remote(t *testing.T) {
-	orig, peer := ParseID("sess-abc123@server")
-	if orig != "sess-abc123" || peer != "server" {
-		t.Errorf("ParseID remote = (%q, %q), want (%q, %q)", orig, peer, "sess-abc123", "server")
+	orig, peer := ParseID("16y0lfv7@server")
+	if orig != "16y0lfv7" || peer != "server" {
+		t.Errorf("ParseID remote = (%q, %q), want (%q, %q)", orig, peer, "16y0lfv7", "server")
 	}
 }
 
 func TestParseID_ChainedMultiLayer(t *testing.T) {
-	// Multi-layer: sess-xyz@project-a@server
-	// Split on last @ → original="sess-xyz@project-a", peer="server"
-	orig, peer := ParseID("sess-xyz@project-a@server")
-	if orig != "sess-xyz@project-a" || peer != "server" {
-		t.Errorf("ParseID chained = (%q, %q), want (%q, %q)", orig, peer, "sess-xyz@project-a", "server")
+	// Multi-layer: 10nu1y5n@project-a@server
+	// Split on last @ → original="10nu1y5n@project-a", peer="server"
+	orig, peer := ParseID("10nu1y5n@project-a@server")
+	if orig != "10nu1y5n@project-a" || peer != "server" {
+		t.Errorf("ParseID chained = (%q, %q), want (%q, %q)", orig, peer, "10nu1y5n@project-a", "server")
 	}
 }
 
 func TestParseID_Roundtrip(t *testing.T) {
-	original := "sess-abc123"
+	original := "16y0lfv7"
 	peerName := "dev-box"
 	namespaced := NamespaceID(original, peerName)
 	gotOrig, gotPeer := ParseID(namespaced)
@@ -266,7 +266,7 @@ func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 	sink := newMockSink()
 	sessions := []SessionProjection{
 		{
-			ID:      "sess-1",
+			ID:      "1vshk4fu",
 			Adapter: "codex",
 			Alive:   true,
 			Title:   "fix remote bug",
@@ -282,9 +282,9 @@ func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 	mgr.Start()
 	waitForSessions(t, sink, "server", 1)
 
-	got, ok := sink.findSession("server", "sess-1@server")
+	got, ok := sink.findSession("server", "1vshk4fu@server")
 	if !ok {
-		t.Fatal("expected sess-1@server")
+		t.Fatal("expected 1vshk4fu@server")
 	}
 	if got.Title != "fix remote bug" {
 		t.Errorf("Title = %q, want %q (spoke-resolved title must survive hub upsert)", got.Title, "fix remote bug")
@@ -319,8 +319,8 @@ func TestPeerStatus_CarriesSource(t *testing.T) {
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	sink := newMockSink()
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
-		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
 
 	token := "test-token-abc"
@@ -337,9 +337,9 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	waitForSessions(t, sink, "server", 2)
 
 	// Verify sessions are namespaced correctly.
-	s1, ok := sink.findSession("server", "sess-1@server")
+	s1, ok := sink.findSession("server", "1vshk4fu@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in sink")
+		t.Fatal("expected 1vshk4fu@server in sink")
 	}
 	if s1.Peer != "server" {
 		t.Errorf("peer = %q, want %q", s1.Peer, "server")
@@ -351,9 +351,9 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 		t.Errorf("socket_path should be cleared for remote sessions, got %q", s1.SocketPath)
 	}
 
-	s2, ok := sink.findSession("server", "sess-2@server")
+	s2, ok := sink.findSession("server", "155mk8b7@server")
 	if !ok {
-		t.Fatal("expected sess-2@server in sink")
+		t.Fatal("expected 155mk8b7@server in sink")
 	}
 	if s2.Adapter != "shell" {
 		t.Errorf("adapter = %q, want %q", s2.Adapter, "shell")
@@ -362,7 +362,7 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	mgr.Stop()
 
 	// After stop, peer sessions should be cleaned up.
-	if _, ok := sink.findSession("server", "sess-1@server"); ok {
+	if _, ok := sink.findSession("server", "1vshk4fu@server"); ok {
 		t.Error("sessions should be removed after stop")
 	}
 }
@@ -404,7 +404,7 @@ func TestPeerSubscribe_AuthFailure(t *testing.T) {
 func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 	sink := newMockSink()
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, SocketPath: "/tmp/gmux-sessions/sess-1.sock"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, SocketPath: "/tmp/gmux-sessions/1vshk4fu.sock"},
 	}
 
 	sk := spokeServer(t, "", sessions)
@@ -419,7 +419,7 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 	mgr.Start()
 	waitForSessions(t, sink, "dev", 1)
 
-	sess, _ := sink.findSession("dev", "sess-1@dev")
+	sess, _ := sink.findSession("dev", "1vshk4fu@dev")
 	if sess.SocketPath != "" {
 		t.Errorf("socket_path = %q, want empty (cleared for remote)", sess.SocketPath)
 	}
@@ -430,12 +430,12 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 func TestFindPeer_Local(t *testing.T) {
 	sink := newMockSink()
 	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
-	peer, origID := mgr.FindPeer("sess-abc123")
+	peer, origID := mgr.FindPeer("16y0lfv7")
 	if peer != nil {
 		t.Error("FindPeer should return nil for local session")
 	}
-	if origID != "sess-abc123" {
-		t.Errorf("origID = %q, want %q", origID, "sess-abc123")
+	if origID != "16y0lfv7" {
+		t.Errorf("origID = %q, want %q", origID, "16y0lfv7")
 	}
 }
 
@@ -444,15 +444,15 @@ func TestFindPeer_Remote(t *testing.T) {
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
 	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 
-	peer, origID := mgr.FindPeer("sess-abc@server")
+	peer, origID := mgr.FindPeer("1j6y9mx6@server")
 	if peer == nil {
 		t.Fatal("FindPeer should return peer for remote session")
 	}
 	if peer.Config.Name != "server" {
 		t.Errorf("peer name = %q, want %q", peer.Config.Name, "server")
 	}
-	if origID != "sess-abc" {
-		t.Errorf("origID = %q, want %q", origID, "sess-abc")
+	if origID != "1j6y9mx6" {
+		t.Errorf("origID = %q, want %q", origID, "1j6y9mx6")
 	}
 }
 
@@ -461,7 +461,7 @@ func TestFindPeer_UnknownPeer(t *testing.T) {
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
 	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 
-	peer, _ := mgr.FindPeer("sess-abc@unknown")
+	peer, _ := mgr.FindPeer("1j6y9mx6@unknown")
 	if peer != nil {
 		t.Error("FindPeer should return nil for unknown peer")
 	}
@@ -470,7 +470,7 @@ func TestFindPeer_UnknownPeer(t *testing.T) {
 func TestPeerStatusEventBroadcast(t *testing.T) {
 	sink := newMockSink()
 	sk := spokeServer(t, "", []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "test"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "test"},
 	})
 
 	hooks := EventHooks{
@@ -492,8 +492,8 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	sink := newMockSink()
 	initialSessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
-		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -505,15 +505,15 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	// Wait for initial sessions.
 	waitForSessions(t, sink, "server", 2)
 
-	// Drop sess-1 from the spoke's snapshot. The hub diffs and removes.
+	// Drop 1vshk4fu from the spoke's snapshot. The hub diffs and removes.
 	sk.setSessions([]SessionProjection{
-		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true, Slug: "bash"},
 	})
 
 	// Wait for removal.
 	deadline := time.After(2 * time.Second)
 	for {
-		if _, ok := sink.findSession("server", "sess-1@server"); !ok {
+		if _, ok := sink.findSession("server", "1vshk4fu@server"); !ok {
 			break
 		}
 		select {
@@ -523,9 +523,9 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 		}
 	}
 
-	// sess-2 should still exist.
-	if _, ok := sink.findSession("server", "sess-2@server"); !ok {
-		t.Error("sess-2@server should still exist")
+	// 155mk8b7 should still exist.
+	if _, ok := sink.findSession("server", "155mk8b7@server"); !ok {
+		t.Error("155mk8b7@server should still exist")
 	}
 
 	mgr.Stop()
@@ -534,7 +534,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 	sink := newMockSink()
 	initialSessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "fix-auth"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -547,7 +547,7 @@ func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 	waitForSessions(t, sink, "server", 1)
 
 	// Push an activity event.
-	sk.push("session-activity", map[string]any{"type": "session-activity", "id": "sess-1"})
+	sk.push("session-activity", map[string]any{"type": "session-activity", "id": "1vshk4fu"})
 
 	// Wait for the activity event with the namespaced ID.
 	deadline := time.After(2 * time.Second)
@@ -559,7 +559,7 @@ func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 			sink.mu.Lock()
 			found := false
 			for _, a := range sink.activities {
-				if a == "sess-1@server" {
+				if a == "1vshk4fu@server" {
 					found = true
 					break
 				}
@@ -579,7 +579,7 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	// Start with one session.
 	sk := spokeServer(t, "", []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "initial"},
 	})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
@@ -590,15 +590,15 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	// Add a new session to the spoke and re-emit the snapshot.
 	sk.setSessions([]SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
-		{ID: "sess-new", Adapter: "shell", Alive: true, Slug: "new-one"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "initial"},
+		{ID: "1vx41244", Adapter: "shell", Alive: true, Slug: "new-one"},
 	})
 
 	waitForSessions(t, sink, "server", 2)
 
-	got, ok := sink.findSession("server", "sess-new@server")
+	got, ok := sink.findSession("server", "1vx41244@server")
 	if !ok {
-		t.Fatal("expected sess-new@server in sink")
+		t.Fatal("expected 1vx41244@server in sink")
 	}
 	if got.Adapter != "shell" {
 		t.Errorf("adapter = %q, want %q", got.Adapter, "shell")
@@ -618,7 +618,7 @@ func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
 	sink := newMockSink()
 
 	originSess := SessionProjection{
-		ID:           "sess-1",
+		ID:           "1vshk4fu",
 		Adapter:      "pi",
 		Alive:        true,
 		Slug:         "fix-auth",
@@ -634,9 +634,9 @@ func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
 
 	waitForSessions(t, sink, "server", 1)
 
-	got, ok := sink.findSession("server", "sess-1@server")
+	got, ok := sink.findSession("server", "1vshk4fu@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in sink")
+		t.Fatal("expected 1vshk4fu@server in sink")
 	}
 	if got.ProjectSlug != "gmux" {
 		t.Errorf("ProjectSlug = %q, want %q", got.ProjectSlug, "gmux")
@@ -654,7 +654,7 @@ func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
 	sink := newMockSink()
 
 	origin := SessionProjection{
-		ID:      "sess-1",
+		ID:      "1vshk4fu",
 		Adapter: "pi",
 		Alive:   true,
 		Slug:    "loose",
@@ -669,9 +669,9 @@ func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
 
 	waitForSessions(t, sink, "server", 1)
 
-	got, ok := sink.findSession("server", "sess-1@server")
+	got, ok := sink.findSession("server", "1vshk4fu@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in sink")
+		t.Fatal("expected 1vshk4fu@server in sink")
 	}
 	if got.ProjectSlug != "" {
 		t.Errorf("ProjectSlug = %q, want empty", got.ProjectSlug)
@@ -1067,12 +1067,12 @@ func TestManager_FindPeerDynamic(t *testing.T) {
 
 	mgr.AddPeer(config.PeerConfig{Name: "dev", URL: "http://172.17.0.2:8790", Token: "tok"})
 
-	peer, origID := mgr.FindPeer("sess-abc@dev")
+	peer, origID := mgr.FindPeer("1j6y9mx6@dev")
 	if peer == nil {
 		t.Fatal("FindPeer should resolve dynamically added peer")
 	}
-	if origID != "sess-abc" {
-		t.Errorf("origID = %q, want %q", origID, "sess-abc")
+	if origID != "1j6y9mx6" {
+		t.Errorf("origID = %q, want %q", origID, "1j6y9mx6")
 	}
 }
 
@@ -1147,13 +1147,13 @@ func TestPeerStatusCountsOnlyAlive(t *testing.T) {
 
 func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
 	// Simulates the mutual-subscription loop:
-	// Peer "remote" sends us a session "sess-1@test-host" — that's our
+	// Peer "remote" sends us a session "1vshk4fu@test-host" — that's our
 	// own session echoed back. It should be dropped.
 	sink := newMockSink()
 
 	sk := spokeServer(t, "", []SessionProjection{
-		// The spoke has our session in its store as "sess-1@test-host".
-		{ID: "sess-1@test-host", Adapter: "shell", Alive: true, Peer: "test-host"},
+		// The spoke has our session in its store as "1vshk4fu@test-host".
+		{ID: "1vshk4fu@test-host", Adapter: "shell", Alive: true, Peer: "test-host"},
 	})
 
 	mgr := NewProjectionManager([]config.PeerConfig{
@@ -1164,9 +1164,9 @@ func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
 	// Wait a moment for the SSE to be processed.
 	time.Sleep(200 * time.Millisecond)
 
-	// sess-1@test-host@remote should NOT exist (self-echo dropped).
-	if _, ok := sink.findSession("remote", "sess-1@test-host@remote"); ok {
-		t.Error("self-echo should be dropped, but sess-1@test-host@remote exists in sink")
+	// 1vshk4fu@test-host@remote should NOT exist (self-echo dropped).
+	if _, ok := sink.findSession("remote", "1vshk4fu@test-host@remote"); ok {
+		t.Error("self-echo should be dropped, but 1vshk4fu@test-host@remote exists in sink")
 	}
 
 	mgr.Stop()
@@ -1174,16 +1174,16 @@ func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
 
 func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
 	// Two peers: "alpha" and "beta". Beta has alpha's session forwarded
-	// as "sess-a@alpha". Since we subscribe to alpha directly, we should
+	// as "1mw5c5n9@alpha". Since we subscribe to alpha directly, we should
 	// drop the forwarded copy from beta.
 	sink := newMockSink()
 
 	skAlpha := spokeServer(t, "", []SessionProjection{
-		{ID: "sess-a", Adapter: "shell", Alive: true},
+		{ID: "1mw5c5n9", Adapter: "shell", Alive: true},
 	})
 	skBeta := spokeServer(t, "", []SessionProjection{
-		{ID: "sess-b", Adapter: "shell", Alive: true},
-		{ID: "sess-a@alpha", Adapter: "shell", Alive: true, Peer: "alpha"}, // forwarded
+		{ID: "18wnzse2", Adapter: "shell", Alive: true},
+		{ID: "1mw5c5n9@alpha", Adapter: "shell", Alive: true, Peer: "alpha"}, // forwarded
 	})
 
 	mgr := NewProjectionManager([]config.PeerConfig{
@@ -1193,34 +1193,34 @@ func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
 	mgr.Start()
 
 	waitForSessions(t, sink, "alpha", 1)
-	waitForSessions(t, sink, "beta", 1) // only sess-b, not sess-a@alpha
+	waitForSessions(t, sink, "beta", 1) // only 18wnzse2, not 1mw5c5n9@alpha
 
 	// Direct session from alpha: present.
-	if _, ok := sink.findSession("alpha", "sess-a@alpha"); !ok {
-		t.Error("expected direct session sess-a@alpha")
+	if _, ok := sink.findSession("alpha", "1mw5c5n9@alpha"); !ok {
+		t.Error("expected direct session 1mw5c5n9@alpha")
 	}
 
 	// Beta's own session: present.
-	if _, ok := sink.findSession("beta", "sess-b@beta"); !ok {
-		t.Error("expected sess-b@beta")
+	if _, ok := sink.findSession("beta", "18wnzse2@beta"); !ok {
+		t.Error("expected 18wnzse2@beta")
 	}
 
 	// Forwarded session from beta: absent.
-	if _, ok := sink.findSession("beta", "sess-a@alpha@beta"); ok {
-		t.Error("forwarded sess-a@alpha@beta should be dropped")
+	if _, ok := sink.findSession("beta", "1mw5c5n9@alpha@beta"); ok {
+		t.Error("forwarded 1mw5c5n9@alpha@beta should be dropped")
 	}
 
 	mgr.Stop()
 }
 
 func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
-	// Peer "remote" has a devcontainer session "sess-d@devcontainer".
+	// Peer "remote" has a devcontainer session "1or99tfj@devcontainer".
 	// We don't know "devcontainer" as a direct peer, so it should be kept.
 	sink := newMockSink()
 
 	sk := spokeServer(t, "", []SessionProjection{
-		{ID: "sess-1", Adapter: "shell", Alive: true},
-		{ID: "sess-d@devcontainer", Adapter: "pi", Alive: true, Peer: "devcontainer"},
+		{ID: "1vshk4fu", Adapter: "shell", Alive: true},
+		{ID: "1or99tfj@devcontainer", Adapter: "pi", Alive: true, Peer: "devcontainer"},
 	})
 
 	mgr := NewProjectionManager([]config.PeerConfig{
@@ -1230,11 +1230,11 @@ func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 
 	waitForSessions(t, sink, "remote", 2) // both should arrive
 
-	if _, ok := sink.findSession("remote", "sess-1@remote"); !ok {
-		t.Error("expected sess-1@remote")
+	if _, ok := sink.findSession("remote", "1vshk4fu@remote"); !ok {
+		t.Error("expected 1vshk4fu@remote")
 	}
-	if _, ok := sink.findSession("remote", "sess-d@devcontainer@remote"); !ok {
-		t.Error("expected sess-d@devcontainer@remote (devcontainer session should be kept)")
+	if _, ok := sink.findSession("remote", "1or99tfj@devcontainer@remote"); !ok {
+		t.Error("expected 1or99tfj@devcontainer@remote (devcontainer session should be kept)")
 	}
 
 	mgr.Stop()
@@ -1278,8 +1278,8 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	sink := newMockSink()
 
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true},
-		{ID: "sess-2", Adapter: "shell", Alive: true},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true},
 	}
 	sk := spokeServer(t, "", sessions)
 
@@ -1293,33 +1293,33 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	// (no SSE event delivered).
 	sk.mu.Lock()
 	sk.sessions = []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true},
-		// sess-2 is gone
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true},
+		// 155mk8b7 is gone
 	}
 	sk.mu.Unlock()
 
-	// Hub still thinks sess-2 is alive (stale).
-	if s, ok := sink.findSession("remote", "sess-2@remote"); !ok || !s.Alive {
-		t.Fatal("precondition: sess-2@remote should be alive on hub")
+	// Hub still thinks 155mk8b7 is alive (stale).
+	if s, ok := sink.findSession("remote", "155mk8b7@remote"); !ok || !s.Alive {
+		t.Fatal("precondition: 155mk8b7@remote should be alive on hub")
 	}
 
 	// Trigger sleep recovery.
 	mgr.OnSleep()
 
-	// Wait for reconnection: sess-1 arrives in the fresh dump.
+	// Wait for reconnection: 1vshk4fu arrives in the fresh dump.
 	waitForSessions(t, sink, "remote", 1)
 
-	// sess-1 should be alive (refreshed by the new dump).
-	if s, ok := sink.findSession("remote", "sess-1@remote"); !ok || !s.Alive {
-		t.Error("sess-1@remote should be alive after OnSleep resync")
+	// 1vshk4fu should be alive (refreshed by the new dump).
+	if s, ok := sink.findSession("remote", "1vshk4fu@remote"); !ok || !s.Alive {
+		t.Error("1vshk4fu@remote should be alive after OnSleep resync")
 	}
 
-	// sess-2 stays in the sink (stale but visible). Sessions persist
+	// 155mk8b7 stays in the sink (stale but visible). Sessions persist
 	// across reconnects; only intentional peer removal or user dismiss
-	// deletes them. The spoke's dump didn't include sess-2, so it
+	// deletes them. The spoke's dump didn't include 155mk8b7, so it
 	// retains its last-known state.
-	if _, ok := sink.findSession("remote", "sess-2@remote"); !ok {
-		t.Error("sess-2@remote should still exist (sessions persist across reconnects)")
+	if _, ok := sink.findSession("remote", "155mk8b7@remote"); !ok {
+		t.Error("155mk8b7@remote should still exist (sessions persist across reconnects)")
 	}
 
 	mgr.Stop()
@@ -1331,8 +1331,8 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 func TestDisconnect_SessionsPersist(t *testing.T) {
 	sink := newMockSink()
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Title: "important work"},
-		{ID: "sess-2", Adapter: "codex", Alive: true, Title: "background task"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Title: "important work"},
+		{ID: "155mk8b7", Adapter: "codex", Alive: true, Title: "background task"},
 	}
 
 	// spokeServer sends sessions then closes, simulating a disconnect.
@@ -1351,18 +1351,18 @@ func TestDisconnect_SessionsPersist(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Both sessions must still be in the sink.
-	if _, ok := sink.findSession("server", "sess-1@server"); !ok {
-		t.Error("sess-1@server should persist after disconnect")
+	if _, ok := sink.findSession("server", "1vshk4fu@server"); !ok {
+		t.Error("1vshk4fu@server should persist after disconnect")
 	}
-	if _, ok := sink.findSession("server", "sess-2@server"); !ok {
-		t.Error("sess-2@server should persist after disconnect")
+	if _, ok := sink.findSession("server", "155mk8b7@server"); !ok {
+		t.Error("155mk8b7@server should persist after disconnect")
 	}
 
 	mgr.Stop()
 
 	// After intentional Stop, sessions ARE removed (Manager.removePeer).
-	if _, ok := sink.findSession("server", "sess-1@server"); ok {
-		t.Error("sess-1@server should be removed after Stop")
+	if _, ok := sink.findSession("server", "1vshk4fu@server"); ok {
+		t.Error("1vshk4fu@server should be removed after Stop")
 	}
 }
 
@@ -1378,9 +1378,9 @@ func TestApplySessionsSnapshot_DedupsIdenticalState(t *testing.T) {
 	p := newPeer(cfg, sink, nil)
 
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
-		{ID: "sess-3", Adapter: "pi", Alive: false, Slug: "c", Cwd: "/var"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+		{ID: "1mfmu6xt", Adapter: "pi", Alive: false, Slug: "c", Cwd: "/var"},
 	}
 
 	// First application: every session is new, so each one must
@@ -1406,24 +1406,24 @@ func TestApplySessionsSnapshot_BroadcastsOnRealChange(t *testing.T) {
 	p := newPeer(cfg, sink, nil)
 
 	sessions := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions)
 
-	// Flip alive on sess-2 only.
+	// Flip alive on 155mk8b7 only.
 	sessions2 := []SessionProjection{
-		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Adapter: "shell", Alive: false, Slug: "b", Cwd: "/home"},
+		{ID: "1vshk4fu", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "155mk8b7", Adapter: "shell", Alive: false, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions2)
 
-	// Verify sess-2 is now dead in the sink.
-	s2, ok := sink.findSession("server", "sess-2@server")
+	// Verify 155mk8b7 is now dead in the sink.
+	s2, ok := sink.findSession("server", "155mk8b7@server")
 	if !ok {
-		t.Fatal("sess-2@server not found in sink")
+		t.Fatal("155mk8b7@server not found in sink")
 	}
 	if s2.Alive {
-		t.Error("sess-2@server should be dead after update")
+		t.Error("155mk8b7@server should be dead after update")
 	}
 }

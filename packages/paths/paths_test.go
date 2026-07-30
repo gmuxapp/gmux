@@ -118,11 +118,11 @@ func TestLegacySessionSocketDirs(t *testing.T) {
 
 func TestIsValidSessionID(t *testing.T) {
 	valid := []string{
-		"sess-abcd1234",
-		"sess-0",
-		"sess-claude",
-		"sess-resume_1",
-		"sess-codex-2",
+		"1va8lvdv",
+		"17ikrf3o",
+		"1uml07gq",
+		"19af1jz5",
+		"1spbhw3s",
 	}
 	for _, id := range valid {
 		if !IsValidSessionID(id) {
@@ -132,16 +132,16 @@ func TestIsValidSessionID(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"abcd1234",       // missing prefix
-		"sess-",          // empty suffix
-		"sess-../escape", // path traversal
-		"sess-..",        // parent dir
-		"../sess-abcd",   // leading traversal
-		"sess-a/b",       // separator
-		`sess-a\b`,       // backslash separator
-		"sess-a::b",      // folder-key separator
-		"sess-a b",       // space
-		"sess-a\n",       // newline
+		"abcdefg",     // too short
+		"abcdefghi",   // too long
+		"ABC12345",    // uppercase
+		"abcd-123",    // punctuation
+		"../abcd1efg", // leading traversal
+		"abcd1efg/b",  // separator
+		`abcd1efg\b`,  // backslash separator
+		"abcd1efg::b", // folder-key separator
+		"abcd1efg b",  // space
+		"abcd1efg\n",  // newline
 	}
 	for _, id := range invalid {
 		if IsValidSessionID(id) {

@@ -246,6 +246,10 @@ const (
 	// an orphan and should exit rather than serve a session gmuxd will
 	// never track. See run.go's fatal-registration shutdown.
 	registerFatal
+	// registerIDConflict is the typed registration-time race backstop. It is
+	// too late to change the running child's identity; detached launch fails
+	// while foreground keeps serving unregistered.
+	registerIDConflict
 )
 
 func (o registerOutcome) ok() bool { return o == registerOK }
@@ -275,6 +279,8 @@ func registerWithClient(ctx context.Context, client *http.Client, sessionID, soc
 			switch {
 			case status == http.StatusOK:
 				return registerOK
+			case status == http.StatusConflict:
+				return registerIDConflict
 			case status >= 400 && status < 500:
 				return registerFatal
 			case status < 500 || status >= 600:
@@ -293,6 +299,37 @@ func registerWithClient(ctx context.Context, client *http.Client, sessionID, soc
 			return registerUnavailable
 		case <-timer.C:
 		}
+	}
+}
+
+type sessionIDAvailability int
+
+const (
+	sessionIDAvailable sessionIDAvailability = iota
+	sessionIDExists
+	sessionIDCheckUnavailable
+)
+
+// checkSessionIDAvailability performs the read-only, non-reserving durable-ID
+// preflight. Unreachable daemons are reported separately so foreground launch
+// can preserve daemon-optional behavior.
+func checkSessionIDAvailability(ctx context.Context, sessionID string) sessionIDAvailability {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gmuxdBaseURL()+"/v1/session-ids/"+sessionID, nil)
+	if err != nil {
+		return sessionIDCheckUnavailable
+	}
+	resp, err := gmuxdClient().Do(req)
+	if err != nil {
+		return sessionIDCheckUnavailable
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return sessionIDAvailable
+	case http.StatusConflict:
+		return sessionIDExists
+	default:
+		return sessionIDCheckUnavailable
 	}
 }
 

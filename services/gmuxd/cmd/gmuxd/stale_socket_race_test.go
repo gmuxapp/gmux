@@ -69,7 +69,7 @@ func onReapPhase(t *testing.T, ep, phase string, fn func()) (fired func() bool) 
 
 func TestReaperHoldsTheLeaseAcrossItsWholeSequence(t *testing.T) {
 	dir := socketDir(t)
-	ep := crashedRunnerSocket(t, dir, "sess-window.sock")
+	ep := crashedRunnerSocket(t, dir, "1x4wh8j3.sock")
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -107,7 +107,7 @@ func TestReaperHoldsTheLeaseAcrossItsWholeSequence(t *testing.T) {
 
 func TestReaperNeverUnlinksALiveRunner(t *testing.T) {
 	dir := socketDir(t)
-	ep := filepath.Join(dir, "sess-race.sock")
+	ep := filepath.Join(dir, "1kc5cwpd.sock")
 
 	const rounds = 400
 	var (
@@ -237,8 +237,8 @@ func TestReaperNeverUnlinksALiveRunner(t *testing.T) {
 // spent.
 func TestReapBarrierReportsTheEndpointItFiredFor(t *testing.T) {
 	dir := socketDir(t)
-	epA := crashedRunnerSocket(t, dir, "sess-a.sock")
-	epB := crashedRunnerSocket(t, dir, "sess-b.sock")
+	epA := crashedRunnerSocket(t, dir, "1mw5c5n9.sock")
+	epB := crashedRunnerSocket(t, dir, "18wnzse2.sock")
 
 	var mu sync.Mutex
 	var seen []string
@@ -281,8 +281,8 @@ func TestReapBarrierReportsTheEndpointItFiredFor(t *testing.T) {
 // Mutation: drop the endpoint comparison in onReapPhase.
 func TestScopedReapBarrierIgnoresForeignEndpoints(t *testing.T) {
 	dir := socketDir(t)
-	mine := crashedRunnerSocket(t, dir, "sess-mine.sock")
-	foreign := crashedRunnerSocket(t, dir, "sess-foreign.sock")
+	mine := crashedRunnerSocket(t, dir, "1fiuuc06.sock")
+	foreign := crashedRunnerSocket(t, dir, "1tve9qnd.sock")
 
 	fired := onReapPhase(t, mine, "before-remove", func() {})
 

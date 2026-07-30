@@ -181,7 +181,7 @@ func TestFD2DismissedSessionsVanishFromTheWire(t *testing.T) {
 	w := DefaultWorld()
 	frames, _ := RenderCentral(t, w)
 	for _, s := range frames.Sessions.Sessions {
-		if s.ID == "sess-hidden" {
+		if s.ID == "17gy8vj5" {
 			t.Fatal("dismissed session leaked onto the wire")
 		}
 	}
@@ -202,7 +202,7 @@ func TestFD3DurableActivityStampSurvives(t *testing.T) {
 	w := DefaultWorld()
 	frames, _ := RenderCentral(t, w)
 	for _, s := range frames.Sessions.Sessions {
-		if s.ID != "sess-dead" {
+		if s.ID != "1eha7rdu" {
 			continue
 		}
 		want := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC) // base-30m, truncated
@@ -212,7 +212,7 @@ func TestFD3DurableActivityStampSurvives(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("sess-dead missing")
+	t.Fatal("1eha7rdu missing")
 }
 
 // TestFD4TimestampsParseAndCompare: every emitted timestamp field parses as
@@ -282,13 +282,13 @@ func TestStatusNullForNeverReportedSessions(t *testing.T) {
 	prodSessions, _, frames := render(t, w)
 	prod := indexSessions(t, prodSessions)
 	got := indexSessions(t, toAny(t, frames.Sessions))
-	if prod["sess-nostatus"]["status"] != nil {
-		t.Fatalf("production fixture must carry null status: %v", prod["sess-nostatus"]["status"])
+	if prod["101tbmj3"]["status"] != nil {
+		t.Fatalf("production fixture must carry null status: %v", prod["101tbmj3"]["status"])
 	}
-	if got["sess-nostatus"]["status"] != nil {
-		t.Fatalf("never-reported session must emit null status: %v", got["sess-nostatus"]["status"])
+	if got["101tbmj3"]["status"] != nil {
+		t.Fatalf("never-reported session must emit null status: %v", got["101tbmj3"]["status"])
 	}
-	if got["sess-live"]["status"] == nil {
+	if got["184lbyqm"]["status"] == nil {
 		t.Fatal("reported session lost its status object")
 	}
 }
@@ -395,13 +395,13 @@ func TestFD6HealthCountsDeriveFromRegistryAndRows(t *testing.T) {
 	w := DefaultWorld()
 	frames, _ := RenderCentral(t, w)
 	got := frames.World.Health.Sessions
-	// sess-live, sess-child local alive; cont-1@box + remote-1@tower peer
-	// alive; sess-dead + sess-bare dead; sess-hidden dismissed → uncounted.
+	// 184lbyqm, 10yeqnxg local alive; cont-1@box + remote-1@tower peer
+	// alive; 1eha7rdu + 1ucq946m dead; 17gy8vj5 dismissed → uncounted.
 	// Deliberately asymmetric (tests review H-1: symmetric counts masked
-	// an alive/dead classification swap): local alive = sess-live,
-	// sess-child, sess-nostatus, sess-promoted, sess-interrupted,
-	// sess-retrying; remote alive = cont-1, cont-2, remote-1; dead =
-	// sess-dead, sess-bare; dismissed uncounted.
+	// an alive/dead classification swap): local alive = 184lbyqm,
+	// 10yeqnxg, 101tbmj3, 1o4zbq7b, 19vfj30y,
+	// 1hzt4gya; remote alive = cont-1, cont-2, remote-1; dead =
+	// 1eha7rdu, 1ucq946m; dismissed uncounted.
 	want := central.SessionCounts{LocalAlive: 6, RemoteAlive: 3, Dead: 2}
 	if got != want {
 		t.Fatalf("FD-6 counts: %+v want %+v", got, want)

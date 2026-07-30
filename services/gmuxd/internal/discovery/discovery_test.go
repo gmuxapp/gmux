@@ -24,9 +24,9 @@ import (
 //
 // The scenario:
 //
-//  1. A previous gmuxd persisted session sess-survivor and exited.
+//  1. A previous gmuxd persisted session 19n9hnyp and exited.
 //  2. The runner stayed up; its socket is still bound and serving.
-//  3. The new gmuxd loads sess-survivor via Sweep → store now has
+//  3. The new gmuxd loads 19n9hnyp via Sweep → store now has
 //     Alive=false, SocketPath set, plus historical/attribution
 //     fields (slug, created_at, ...) we must not lose.
 //  4. The first Scan() tick must see the live socket, call Register,
@@ -46,7 +46,7 @@ func TestScanReregistersDeadButAliveRunnerAfterDaemonRestart(t *testing.T) {
 	sockDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", sockDir)
 
-	const id = "sess-survivor"
+	const id = "19n9hnyp"
 	sockPath := filepath.Join(sockDir, id+".sock")
 
 	const createdAt = "2026-01-02T03:04:05Z"
@@ -132,7 +132,7 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 	sockDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", sockDir)
 
-	const id = "sess-already-current"
+	const id = "1nsy81nt"
 	sockPath := filepath.Join(sockDir, id+".sock")
 
 	// Hold /events open so the subscription goroutine stays
@@ -223,7 +223,7 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 	sockDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", sockDir)
 
-	const id = "sess-blipped"
+	const id = "1b4j9kv3"
 	sockPath := filepath.Join(sockDir, id+".sock")
 
 	ln, err := net.Listen("unix", sockPath)
@@ -304,7 +304,7 @@ func serveMetaJSON(t *testing.T, body string) (socketPath string) {
 // the renamed fields. TODO(v2.1): drop alongside the shim.
 func TestQueryMetaLegacyPreV2Keys(t *testing.T) {
 	sock := serveMetaJSON(t, `{
-		"id": "sess-old-runner",
+		"id": "1j1q7fsx",
 		"kind": "pi",
 		"session_file": "/home/u/.pi/agent/sessions/x/conv.jsonl",
 		"alive": true
@@ -329,7 +329,7 @@ func TestQueryMetaLegacyPreV2Keys(t *testing.T) {
 // keys' values.
 func TestQueryMetaNewKeysWinOverLegacy(t *testing.T) {
 	sock := serveMetaJSON(t, `{
-		"id": "sess-mixed",
+		"id": "1x06u5o6",
 		"adapter": "claude",
 		"kind": "pi",
 		"conversation_file": "/new/conv.jsonl",
@@ -395,10 +395,10 @@ func TestScanDiscoversRunnersInPrimaryAndLegacyDirs(t *testing.T) {
 		}
 	}
 
-	newSock := filepath.Join(primary, "sess-new.sock")
-	oldSock := filepath.Join(legacy, "sess-old.sock")
-	serveAliveRunner(t, newSock, "sess-new")
-	serveAliveRunner(t, oldSock, "sess-old")
+	newSock := filepath.Join(primary, "1vx41244.sock")
+	oldSock := filepath.Join(legacy, "10aobhpt.sock")
+	serveAliveRunner(t, newSock, "1vx41244")
+	serveAliveRunner(t, oldSock, "10aobhpt")
 
 	sessions := store.New()
 	subs := NewSubscriptions(sessions)
@@ -406,7 +406,7 @@ func TestScanDiscoversRunnersInPrimaryAndLegacyDirs(t *testing.T) {
 
 	Scan(sessions, subs, nil)
 
-	for id, wantSock := range map[string]string{"sess-new": newSock, "sess-old": oldSock} {
+	for id, wantSock := range map[string]string{"1vx41244": newSock, "10aobhpt": oldSock} {
 		got, ok := sessions.Get(id)
 		if !ok {
 			t.Fatalf("session %s missing from store after Scan", id)
@@ -422,7 +422,7 @@ func TestScanDiscoversRunnersInPrimaryAndLegacyDirs(t *testing.T) {
 
 // TestRegisterRejectsInvalidSessionID pins the fatal-registration
 // seam behind the convIndex-rehydrate resume bug: a runner that
-// binds a socket under an id that is not a well-formed sess-<hex>
+// binds a socket under an id that is not a well-formed 8-character base36
 // (e.g. a rehydrated agent session keyed by its conversation UUID)
 // must be rejected with ErrInvalidSessionID, not silently accepted
 // and not confused with a transient gateway error. The runner keys
@@ -475,7 +475,7 @@ func TestScanForcedDeathPreservesClosedTurnStatus(t *testing.T) {
 	sockDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", sockDir)
 
-	const id = "sess-closed-turn"
+	const id = "1yfdxhm6"
 	// Socket path that does NOT exist: Phase 1 discovers no sockets,
 	// Phase 2 stats this path, fails, and force-marks the session dead.
 	sockPath := filepath.Join(sockDir, id+".sock")
@@ -518,7 +518,7 @@ func TestScanForcedDeathPreservesOpenTurnStatus(t *testing.T) {
 	sockDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", sockDir)
 
-	const id = "sess-open-turn"
+	const id = "15mdn1vv"
 	sockPath := filepath.Join(sockDir, id+".sock")
 
 	sessions := store.New()

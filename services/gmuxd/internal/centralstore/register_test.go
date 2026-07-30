@@ -668,13 +668,13 @@ func TestSessionSlugAllocationAndReplayIdempotence(t *testing.T) {
 	s := openKernelStore(t)
 	base := "fix410-socket"
 
-	first := registration("sess-11111111", "pi", "/work", true, 10)
+	first := registration("1zh4ov94", "pi", "/work", true, 10)
 	first.Facts.Slug = &base
 	got1, _, err := s.RegisterRunner(ctx, first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := registration("sess-22222222", "pi", "/work", false, 20)
+	second := registration("1fg18fe5", "pi", "/work", false, 20)
 	second.Facts.Slug = &base
 	second.Facts.ExitedAt.Set = ptr(UnixMillis(21))
 	got2, _, err := s.RegisterRunner(ctx, second)
@@ -720,7 +720,7 @@ func TestConcurrentSessionSlugAllocation(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			reg := registration(fmt.Sprintf("sess-%08d", i), "pi", "/work", true, UnixMillis(i+1))
+			reg := registration(fmt.Sprintf("%08d", i), "pi", "/work", true, UnixMillis(i+1))
 			reg.Facts.Slug = &base
 			_, _, err := s.RegisterRunner(ctx, reg)
 			errCh <- err
@@ -754,7 +754,7 @@ func TestSessionSlugScopeIncludesAdapter(t *testing.T) {
 	s := openKernelStore(t)
 	base := "same"
 	for _, adapter := range []string{"pi", "shell"} {
-		reg := registration("sess-"+adapter, adapter, "/work", true, 1)
+		reg := registration(fmt.Sprintf("%07d1", len(adapter)), adapter, "/work", true, 1)
 		reg.Facts.Slug = &base
 		got, _, err := s.RegisterRunner(ctx, reg)
 		if err != nil {

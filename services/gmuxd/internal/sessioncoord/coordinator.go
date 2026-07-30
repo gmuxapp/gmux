@@ -14,6 +14,10 @@ import (
 
 var (
 	ErrGenerationActive = errors.New("sessioncoord: a working generation is already installed")
+	// ErrSessionIDExists rejects a direct new-runner registration whose
+	// client-minted ID is already durable. Resume/restart replacements carry
+	// lifecycle provenance and are exempt.
+	ErrSessionIDExists = errors.New("sessioncoord: session id already exists")
 	// ErrRunnerTransportNoncompliant means Subscribe returned a stream after
 	// its lifetime context had already been cancelled. Such a transport can
 	// neither establish the subscribe-before-meta fence nor satisfy bounded
@@ -409,6 +413,16 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		old, hadOld := c.registry.current(id)
 		c.mu.Unlock()
 		if hadOld {
+			if req.AssertedID != "" {
+				// Discovery may have observed this runner between its bind and
+				// direct registration. Treat the later assertion as an
+				// idempotent acknowledgement only with process-level proof.
+				if old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation {
+					_ = stream.Close()
+					return old.Runtime, nil
+				}
+				return old.Runtime, fmt.Errorf("%w: %s", ErrSessionIDExists, id)
+			}
 			return old.Runtime, ErrGenerationActive
 		}
 	}
@@ -458,11 +472,32 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		}
 	}
 
+	// A direct /v1/register assertion is a freshly minted identity, unlike
+	// discovery (no assertion) and claimed resume/restart replacement. Reject
+	// durable reuse under the lifecycle mutex; RegisterRunner's primary key
+	// handling remains the authoritative transaction boundary.
+	if req.AssertedID != "" && !req.Replace && req.ExpectedID == "" && req.Claim == nil {
+		if _, exists, rowErr := c.durable.Session(ctx, id); rowErr != nil {
+			c.mu.Unlock()
+			return Runtime{}, rowErr
+		} else if exists {
+			c.mu.Unlock()
+			return Runtime{}, fmt.Errorf("%w: %s", ErrSessionIDExists, id)
+		}
+	}
+
 	// Re-check at the commit fence: two genuine registrations may both pass
 	// the pre-I/O absence check, but only one generation may install.
 	old, hadOld := c.registry.current(id)
 	if hadOld && !req.Replace {
 		c.mu.Unlock()
+		if req.AssertedID != "" {
+			if old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation {
+				_ = stream.Close()
+				return old.Runtime, nil
+			}
+			return old.Runtime, fmt.Errorf("%w: %s", ErrSessionIDExists, id)
+		}
 		return old.Runtime, ErrGenerationActive
 	}
 

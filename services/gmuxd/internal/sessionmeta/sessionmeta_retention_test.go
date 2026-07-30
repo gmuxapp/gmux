@@ -68,21 +68,21 @@ func TestPruneScrollbackEvictsOldestKeepsMeta(t *testing.T) {
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 150}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-old", now.Add(-3*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-new", now.Add(-1*time.Hour).Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-old", 100, now.Add(-3*time.Hour))
-	writeScrollback(t, s, "sess-new", 100, now.Add(-1*time.Hour)) // total 200 > 150
+	writeDead(t, s, "10aobhpt", now.Add(-3*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1vx41244", now.Add(-1*time.Hour).Format(time.RFC3339), "")
+	writeScrollback(t, s, "10aobhpt", 100, now.Add(-3*time.Hour))
+	writeScrollback(t, s, "1vx41244", 100, now.Add(-1*time.Hour)) // total 200 > 150
 
 	s.PruneScrollback(nil)
 
-	if exists(t, filepath.Join(s.SessionDir("sess-old"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("10aobhpt"), scrollback.ActiveName)) {
 		t.Error("oldest scrollback should be evicted")
 	}
-	if !exists(t, filepath.Join(s.SessionDir("sess-new"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("1vx41244"), scrollback.ActiveName)) {
 		t.Error("newer scrollback should be kept (200-100=100 <= 150)")
 	}
 	// Meta survives for both.
-	for _, id := range []string{"sess-old", "sess-new"} {
+	for _, id := range []string{"10aobhpt", "1vx41244"} {
 		if !exists(t, filepath.Join(s.SessionDir(id), metaFile)) {
 			t.Errorf("%s meta.json must survive scrollback prune", id)
 		}
@@ -98,10 +98,10 @@ func TestPruneScrollbackCountsAndRemovesRotated(t *testing.T) {
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 150}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
 	// 100 active + 100 rotated = 200 > 150, so this session is evicted.
-	writeScrollback(t, s, "sess-a", 100, now)
-	prev := filepath.Join(s.SessionDir("sess-a"), scrollback.PreviousName)
+	writeScrollback(t, s, "1mw5c5n9", 100, now)
+	prev := filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.PreviousName)
 	if err := os.WriteFile(prev, make([]byte, 100), 0o600); err != nil {
 		t.Fatalf("write rotated: %v", err)
 	}
@@ -111,13 +111,13 @@ func TestPruneScrollbackCountsAndRemovesRotated(t *testing.T) {
 
 	s.PruneScrollback(nil)
 
-	if exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("active scrollback should be removed")
 	}
 	if exists(t, prev) {
 		t.Error("rotated scrollback.0 should be removed too")
 	}
-	if !exists(t, filepath.Join(s.SessionDir("sess-a"), metaFile)) {
+	if !exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), metaFile)) {
 		t.Error("meta.json must survive")
 	}
 }
@@ -129,12 +129,12 @@ func TestPruneScrollbackUnderCapNoop(t *testing.T) {
 	s := New(t.TempDir(),
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 1000}),
 		WithClock(func() time.Time { return now }))
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-a", 100, now)
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "1mw5c5n9", 100, now)
 
 	s.PruneScrollback(nil)
 
-	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("scrollback under cap must not be evicted")
 	}
 }
@@ -148,18 +148,18 @@ func TestPruneScrollbackSkipsAlive(t *testing.T) {
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 50}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-live", now.Add(-5*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-dead", now.Add(-1*time.Hour).Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-live", 100, now.Add(-5*time.Hour)) // oldest
-	writeScrollback(t, s, "sess-dead", 100, now.Add(-1*time.Hour))
+	writeDead(t, s, "184lbyqm", now.Add(-5*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1eha7rdu", now.Add(-1*time.Hour).Format(time.RFC3339), "")
+	writeScrollback(t, s, "184lbyqm", 100, now.Add(-5*time.Hour)) // oldest
+	writeScrollback(t, s, "1eha7rdu", 100, now.Add(-1*time.Hour))
 
-	s.PruneScrollback(map[string]bool{"sess-live": true})
+	s.PruneScrollback(map[string]bool{"184lbyqm": true})
 
-	if !exists(t, filepath.Join(s.SessionDir("sess-live"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("184lbyqm"), scrollback.ActiveName)) {
 		t.Error("alive session scrollback must never be evicted")
 	}
 	// The dead one absorbs the eviction instead.
-	if exists(t, filepath.Join(s.SessionDir("sess-dead"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("1eha7rdu"), scrollback.ActiveName)) {
 		t.Error("dead session scrollback should be evicted to meet the cap")
 	}
 }
@@ -171,12 +171,12 @@ func TestPruneScrollbackZeroCapDisabled(t *testing.T) {
 	s := New(t.TempDir(),
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 0}),
 		WithClock(func() time.Time { return now }))
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-a", 10_000, now)
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "1mw5c5n9", 10_000, now)
 
 	s.PruneScrollback(nil)
 
-	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("zero cap must disable scrollback eviction")
 	}
 }
@@ -190,8 +190,8 @@ func TestMaybePruneScrollbackThrottle(t *testing.T) {
 	s := New(t.TempDir(),
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 50}),
 		WithClock(func() time.Time { return clock }))
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-a", 100, now)
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "1mw5c5n9", 100, now)
 
 	if !s.MaybePruneScrollback(nil, 12*time.Hour) {
 		t.Fatal("first call should run (no stamp yet)")
@@ -218,24 +218,24 @@ func TestSweepAgesOutConversationlessCorpse(t *testing.T) {
 		WithClock(func() time.Time { return now }))
 
 	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)
-	writeDead(t, s, "sess-shell", old, "")                        // no conversation: ages out
-	writeDead(t, s, "sess-agent", old, "/home/u/.claude/x.jsonl") // conversation-backed: exempt
+	writeDead(t, s, "1sf8bw26", old, "")                        // no conversation: ages out
+	writeDead(t, s, "1dhy39b9", old, "/home/u/.claude/x.jsonl") // conversation-backed: exempt
 
 	loaded, err := s.Sweep()
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
 	ids := loadedIDs(loaded)
-	if ids["sess-shell"] {
+	if ids["1sf8bw26"] {
 		t.Error("conversation-less corpse should age out")
 	}
-	if !ids["sess-agent"] {
+	if !ids["1dhy39b9"] {
 		t.Error("conversation-backed dead session must be exempt from age cap")
 	}
-	if exists(t, s.SessionDir("sess-shell")) {
+	if exists(t, s.SessionDir("1sf8bw26")) {
 		t.Error("aged-out corpse dir should be removed")
 	}
-	if !exists(t, s.SessionDir("sess-agent")) {
+	if !exists(t, s.SessionDir("1dhy39b9")) {
 		t.Error("conversation-backed dir must survive")
 	}
 }
@@ -249,22 +249,22 @@ func TestSweepCountCapIgnoresConversationBacked(t *testing.T) {
 		WithRetention(RetentionPolicy{MaxCount: 1}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-shell-old", now.Add(-3*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-shell-new", now.Add(-1*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-agent", now.Add(-9*time.Hour).Format(time.RFC3339), "/x.jsonl")
+	writeDead(t, s, "1f7q3vsi", now.Add(-3*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1kbpp1us", now.Add(-1*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1dhy39b9", now.Add(-9*time.Hour).Format(time.RFC3339), "/x.jsonl")
 
 	loaded, err := s.Sweep()
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
 	ids := loadedIDs(loaded)
-	if ids["sess-shell-old"] {
+	if ids["1f7q3vsi"] {
 		t.Error("oldest corpse should be evicted by count cap")
 	}
-	if !ids["sess-shell-new"] {
+	if !ids["1kbpp1us"] {
 		t.Error("newest corpse should be kept")
 	}
-	if !ids["sess-agent"] {
+	if !ids["1dhy39b9"] {
 		t.Error("conversation-backed session must not count against or be evicted by the cap")
 	}
 }
@@ -273,8 +273,8 @@ func TestSweepCountCapIgnoresConversationBacked(t *testing.T) {
 // prunes nothing.
 func TestSweepNoPolicyKeepsEverything(t *testing.T) {
 	s := New(t.TempDir())
-	writeDead(t, s, "sess-a", "2000-01-01T00:00:00Z", "")
-	writeDead(t, s, "sess-b", "2000-01-02T00:00:00Z", "")
+	writeDead(t, s, "1mw5c5n9", "2000-01-01T00:00:00Z", "")
+	writeDead(t, s, "18wnzse2", "2000-01-02T00:00:00Z", "")
 
 	loaded, err := s.Sweep()
 	if err != nil {
@@ -293,18 +293,18 @@ func TestSweepUndatableCorpseSurvives(t *testing.T) {
 		WithRetention(RetentionPolicy{MaxAge: time.Hour, MaxCount: 1}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-dated", now.Add(-10*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-undated", "", "")
+	writeDead(t, s, "1fjqsipi", now.Add(-10*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1p9a38qc", "", "")
 
 	loaded, err := s.Sweep()
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
 	ids := loadedIDs(loaded)
-	if !ids["sess-undated"] {
+	if !ids["1p9a38qc"] {
 		t.Error("undatable corpse must survive retention")
 	}
-	if ids["sess-dated"] {
+	if ids["1fjqsipi"] {
 		t.Error("dated stale corpse should have been aged out")
 	}
 }
@@ -357,13 +357,13 @@ func TestPruneScrollbackFailedRemoveKeepsEvicting(t *testing.T) {
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 150}),
 		WithClock(func() time.Time { return now }))
 
-	writeDead(t, s, "sess-stuck", now.Add(-3*time.Hour).Format(time.RFC3339), "")
-	writeDead(t, s, "sess-evictable", now.Add(-1*time.Hour).Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-stuck", 100, now.Add(-3*time.Hour))     // oldest, remove will fail
-	writeScrollback(t, s, "sess-evictable", 100, now.Add(-1*time.Hour)) // total 200 > 150
+	writeDead(t, s, "1586ep4g", now.Add(-3*time.Hour).Format(time.RFC3339), "")
+	writeDead(t, s, "1mi4w464", now.Add(-1*time.Hour).Format(time.RFC3339), "")
+	writeScrollback(t, s, "1586ep4g", 100, now.Add(-3*time.Hour))     // oldest, remove will fail
+	writeScrollback(t, s, "1mi4w464", 100, now.Add(-1*time.Hour)) // total 200 > 150
 
 	// Make the oldest session's dir unwritable so os.Remove fails.
-	stuck := s.SessionDir("sess-stuck")
+	stuck := s.SessionDir("1586ep4g")
 	if err := os.Chmod(stuck, 0o500); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestPruneScrollbackFailedRemoveKeepsEvicting(t *testing.T) {
 	if !exists(t, filepath.Join(stuck, scrollback.ActiveName)) {
 		t.Error("stuck scrollback should remain (remove failed)")
 	}
-	if exists(t, filepath.Join(s.SessionDir("sess-evictable"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("1mi4w464"), scrollback.ActiveName)) {
 		t.Error("evictable scrollback must still be reclaimed despite the earlier failure")
 	}
 }
@@ -388,24 +388,24 @@ func TestEvictScrollbackSkipsFreshlyWritten(t *testing.T) {
 	s := New(t.TempDir(),
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 1}),
 		WithClock(func() time.Time { return now }))
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-a", 100, now)
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "1mw5c5n9", 100, now)
 
 	// Scan-time snapshot says the file is older than it now is.
-	stale := scrollbackUsage{id: "sess-a", bytes: 100, mtime: now.Add(-time.Hour)}
+	stale := scrollbackUsage{id: "1mw5c5n9", bytes: 100, mtime: now.Add(-time.Hour)}
 	if freed := s.evictScrollback(stale); freed != 0 {
 		t.Errorf("freshly-written victim must be skipped, freed %d", freed)
 	}
-	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("freshly-written scrollback must survive")
 	}
 
 	// With an accurate snapshot the same victim is evicted.
-	current := scrollbackUsage{id: "sess-a", bytes: 100, mtime: now}
+	current := scrollbackUsage{id: "1mw5c5n9", bytes: 100, mtime: now}
 	if freed := s.evictScrollback(current); freed != 100 {
 		t.Errorf("accurate-snapshot victim should free 100, freed %d", freed)
 	}
-	if exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("scrollback should be evicted")
 	}
 }
@@ -418,14 +418,14 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 	s := New(t.TempDir(),
 		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 1}),
 		WithClock(func() time.Time { return now }))
-	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
-	writeScrollback(t, s, "sess-a", 100, now)
+	writeDead(t, s, "1mw5c5n9", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "1mw5c5n9", 100, now)
 
 	s.pruneMu.Lock()
 	s.PruneScrollback(nil) // contended: must skip
 	s.pruneMu.Unlock()
 
-	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if !exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Fatal("contended prune must not evict")
 	}
 	if exists(t, filepath.Join(s.Dir(), pruneStampFile)) {
@@ -433,7 +433,7 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 	}
 
 	s.PruneScrollback(nil) // uncontended: evicts
-	if exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+	if exists(t, filepath.Join(s.SessionDir("1mw5c5n9"), scrollback.ActiveName)) {
 		t.Error("uncontended prune should evict")
 	}
 }
@@ -444,7 +444,7 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 // consumed by WatchRemovals, delete the on-disk meta dir.
 func TestRemoveDeadByConversationRefDrivesWatchRemovals(t *testing.T) {
 	metaStore := New(t.TempDir())
-	sess := store.Session{ID: "sess-dead1", Adapter: "claude", Alive: false, ConversationRef: "/c/conv.jsonl"}
+	sess := store.Session{ID: "1a5ua8uj", Adapter: "claude", Alive: false, ConversationRef: "/c/conv.jsonl"}
 	if err := metaStore.Write(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestRemoveDeadByConversationRefDrivesWatchRemovals(t *testing.T) {
 	}
 
 	deadline := time.After(2 * time.Second)
-	for exists(t, metaStore.SessionDir("sess-dead1")) {
+	for exists(t, metaStore.SessionDir("1a5ua8uj")) {
 		select {
 		case <-deadline:
 			t.Fatal("meta dir not removed via WatchRemovals within 2s")
@@ -486,7 +486,7 @@ func TestSweepSparesLiveRunnerScrollbackDir(t *testing.T) {
 	s := New(t.TempDir())
 
 	// Live runner's dir: scrollback only, no meta.json.
-	liveDir := s.SessionDir("sess-live1")
+	liveDir := s.SessionDir("18f5bhaf")
 	if err := os.MkdirAll(liveDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestSweepSparesLiveRunnerScrollbackDir(t *testing.T) {
 	}
 
 	// Genuinely empty orphan dir: still swept.
-	emptyDir := s.SessionDir("sess-empty1")
+	emptyDir := s.SessionDir("157qugt2")
 	if err := os.MkdirAll(emptyDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

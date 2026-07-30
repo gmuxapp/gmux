@@ -273,7 +273,7 @@ func waitVerdict(t *testing.T, e *prodEnv, id string) string {
 
 func scenarioUnreadRestart(t *testing.T, bin string) {
 	e := newProdEnv(t)
-	r := startProdRunner(t, e, "sess-e2e-unread", true)
+	r := startProdRunner(t, e, "1ol7x25m", true)
 	defer r.close()
 	d := startDaemon(t, bin, e)
 	r.exit(true)
@@ -379,9 +379,9 @@ func readSSE(t *testing.T, sc *bufio.Scanner) (string, []byte) {
 }
 func scenarioDaemonDown(t *testing.T, bin string) {
 	e := newProdEnv(t)
-	a := startProdRunner(t, e, "sess-survivor", false)
+	a := startProdRunner(t, e, "19n9hnyp", false)
 	defer a.close()
-	b := startProdRunner(t, e, "sess-missing", false)
+	b := startProdRunner(t, e, "13stq9rd", false)
 	defer b.close()
 	d := startDaemon(t, bin, e)
 	waitFor(t, "both live", func() bool { return len(sessions(t, e)) == 2 })
@@ -409,7 +409,7 @@ func scenarioDaemonDown(t *testing.T, bin string) {
 }
 func scenarioDeathBarrier(t *testing.T, bin string) {
 	e := newProdEnv(t)
-	r := startProdRunner(t, e, "sess-barrier", true)
+	r := startProdRunner(t, e, "13v0tldw", true)
 	d := startDaemon(t, bin, e)
 	if s := session(t, e, r.id); s["terminal_cols"] != float64(93) || s["terminal_rows"] != float64(31) {
 		t.Fatalf("initial dimensions=%v", s)
@@ -558,13 +558,13 @@ func scenarioContention(t *testing.T, bin string) {
 }
 func scenarioRestartSurvival(t *testing.T, bin string) {
 	e := newProdEnv(t)
-	a := startProdRunner(t, e, "sess-place-a", false)
+	a := startProdRunner(t, e, "16r2sarc", false)
 	defer a.close()
-	b := startProdRunner(t, e, "sess-place-b", false)
+	b := startProdRunner(t, e, "1hply5j6", false)
 	defer b.close()
-	c := startProdRunner(t, e, "sess-dismiss", false)
+	c := startProdRunner(t, e, "16uj5snf", false)
 	defer c.close()
-	sweep := startProdRunner(t, e, "sess-sweep-status", false)
+	sweep := startProdRunner(t, e, "14vaxh7o", false)
 	defer sweep.close()
 	d := startDaemon(t, bin, e)
 	waitFor(t, "restart fixtures live", func() bool { return len(sessions(t, e)) == 4 })
@@ -680,7 +680,7 @@ func scenarioRestartSurvival(t *testing.T, bin string) {
 
 func scenarioRouteCrashConsistency(t *testing.T, bin string) {
 	e := newProdEnv(t)
-	runners := []*prodRunner{startProdRunner(t, e, "sess-atomic-a", false), startProdRunner(t, e, "sess-atomic-b", false), startProdRunner(t, e, "sess-atomic-c", false)}
+	runners := []*prodRunner{startProdRunner(t, e, "12h2thqt", false), startProdRunner(t, e, "1cdeio66", false), startProdRunner(t, e, "1nqey60k", false)}
 	for _, r := range runners {
 		defer r.close()
 	}
@@ -800,7 +800,7 @@ func scenarioAdminStress(t *testing.T, bin string) {
 		cycles = 50
 	}
 	for i := 0; i < cycles; i++ {
-		r := startProdRunner(t, e, fmt.Sprintf("sess-stress-%03d", i), true)
+		r := startProdRunner(t, e, fmt.Sprintf("%08d", i), true)
 		d = startDaemon(t, bin, e)
 		waitFor(t, "stress runner live", func() bool { return session(t, e, r.id)["alive"] == true })
 		r.exit(true)

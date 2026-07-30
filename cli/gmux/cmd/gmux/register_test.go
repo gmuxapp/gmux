@@ -31,6 +31,9 @@ func startStubGmuxd(t *testing.T, status int) {
 	mux.HandleFunc("/v1/register", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 	})
+	mux.HandleFunc("/v1/session-ids/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	})
 	srv := &http.Server{Handler: mux}
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(ln); close(done) }()
@@ -53,6 +56,7 @@ func TestRegisterWithGmuxdOutcomes(t *testing.T) {
 	}{
 		{"ok", http.StatusOK, registerOK},
 		{"invalid_id_is_fatal", http.StatusBadRequest, registerFatal},
+		{"id_conflict_is_typed", http.StatusConflict, registerIDConflict},
 		{"server_error_is_transient", http.StatusBadGateway, registerUnavailable},
 	}
 	for _, tc := range cases {
@@ -60,9 +64,31 @@ func TestRegisterWithGmuxdOutcomes(t *testing.T) {
 			startStubGmuxd(t, tc.status)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
-			got := registerWithGmuxd(ctx, "sess-test", "/tmp/whatever.sock")
+			got := registerWithGmuxd(ctx, "1c54cqk8", "/tmp/whatever.sock")
 			if got != tc.want {
 				t.Errorf("registerWithGmuxd outcome = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckSessionIDAvailability(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		want   sessionIDAvailability
+	}{
+		{"available", http.StatusNoContent, sessionIDAvailable},
+		{"exists", http.StatusConflict, sessionIDExists},
+		{"daemon_error", http.StatusBadGateway, sessionIDCheckUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			startStubGmuxd(t, tc.status)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if got := checkSessionIDAvailability(ctx, "abcd1234"); got != tc.want {
+				t.Fatalf("availability = %v, want %v", got, tc.want)
 			}
 		})
 	}

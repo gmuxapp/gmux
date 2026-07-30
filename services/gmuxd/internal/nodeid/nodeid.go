@@ -30,8 +30,8 @@ const (
 	// far more than collision-resistance requires.
 	idBytes = 32
 
-	// prefix tags the id for easy recognition in logs and /v1/health,
-	// mirroring the "sess-" session-id convention.
+	// prefix tags the node id for easy recognition in logs and /v1/health.
+	// Node IDs remain prefixed even though session IDs are bare.
 	prefix = "node_"
 
 	// fileName is the name of the id file in the state directory.

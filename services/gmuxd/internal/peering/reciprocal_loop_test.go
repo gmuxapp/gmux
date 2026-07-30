@@ -44,7 +44,7 @@ func newLoopNode(t *testing.T, name string, ownedCount int) *loopNode {
 	n.slug.Store("proj-" + name)
 	for i := 0; i < ownedCount; i++ {
 		n.owned = append(n.owned, SessionProjection{
-			ID:      fmt.Sprintf("sess-%s-%d", name, i),
+			ID:      fmt.Sprintf("%c%06d1", name[0], i),
 			Adapter: "claude",
 			Alive:   true,
 			Cwd:     "/home/u/work",

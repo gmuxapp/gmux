@@ -39,7 +39,7 @@ func (s *harnessStream) Close() error        { s.once.Do(func() { close(s.events
 func newHarnessFleet(n int) *harnessFleet {
 	f := &harnessFleet{metas: make(map[string]sessioncoord.RunnerMeta), streams: make(map[string]*harnessStream), ignore: make(map[string]chan struct{})}
 	for i := 0; i < n; i++ {
-		ep, id := fmt.Sprintf("runner-%03d", i), centralstore.SessionID(fmt.Sprintf("sess-harness-%03d", i))
+		ep, id := fmt.Sprintf("runner-%03d", i), centralstore.SessionID(fmt.Sprintf("%08d", i))
 		incarnation := fmt.Sprintf("incarnation-%s", id)
 		f.metas[ep] = sessioncoord.RunnerMeta{PID: 1000 + i, Registration: centralstore.RunnerRegistration{ID: id, Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1}, Incarnation: incarnation}
 		f.streams[ep] = &harnessStream{events: make(chan sessioncoord.RunnerEvent, 32), incarnation: incarnation}
@@ -140,7 +140,7 @@ func TestHarnessUnreadAcknowledgementSurvivesCloseReopen(t *testing.T) {
 	fleet := newHarnessFleet(0)
 	s, b := openHarness(t, dir, fleet, nil)
 	exited := centralstore.UnixMillis(10)
-	row, _, err := s.InsertSession(context.Background(), centralstore.NewSession{ID: "sess-unread-restart", Adapter: "shell", Command: []string{"sh"}, Remotes: map[string]string{}, Unread: true, CreatedAt: 1, ExitedAt: &exited})
+	row, _, err := s.InsertSession(context.Background(), centralstore.NewSession{ID: "1j5e9crb", Adapter: "shell", Command: []string{"sh"}, Remotes: map[string]string{}, Unread: true, CreatedAt: 1, ExitedAt: &exited})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	// endpoint only after this barrier proves no drain can observe its death.
 	stopFirst()
 	first.Close()
-	for _, id := range []centralstore.SessionID{"sess-harness-000", "sess-harness-001"} {
+	for _, id := range []centralstore.SessionID{"00000000", "00000001"} {
 		row, ok, err := s.Session(context.Background(), id)
 		if err != nil || !ok || row.ExitedAt != nil {
 			t.Fatalf("joined boundary row %s=%+v ok=%v err=%v", id, row, ok, err)
@@ -206,8 +206,8 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	if _, err := third.Converge(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	live, _, _ := s.Session(context.Background(), "sess-harness-000")
-	missing, _, _ := s.Session(context.Background(), "sess-harness-001")
+	live, _, _ := s.Session(context.Background(), "00000000")
+	missing, _, _ := s.Session(context.Background(), "00000001")
 	if live.ExitedAt != nil || missing.ExitedAt == nil {
 		t.Fatalf("live=%+v missing=%+v", live, missing)
 	}

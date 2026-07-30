@@ -47,7 +47,7 @@ describe('uploadClipboardBlob', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const blob = makeBlob(MAX_CLIPBOARD_BYTES + 1)
-    const result = await uploadClipboardBlob(blob, 'sess-1')
+    const result = await uploadClipboardBlob(blob, '1vshk4fu')
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('too_large')
@@ -65,10 +65,10 @@ describe('uploadClipboardBlob', () => {
     }) as unknown as typeof fetch
 
     const blob = makeBlob(64, 'image/png')
-    const result = await uploadClipboardBlob(blob, 'sess-1')
+    const result = await uploadClipboardBlob(blob, '1vshk4fu')
 
     expect(result).toEqual<UploadResult>({ ok: true, path: '/tmp/paste-1.png' })
-    expect(captured!.url).toBe('/v1/sessions/sess-1/clipboard')
+    expect(captured!.url).toBe('/v1/sessions/1vshk4fu/clipboard')
     expect(captured!.init.method).toBe('POST')
     const headers = new Headers(captured!.init.headers)
     expect(headers.get('Content-Type')).toBe('image/png')
@@ -82,7 +82,7 @@ describe('uploadClipboardBlob', () => {
         { status: 413, headers: { 'Content-Type': 'application/json' } },
       )) as unknown as typeof fetch
 
-    const result = await uploadClipboardBlob(makeBlob(64), 'sess-1')
+    const result = await uploadClipboardBlob(makeBlob(64), '1vshk4fu')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('too_large')
   })
@@ -91,7 +91,7 @@ describe('uploadClipboardBlob', () => {
     globalThis.fetch = (async () =>
       new Response('upstream exploded', { status: 500 })) as unknown as typeof fetch
 
-    const result = await uploadClipboardBlob(makeBlob(64), 'sess-1')
+    const result = await uploadClipboardBlob(makeBlob(64), '1vshk4fu')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('server_error')
   })
@@ -101,7 +101,7 @@ describe('uploadClipboardBlob', () => {
       throw new TypeError('Failed to fetch')
     }) as unknown as typeof fetch
 
-    const result = await uploadClipboardBlob(makeBlob(64), 'sess-1')
+    const result = await uploadClipboardBlob(makeBlob(64), '1vshk4fu')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('network')
   })
