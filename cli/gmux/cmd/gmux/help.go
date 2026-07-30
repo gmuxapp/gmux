@@ -82,6 +82,23 @@ unrecognized name.
 // one-liners in the synopsis. The agent namespace has its own pages in
 // printAgentUsage, and daemon help is served by the gmuxd binary itself.
 var verbHelpPages = map[string]string{
+	"run": `gmux run: run a command in a managed session
+
+  gmux -- <cmd> [args]
+  gmux -d -- <cmd> [args]
+
+A session receives input only through an interactive attach, 'gmux send', or
+'gmux agent prompt'. The launching process's stdin is never forwarded.
+
+The child runs on a terminal, so its stdout and stderr are one stream, as in
+'ssh -t' or 'script'. That payload is written to stdout; gmux's own stderr
+carries the session id and diagnostics.
+
+To launch and then send input from a script:
+
+  id=$(gmux -d -- cmd); gmux send "$id" 'input' Enter
+`,
+
 	"ls": `gmux ls: list sessions, alive first, newest first
 
   gmux ls [--all|-a] [--json|-j]
