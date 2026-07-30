@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-29
-**Amended:** 2026-07-30 (the payload rule: session ids move to stderr where they are not the payload)
+**Amended:** 2026-07-30 (the payload rule; PTY stderr merge and stdin notice clarified)
 **Related:** ADR 0009 (verb-first CLI), ADR 0027 (semantic agent CLI and result-bearing wait), ADR 0030 (exchange-oriented agent reads and observational wait)
 **Supersedes in part:** ADR 0027's 2026-07-28 amendment (the "Output routing" section, its `--json` envelope, and the interrupted-wait stderr notice); ADR 0027's "stdout line 1 is a session id" output contract (2026-07-30 amendment below)
 
@@ -212,6 +212,15 @@ Consequences of the rule:
 - Multi-payload commands (`gmux wait a b c`) keep their `=== <id> ===`
   headers on stdout: there they are not metadata but the delimiters that
   make several payloads one readable document (rule 3).
+
+### Amendment clarification (2026-07-30): PTY merge and stdin notice
+
+For non-interactive `gmux -- <cmd>`, the stdout payload explicitly includes
+the child's stderr bytes. A PTY presents child stdout and stderr as one ordered
+terminal stream, as in `ssh -t` or `script`; redirecting gmux stderr therefore
+captures gmux metadata and diagnostics, not child stderr. stderr additionally
+carries ADR 0032's best-effort notice when launcher stdin has pending data that
+will not be forwarded.
 
 ### What this amends in ADR 0027
 
