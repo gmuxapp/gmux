@@ -155,7 +155,7 @@ pi, Claude Code, and Codex now report status/titles/attribution through injected
 
 - **Dead sessions persist across daemon restarts** (as rows in the SQLite database `state.db`), and **dismiss is now permanent** — restarting the daemon no longer resurfaces dismissed sessions.
 - gmux no longer surfaces conversations it never saw by scanning `~/.claude`/`~/.codex`/`~/.pi` into resumable sidebar entries; those files still power URL resolution and resume of known sessions.
-- Retention caps apply: conversation-less dead sessions age out (30 days / 200 max), dead-session scrollback is capped at 256 MB aggregate. Override with `GMUX_SESSION_RETENTION_DAYS` / `GMUX_SESSION_RETENTION_MAX` / `GMUX_SCROLLBACK_CACHE_MB`.
+- Retention caps apply: conversation-less dead sessions age out (30 days / 200 max), dead-session scrollback is capped at 256 MB aggregate. Configure these limits in the `[sessions]` section of `host.toml`.
 
 ### Per-session sockets moved
 

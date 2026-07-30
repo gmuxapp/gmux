@@ -117,7 +117,7 @@ func SessionsDir() string {
 // default 256), evicted oldest-first while meta.json survives; a dead
 // session's whole entry is retired when its conversation file
 // disappears, and conversation-less corpses fall back to an age/count
-// cap (GMUX_SESSION_RETENTION_DAYS / GMUX_SESSION_RETENTION_MAX).
+// cap (`sessions.retention_days` / `sessions.retention_max` in host.toml).
 func SessionDir(id string) string {
 	return filepath.Join(SessionsDir(), id)
 }

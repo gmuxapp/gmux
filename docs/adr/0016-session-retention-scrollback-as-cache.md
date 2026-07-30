@@ -27,7 +27,7 @@ Two tiers, with different lifetimes for the two artifacts.
 ### 1. Scrollback is a cache (aggregate byte cap)
 
 `PruneScrollback` sums scrollback bytes across all dead sessions and, when the
-total exceeds `ScrollbackCacheBytes` (`GMUX_SCROLLBACK_CACHE_MB`, default
+total exceeds `ScrollbackCacheBytes` (`sessions.scrollback_cache_mb` in `host.toml`, default
 **256 MiB**), deletes scrollback files **oldest-first** (by newest scrollback
 mtime) until back under the cap. `meta.json` is **kept** — the session stays in
 the sidebar and resumable; replay simply has no terminal history. That is the
@@ -75,7 +75,7 @@ undeterminable and never retires. Only a confident "gone" retires the entry.
 **Conversation-less corpses** (shells, and anything that never reported a
 `session_file`) have no conversation whose removal could retire them, so they
 fall back to a whole-dir age/count cap at startup `Sweep`:
-`GMUX_SESSION_RETENTION_DAYS` (default 30) and `GMUX_SESSION_RETENTION_MAX`
+`sessions.retention_days` in `host.toml` (default 30) and `sessions.retention_max` in `host.toml`
 (default 200, LRU by exit time). Sessions *with* a conversation file are exempt
 from this cap — their lifecycle is the conversation's.
 

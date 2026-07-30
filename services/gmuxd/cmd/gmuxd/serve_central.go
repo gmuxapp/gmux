@@ -82,7 +82,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	updateChecker := update.New(version)
 	peerTransport := tsauth.NewRoutedTransport()
 	stateDir := paths.StateDir()
-	sessionDirs := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
 	convIndex := conversations.New()
 	convIndex.Snapshot()
 	log.Printf("conversations: indexed %d conversations", convIndex.Count())
@@ -97,6 +96,12 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
 	}
+	retention := sessionmeta.RetentionPolicy{
+		MaxAge:               time.Duration(cfg.Sessions.RetentionDays) * 24 * time.Hour,
+		MaxCount:             cfg.Sessions.RetentionMax,
+		ScrollbackCacheBytes: int64(cfg.Sessions.ScrollbackCacheMB) << 20,
+	}
+	sessionDirs := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(retention))
 	tcpAddr, err := cfg.ListenAddr()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)

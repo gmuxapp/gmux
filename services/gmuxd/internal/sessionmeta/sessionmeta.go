@@ -48,11 +48,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -91,72 +89,25 @@ const (
 	DefaultScrollbackCacheBytes int64 = 256 << 20
 )
 
-// Environment variables that override the retention defaults at startup.
-// Each accepts a non-negative integer; 0 disables that limit (unbounded).
-const (
-	envRetentionDays     = "GMUX_SESSION_RETENTION_DAYS"
-	envRetentionCount    = "GMUX_SESSION_RETENTION_MAX"
-	envScrollbackCacheMB = "GMUX_SCROLLBACK_CACHE_MB"
-)
-
 // RetentionPolicy bounds the disk footprint of dead sessions. A zero
 // value for any field disables that limit.
 type RetentionPolicy struct {
-	// MaxAge ages out conversation-less dead sessions (ConversationRef == "")
-	// whose effective timestamp is older than now-MaxAge. Sessions with a
-	// conversation are exempt: their lifecycle is the conversation's
-	// (index-driven removal). Zero means no age limit.
+	// MaxAge ages out conversation-less dead sessions. Zero means no age limit.
 	MaxAge time.Duration
-	// MaxCount keeps only the newest MaxCount conversation-less dead
-	// sessions (by effective timestamp) after age-out. Zero means no
-	// count limit.
+	// MaxCount keeps only the newest conversation-less dead sessions. Zero means no limit.
 	MaxCount int
-	// ScrollbackCacheBytes caps the total bytes of scrollback files
-	// across all dead sessions. When exceeded, PruneScrollback deletes
-	// scrollback (keeping meta.json) oldest-first until under the cap.
+	// ScrollbackCacheBytes caps dead-session scrollback while preserving metadata.
 	// Zero means no cap.
 	ScrollbackCacheBytes int64
 }
 
-// DefaultRetention returns the built-in policy with the
-// GMUX_SESSION_RETENTION_DAYS / GMUX_SESSION_RETENTION_MAX /
-// GMUX_SCROLLBACK_CACHE_MB environment overrides applied when set to a
-// valid non-negative integer.
+// DefaultRetention returns the built-in dead-session retention policy.
 func DefaultRetention() RetentionPolicy {
-	p := RetentionPolicy{
+	return RetentionPolicy{
 		MaxAge:               DefaultMaxAge,
 		MaxCount:             DefaultMaxCount,
 		ScrollbackCacheBytes: DefaultScrollbackCacheBytes,
 	}
-	if v := os.Getenv(envRetentionDays); v != "" {
-		// Cap at the largest day count that still fits in a time.Duration
-		// (int64 ns) once multiplied by 24h, so a huge value can't
-		// overflow to a negative duration that prune would silently treat
-		// as "no age limit".
-		const maxSafeDays = math.MaxInt64 / int64(24*time.Hour) // ~106 751
-		if days, err := strconv.Atoi(v); err == nil && days >= 0 && int64(days) <= maxSafeDays {
-			p.MaxAge = time.Duration(days) * 24 * time.Hour
-		} else {
-			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionDays, v)
-		}
-	}
-	if v := os.Getenv(envRetentionCount); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			p.MaxCount = n
-		} else {
-			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionCount, v)
-		}
-	}
-	if v := os.Getenv(envScrollbackCacheMB); v != "" {
-		// Guard the MiB→bytes shift against int64 overflow the same way.
-		const maxSafeMB = math.MaxInt64 >> 20 // MiB counts whose byte value fits in int64
-		if mb, err := strconv.Atoi(v); err == nil && mb >= 0 && int64(mb) <= maxSafeMB {
-			p.ScrollbackCacheBytes = int64(mb) << 20
-		} else {
-			log.Printf("sessionmeta: ignoring invalid %s=%q", envScrollbackCacheMB, v)
-		}
-	}
-	return p
 }
 
 // Per-session directories may also contain scrollback files written
