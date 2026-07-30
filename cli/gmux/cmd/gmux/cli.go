@@ -549,11 +549,11 @@ var daemonSubs = map[string]bool{
 	"start": true, "stop": true, "restart": true, "status": true, "log-path": true,
 }
 
-var daemonStateSubs = map[string]bool{"check": true, "backup": true, "export": true}
+var daemonStateSubs = map[string]bool{"check": true, "backup": true, "export": true, "reset": true}
 
 func parseDaemon(args []string) (*command, error) {
 	if len(args) > 0 && args[0] == "state" {
-		// `gmux daemon state check|backup|export [...]` forwards to gmuxd
+		// `gmux daemon state check|backup|export|reset [...]` forwards to gmuxd
 		// verbatim (validation and help live server-side in the gmuxd
 		// binary, mirroring the other daemon verbs). Accept -h/--help and
 		// backup's target path as pass-through arguments.
@@ -561,7 +561,7 @@ func parseDaemon(args []string) (*command, error) {
 			return &command{mode: modeDaemon, daemonSub: "state", daemonArgs: args}, nil
 		}
 		if len(args) < 2 || !daemonStateSubs[args[1]] {
-			return nil, errors.New("daemon state requires one of: check, backup <path>, export")
+			return nil, errors.New("daemon state requires one of: check, backup <path>, export, reset --yes")
 		}
 		return &command{mode: modeDaemon, daemonSub: "state", daemonArgs: args}, nil
 	}

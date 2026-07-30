@@ -215,7 +215,7 @@ Commands:
   stop               Stop the running daemon
   restart            Restart the daemon (stops then starts)
   status             Show daemon health, listeners, and sessions
-  state              Check, back up, or export the daemon state database
+  state              Check, back up, export, or reset daemon state
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
   log-path           Print the daemon log file path

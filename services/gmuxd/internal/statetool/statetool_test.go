@@ -424,3 +424,109 @@ func TestOpenOfflineMissingDatabase(t *testing.T) {
 		t.Fatal("expected an error for a missing database")
 	}
 }
+
+func TestResetStatePreservesBackupAndCredentials(t *testing.T) {
+	store, dir := openStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sessions := filepath.Join(dir, "sessions", "abcd1234")
+	sockets := filepath.Join(dir, "run", "sessions")
+	backup := filepath.Join(dir, "backups", "before.db")
+	for _, path := range []string{sessions, sockets, filepath.Dir(backup)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unrelated := filepath.Join(sockets, "KEEP-ME")
+	for _, path := range []string{filepath.Join(sessions, "scrollback"), filepath.Join(sockets, "abcd1234.sock"), backup, filepath.Join(dir, "auth-token"), unrelated} {
+		if err := os.WriteFile(path, []byte("kept-or-cleared"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ResetState(dir, sockets); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{centralstore.DatabasePath(dir), sessions, filepath.Join(sockets, "abcd1234.sock")} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s still exists: %v", path, err)
+		}
+	}
+	for _, path := range []string{backup, filepath.Join(dir, "auth-token"), filepath.Join(dir, LockFileName), sockets, unrelated} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("preserved file %s: %v", path, err)
+		}
+	}
+}
+
+func TestResetStateRefusesUnsafeSocketDirectory(t *testing.T) {
+	store, dir := openStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	unrelated := filepath.Join(external, "abcd1234.sock")
+	if err := os.WriteFile(unrelated, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResetState(dir, external); err == nil || !strings.Contains(err.Error(), "unsafe session socket directory") {
+		t.Fatalf("ResetState error = %v", err)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated socket-shaped file was deleted: %v", err)
+	}
+	if _, err := os.Stat(centralstore.DatabasePath(dir)); err != nil {
+		t.Fatalf("database was deleted before unsafe-directory refusal: %v", err)
+	}
+}
+
+func TestResetStateRefusesHeldRunnerLeaseWithoutDeletingSocket(t *testing.T) {
+	store, dir := openStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sockets := filepath.Join(dir, "run", "sessions")
+	if err := os.MkdirAll(sockets, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(sockets, "abcd1234.sock")
+	lockPath := socket + ".lock"
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	if err := ResetState(dir, sockets); err == nil || !strings.Contains(err.Error(), "lease remains held") {
+		t.Fatalf("ResetState error = %v", err)
+	}
+	if _, err := os.Stat(socket); err != nil {
+		t.Fatalf("socket was deleted despite held lease: %v", err)
+	}
+	if _, err := os.Stat(centralstore.DatabasePath(dir)); err != nil {
+		t.Fatalf("database was deleted before held-lease refusal: %v", err)
+	}
+}
+
+func TestResetStateRefusesDaemonOwnership(t *testing.T) {
+	store, dir := openStore(t)
+	defer store.Close()
+	lock, err := os.OpenFile(filepath.Join(dir, LockFileName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	if err := ResetState(dir, filepath.Join(dir, "run", "sessions")); !errors.Is(err, ErrDaemonOwnsDatabase) {
+		t.Fatalf("ResetState error = %v, want ErrDaemonOwnsDatabase", err)
+	}
+}

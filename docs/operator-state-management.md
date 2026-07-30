@@ -48,6 +48,20 @@ Emits deterministic JSON to stdout.
 - Suitable for diagnostics, migration planning, or archival.
 - Not a restoreable format; use `backup` for recovery.
 
+### `gmux daemon state reset --yes`
+
+Returns the local daemon to a clean state after creating an automatic,
+timestamped backup under `~/.local/state/gmux/backups/`.
+
+- Terminates all local sessions and stops gmuxd before deleting state.
+- Deletes the SQLite database, retained session metadata/scrollback, and
+  session sockets and leases.
+- Preserves configuration, authentication material, logs, and backups.
+- Aborts without deleting anything if backup creation fails or a runner lease
+  cannot be released safely.
+- Restarts gmuxd and runs `state check` before reporting success.
+- Requires `--yes`; there is no unconfirmed destructive mode.
+
 ## Backup secrets and permissions
 
 - The state directory and database files are **owner-only** (mode 0700/0600).

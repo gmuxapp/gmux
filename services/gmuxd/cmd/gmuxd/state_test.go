@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -69,6 +70,47 @@ func TestStateUsageAndHelp(t *testing.T) {
 	}
 	if code := runState([]string{"backup"}, &out, &errOut); code != 2 {
 		t.Fatal("backup without a path must be a usage error")
+	}
+	errOut.Reset()
+	if code := runState([]string{"reset"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "requires --yes") {
+		t.Fatalf("reset without confirmation: code=%d stderr=%q", code, errOut.String())
+	}
+}
+
+func TestStateResetOrchestrationOrderAndShortCircuit(t *testing.T) {
+	isolateState(t)
+	oldBackup, oldTerminate, oldStop := stateResetBackup, stateResetTerminate, stateResetStop
+	oldRemove, oldStart, oldCheck := stateResetRemove, stateResetStart, stateResetCheck
+	t.Cleanup(func() {
+		stateResetBackup, stateResetTerminate, stateResetStop = oldBackup, oldTerminate, oldStop
+		stateResetRemove, stateResetStart, stateResetCheck = oldRemove, oldStart, oldCheck
+	})
+
+	var steps []string
+	stateResetBackup = func(string, io.Writer, io.Writer) int { steps = append(steps, "backup"); return 0 }
+	stateResetTerminate = func() error { steps = append(steps, "terminate"); return nil }
+	stateResetStop = func() error { steps = append(steps, "stop"); return nil }
+	stateResetRemove = func(string, ...string) error { steps = append(steps, "remove"); return nil }
+	stateResetStart = func() error { steps = append(steps, "start"); return nil }
+	stateResetCheck = func(w io.Writer, _ io.Writer) int {
+		steps = append(steps, "check")
+		_, _ = io.WriteString(w, "state check (online): ok\n")
+		return 0
+	}
+	if code := runStateReset(io.Discard, io.Discard); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if got := strings.Join(steps, ","); got != "backup,terminate,stop,remove,start,check" {
+		t.Fatalf("steps = %s", got)
+	}
+
+	steps = nil
+	stateResetBackup = func(string, io.Writer, io.Writer) int { steps = append(steps, "backup"); return 3 }
+	if code := runStateReset(io.Discard, io.Discard); code != 3 {
+		t.Fatalf("backup failure code = %d", code)
+	}
+	if got := strings.Join(steps, ","); got != "backup" {
+		t.Fatalf("backup failure did not short-circuit: %s", got)
 	}
 }
 

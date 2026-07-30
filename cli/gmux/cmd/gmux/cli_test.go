@@ -240,6 +240,12 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("daemonArgs = %v", c.daemonArgs)
 				}
 			}},
+		{name: "daemon state reset", args: []string{"daemon", "state", "reset", "--yes"}, wantMode: modeDaemon,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.daemonArgs, " ") != "state reset --yes" {
+					t.Errorf("daemonArgs = %v", c.daemonArgs)
+				}
+			}},
 		{name: "daemon state help", args: []string{"daemon", "state", "--help"}, wantMode: modeDaemon,
 			check: func(t *testing.T, c *command) {
 				if strings.Join(c.daemonArgs, " ") != "state --help" {

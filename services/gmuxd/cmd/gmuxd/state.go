@@ -22,7 +22,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,8 +36,15 @@ import (
 )
 
 var (
-	stateCheckTimeout  = 30 * time.Second
-	stateBackupTimeout = 5 * time.Minute
+	stateCheckTimeout   = 30 * time.Second
+	stateBackupTimeout  = 5 * time.Minute
+	stateResetNow       = time.Now
+	stateResetBackup    = runStateBackup
+	stateResetTerminate = terminateLocalRunners
+	stateResetStop      = stopDaemonForReset
+	stateResetRemove    = statetool.ResetState
+	stateResetStart     = startDaemonAfterReset
+	stateResetCheck     = runStateCheck
 )
 
 const stateUsage = `Usage: gmuxd state <command>
@@ -43,11 +53,14 @@ Commands:
   check              Verify database integrity and domain invariants
   backup <path>      Write a consistent backup of the database (VACUUM INTO)
   export             Print a redacted JSON inventory of the daemon state
+  reset --yes        Back up, stop, and remove all local session state
 
 check and backup prefer the running daemon; with no daemon running they
 operate on the database directly (refusing when it appears owned). export
 requires a running daemon. Backups CONTAIN PEER TOKENS — keep them private.
-An online backup briefly serializes against all daemon work.
+An online backup briefly serializes against all daemon work. reset preserves
+configuration, authentication, logs, and its automatic backup, but terminates
+all local sessions and deletes the database, scrollback, and session sockets.
 
 Exit codes: 0 ok, 1 check found problems, 2 usage error, 3 could not run.
 `
@@ -84,6 +97,12 @@ func runState(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return runStateExport(stdout, stderr)
+	case "reset":
+		if len(rest) != 1 || rest[0] != "--yes" {
+			_, _ = fmt.Fprintln(stderr, "gmuxd state reset: destructive operation requires --yes")
+			return 2
+		}
+		return runStateReset(stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "gmuxd state: unknown command %q\n\n%s", sub, stateUsage)
 		return 2
@@ -240,6 +259,169 @@ func runStateExport(stdout, stderr io.Writer) int {
 	}
 	_, _ = fmt.Fprintf(stdout, "%s\n", indented.Bytes())
 	return 0
+}
+
+func runStateReset(stdout, stderr io.Writer) int {
+	stateDir := paths.StateDir()
+	backupDir := filepath.Join(stateDir, "backups")
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: create backup directory: %v\n", err)
+		return 3
+	}
+	backup := filepath.Join(backupDir, "state-"+stateResetNow().Format("20060102-150405.000000000")+".db")
+	var backupOut bytes.Buffer
+	if code := stateResetBackup(backup, &backupOut, stderr); code != 0 {
+		_, _ = fmt.Fprintln(stderr, "gmuxd state reset: reset aborted; state was not deleted")
+		return 3
+	}
+
+	if err := stateResetTerminate(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: terminate local sessions: %v\nreset aborted; backup: %s\n", err, backup)
+		return 3
+	}
+	if err := stateResetStop(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: stop daemon: %v\nreset aborted; backup: %s\n", err, backup)
+		return 3
+	}
+	socketDirs := append([]string{paths.SessionSocketDir()}, paths.LegacySessionSocketDirs()...)
+	if err := stateResetRemove(stateDir, socketDirs...); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: %v\nreset aborted; backup: %s\n", err, backup)
+		return 3
+	}
+	if err := stateResetStart(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: state cleared, but daemon restart failed: %v\nbackup: %s\n", err, backup)
+		return 3
+	}
+	var checkOut bytes.Buffer
+	if code := stateResetCheck(&checkOut, stderr); code != 0 {
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: daemon restarted but state check failed\nbackup: %s\n", backup)
+		return 3
+	}
+	_, _ = fmt.Fprintf(stdout, "state reset complete\nbackup: %s\n%s", backup, checkOut.String())
+	return 0
+}
+
+// terminateLocalRunners asks every runner socket to shut down, then verifies
+// that no session lease remains held. A missing-path live runner cannot be
+// contacted safely, so reset fails closed instead of unlinking its lease.
+func terminateLocalRunners() error {
+	dirs := append([]string{paths.SessionSocketDir()}, paths.LegacySessionSocketDirs()...)
+	seen := map[string]bool{}
+	var sockets []string
+	for _, dir := range dirs {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.sock"))
+		for _, socket := range matches {
+			if !seen[socket] {
+				seen[socket] = true
+				sockets = append(sockets, socket)
+			}
+		}
+	}
+	sort.Strings(sockets)
+	var awaitingRemoval []string
+	for _, socket := range sockets {
+		client := unixipc.Client(socket)
+		client.Timeout = 2 * time.Second
+		req, _ := http.NewRequest(http.MethodPost, "http://localhost/kill", strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			// A stale pathname has no runner to preserve. Every other transport
+			// failure is unprovable and therefore aborts the destructive reset.
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+				continue
+			}
+			return fmt.Errorf("kill %s: %w", filepath.Base(socket), err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("kill %s answered HTTP %d", filepath.Base(socket), resp.StatusCode)
+		}
+		awaitingRemoval = append(awaitingRemoval, socket)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		held, err := heldSessionLeases(dirs)
+		if err != nil {
+			return err
+		}
+		var remaining []string
+		for _, socket := range awaitingRemoval {
+			if _, err := os.Lstat(socket); err == nil {
+				remaining = append(remaining, filepath.Base(socket))
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if len(held) == 0 && len(remaining) == 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			if len(held) > 0 {
+				return fmt.Errorf("session socket leases remain held: %s", strings.Join(held, ", "))
+			}
+			return fmt.Errorf("session sockets remain after kill: %s", strings.Join(remaining, ", "))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func heldSessionLeases(dirs []string) ([]string, error) {
+	var held []string
+	for _, dir := range dirs {
+		locks, _ := filepath.Glob(filepath.Join(dir, "*.sock.lock"))
+		for _, path := range locks {
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return nil, err
+			}
+			err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			if err != nil {
+				held = append(held, filepath.Base(path))
+			} else {
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			}
+			_ = f.Close()
+		}
+	}
+	sort.Strings(held)
+	return held, nil
+}
+
+func stopDaemonForReset() error {
+	_, status, reachable, absent, err := callState(http.MethodPost, "/v1/shutdown", nil, 10*time.Second)
+	if !reachable {
+		if absent {
+			return nil
+		}
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("shutdown answered HTTP %d", status)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for unixipc.Healthy(paths.SocketPath()) {
+		if !time.Now().Before(deadline) {
+			return errors.New("daemon did not stop within 10s")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
+func startDaemonAfterReset() error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(self, "start")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
 }
 
 // withOfflineStore acquires the offline ownership gate, opens the database
