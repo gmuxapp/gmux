@@ -78,6 +78,11 @@ type runDirectives struct {
 	// to the invoking program (git would commit an unedited message).
 	ForceForeground bool
 
+	// AttachControllingTerminal binds the interactive attach to /dev/tty
+	// instead of inherited stdin/stdout. Used only by `gmux edit`, whose UI
+	// must remain interactive when its caller redirects stdout.
+	AttachControllingTerminal bool
+
 	// ParentSessionID records the session this one was spawned from
 	// (e.g. `gmux edit` invoked as $EDITOR inside an existing session).
 	// Flows into session meta so the UI can relate the two.
@@ -168,8 +173,8 @@ func processGroupExists(pgid int) bool {
 
 // runSession launches a new managed session for the given command.
 //
-// When attach is true and stdin is a tty, the local terminal is wired
-// to the PTY so the command behaves transparently (the default). When
+// When attach is true and stdin and stdout are ttys, the local terminal is
+// wired to the PTY so the command behaves transparently (the default). When
 // attach is false, the session is spawned detached from the tty and
 // this call returns immediately once the session is running, leaving
 // the session visible in the gmux UI.
@@ -187,12 +192,27 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		execPassthrough(args)
 	}
 
+	attachStdin, attachStdout := os.Stdin, os.Stdout
+	var controllingTTY *os.File
+	if dir.AttachControllingTerminal {
+		var err error
+		controllingTTY, err = os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			log.Fatalf("gmux edit requires a controlling terminal: %v", err)
+		}
+		defer controllingTTY.Close()
+		if !localterm.IsTransparentFiles(controllingTTY, controllingTTY) {
+			log.Fatalf("gmux edit requires a controlling terminal")
+		}
+		attachStdin, attachStdout = controllingTTY, controllingTTY
+	}
+
 	// Nested gmux detection: if we're running interactively inside an
 	// existing gmux session, re-exec as a detached headless process instead
 	// of doing PTY passthrough (which would nest PTY-within-PTY). The
 	// detached process registers with gmuxd and the session appears in the
 	// gmux UI. The original process returns immediately to the parent shell.
-	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() && !dir.ForceForeground {
+	if os.Getenv("GMUX") == "1" && localterm.IsTransparent() && !dir.ForceForeground {
 		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)", false)
 		return
 	}
@@ -352,7 +372,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	env = append(env, adapterEnv...)
 	env = append(env, sessionEditorEnv(os.LookupEnv, os.Executable)...)
 
-	interactive := localterm.IsInteractive()
+	interactive := dir.AttachControllingTerminal || localterm.IsTransparent()
 
 	// Open the persistent scrollback sink for this runner. Best-
 	// effort: a failure to open (disk full, permission denied)
@@ -422,9 +442,14 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// Even non-interactive launches (background, piped) benefit from
 	// a real size: the PTY and virtual terminal start correctly sized
 	// instead of falling back to 80x24.
-	if cols, rows, err := localterm.TerminalSize(); err == nil {
-		ptyCfg.Cols = cols
-		ptyCfg.Rows = rows
+	var sizeErr error
+	if dir.AttachControllingTerminal {
+		ptyCfg.Cols, ptyCfg.Rows, sizeErr = localterm.TerminalSizeFiles(controllingTTY)
+	} else {
+		ptyCfg.Cols, ptyCfg.Rows, sizeErr = localterm.TerminalSize()
+	}
+	if sizeErr != nil {
+		ptyCfg.Cols, ptyCfg.Rows = 0, 0
 	}
 	// --initial-cols / --initial-rows, when the daemon passed
 	// them on /resume or /restart, override the local TTY
@@ -457,6 +482,8 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	)
 	if interactive {
 		lt, err := localterm.New(localterm.Config{
+			Stdin:  attachStdin,
+			Stdout: attachStdout,
 			PTYWriter: ptyWriterFunc(func(p []byte) (int, error) {
 				return srv.WritePTY(p)
 			}),
@@ -478,6 +505,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		// with escapes stripped and CRLF normalised; the UI and scrollback
 		// keep the full escape stream.
 		fmt.Fprintln(os.Stderr, sessionID)
+		if stdinHasPendingData(os.Stdin) {
+			fmt.Fprintf(os.Stderr, "gmux: stdin is not forwarded into the session; use 'gmux send %s'.\n", sessionID)
+		}
 		ptyCfg.LocalOut = newANSIStrippingWriter(os.Stdout)
 	}
 
@@ -651,6 +681,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// Ordering: PTY drain → exit event → <-regDone → deregister → Shutdown
 	// (pathname unlinked, lease released) → os.Exit.
 	srv.Shutdown()
+	if controllingTTY != nil {
+		_ = controllingTTY.Close()
+	}
 
 	waitForHandshakeRelease()
 	os.Exit(exitCode)

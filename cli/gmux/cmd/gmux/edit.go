@@ -46,8 +46,9 @@ func runEdit(file string) {
 		parent = os.Getenv("GMUX_SESSION_ID")
 	}
 	runSession(args, true, runDirectives{
-		ForceForeground: true,
-		ParentSessionID: parent,
+		ForceForeground:           true,
+		AttachControllingTerminal: true,
+		ParentSessionID:           parent,
 	})
 }
 

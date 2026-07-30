@@ -35,11 +35,30 @@ func IsInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
+// IsTransparent returns true when stdin and stdout are both terminals.
+func IsTransparent() bool {
+	return IsTransparentFiles(os.Stdin, os.Stdout)
+}
+
+// IsTransparentFiles reports whether input and output can host a transparent
+// terminal attachment.
+func IsTransparentFiles(stdin, stdout *os.File) bool {
+	return stdin != nil && stdout != nil && term.IsTerminal(int(stdin.Fd())) && term.IsTerminal(int(stdout.Fd()))
+}
+
 // TerminalSize returns the current terminal dimensions.
 // It tries stdin, stdout, and stderr in order, since background
 // processes may have stdin redirected to /dev/null.
 func TerminalSize() (cols, rows uint16, err error) {
-	for _, f := range []*os.File{os.Stdin, os.Stdout, os.Stderr} {
+	return TerminalSizeFiles(os.Stdin, os.Stdout, os.Stderr)
+}
+
+// TerminalSizeFiles returns dimensions from the first terminal in files.
+func TerminalSizeFiles(files ...*os.File) (cols, rows uint16, err error) {
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
 		w, h, e := term.GetSize(int(f.Fd()))
 		if e == nil {
 			return uint16(w), uint16(h), nil
@@ -51,6 +70,10 @@ func TerminalSize() (cols, rows uint16, err error) {
 
 // Config for creating a local terminal attachment.
 type Config struct {
+	// Stdin and Stdout select the attached terminal. Nil uses the process's
+	// corresponding standard stream.
+	Stdin  *os.File
+	Stdout *os.File
 	// PTYWriter receives bytes from stdin (writes to ptmx).
 	PTYWriter io.Writer
 	// ResizeFn is called when the terminal is resized.
@@ -67,8 +90,17 @@ type Config struct {
 // any PTY bytes are read, so fast-exiting commands don't race the
 // attach wiring and lose their output.
 func New(cfg Config) (*Attach, error) {
-	stdin := os.Stdin
-	stdout := os.Stdout
+	stdin := cfg.Stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	stdout := cfg.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	if !IsTransparentFiles(stdin, stdout) {
+		return nil, syscall.ENOTTY
+	}
 
 	// Enter raw mode — keystrokes pass through to child
 	oldState, err := term.MakeRaw(int(stdin.Fd()))
