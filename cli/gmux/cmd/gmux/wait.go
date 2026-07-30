@@ -142,7 +142,7 @@ func cmdWait(refs []string, timeoutSecs int, forText, forRegex string, quiet boo
 		}
 	}
 
-	stopNotice, signalObserved := observeInterruptedWait(os.Stderr, "", os.Stdout, quiet)
+	stopNotice, signalObserved := observeInterruptedWait(os.Stdout, quiet)
 	var wg sync.WaitGroup
 	wg.Add(len(sessions))
 	for i := range sessions {

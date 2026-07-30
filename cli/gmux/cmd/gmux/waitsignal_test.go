@@ -23,7 +23,7 @@ func (w blockingSignalWriter) Write(p []byte) (int, error) {
 
 func TestWaitSignalWritesStdoutAndDiesWithShellStatus(t *testing.T) {
 	if os.Getenv("GMUX_TEST_WAIT_SIGNAL") == "child" {
-		defer noticeInterruptedWait(os.Stderr, "s", os.Stdout, false)()
+		defer noticeInterruptedWait(os.Stdout, false)()
 		p, _ := os.FindProcess(os.Getpid())
 		_ = p.Signal(syscall.SIGINT)
 		time.Sleep(10 * time.Second)
@@ -53,7 +53,7 @@ func TestWaitSignalStopJoinsNoticeWriteBeforePublishing(t *testing.T) {
 	t.Cleanup(func() { dieFromSignal = oldDie })
 
 	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
-	stop, observed := observeInterruptedWait(os.Stderr, "s", writer, false)
+	stop, observed := observeInterruptedWait(writer, false)
 	p, _ := os.FindProcess(os.Getpid())
 	_ = p.Signal(syscall.SIGINT)
 	select {
@@ -97,7 +97,7 @@ func TestWaitSignalSecondSignalBypassesBlockedNotice(t *testing.T) {
 	t.Cleanup(func() { dieFromSignal, exitImmediately = oldDie, oldExit })
 
 	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
-	stop, _ := observeInterruptedWait(os.Stderr, "s", writer, false)
+	stop, _ := observeInterruptedWait(writer, false)
 	p, _ := os.FindProcess(os.Getpid())
 	_ = p.Signal(syscall.SIGINT)
 	select {
@@ -127,7 +127,7 @@ func TestWaitSignalQuietAndSecondSignalImmediate(t *testing.T) {
 	t.Cleanup(func() { dieFromSignal, exitImmediately = oldDie, oldExit })
 
 	var out bytes.Buffer
-	stop := noticeInterruptedWait(os.Stderr, "s", &out, true)
+	stop := noticeInterruptedWait(&out, true)
 	defer stop()
 	p, _ := os.FindProcess(os.Getpid())
 	_ = p.Signal(syscall.SIGINT)
