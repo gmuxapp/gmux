@@ -123,7 +123,7 @@ func TestReadPoolConcurrentReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := range iterations {
-				id := SessionID(fmt.Sprintf("rw-%d-%d", w, i))
+				id := SessionID(fmt.Sprintf("%04d%04d", w, i))
 				_, _, err := s.RegisterRunner(ctx, RunnerRegistration{
 					ID: id, Adapter: "test", Alive: true,
 					CreatedAt: UnixMillis(int64(w*1000 + i)), ObservedAt: UnixMillis(int64(w*1000 + i)),
@@ -180,7 +180,7 @@ func TestReadPoolConcurrentReadWrite(t *testing.T) {
 	}
 	for w := range writers {
 		for i := range iterations {
-			id := SessionID(fmt.Sprintf("rw-%d-%d", w, i))
+			id := SessionID(fmt.Sprintf("%04d%04d", w, i))
 			session, ok := seen[id]
 			if !ok {
 				t.Errorf("final snapshot missing session %q", id)

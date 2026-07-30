@@ -8,7 +8,7 @@ const CYAN = '\x1b[36m'
 const GRAY = '\x1b[90m'
 
 export default {
-  id: 'sess-codex-pnpm',
+  id: '1wxjv2nr',
   created_at: ago(25),
   command: ['codex'],
   cwd: '/home/user/dev/api',

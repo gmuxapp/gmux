@@ -42,7 +42,7 @@ func TestReorderSiblingScopesSerializesAndPublishesOnce(t *testing.T) {
 
 func TestReplaceCatalogCommitsRematchAndAutoAssignsLive(t *testing.T) {
 	dur := newFakeDurable(0)
-	peerInputs := []centralstore.LocalPeerMatchInput{{Subject: centralstore.LocalPeerSubject{PeerKey: "peer1", SessionID: "sess-remote"}, CWD: "/r"}}
+	peerInputs := []centralstore.LocalPeerMatchInput{{Subject: centralstore.LocalPeerSubject{PeerKey: "peer1", SessionID: "13oxass7"}, CWD: "/r"}}
 	dur.placeUnplacedResult = func(ids []centralstore.SessionID, at centralstore.UnixMillis) (centralstore.MutationResult, error) {
 		return centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
 	}
@@ -53,8 +53,8 @@ func TestReplaceCatalogCommitsRematchAndAutoAssignsLive(t *testing.T) {
 
 	// Two live sessions in the registry; the auto-assign pass must offer
 	// exactly these (the store skips placed/dismissed/non-matching itself).
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-a", Generation: 1}, dead: make(chan struct{})})
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-b", Generation: 2}, dead: make(chan struct{})})
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "1mw5c5n9", Generation: 1}, dead: make(chan struct{})})
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "18wnzse2", Generation: 2}, dead: make(chan struct{})})
 
 	if _, err := coord.ReplaceCatalog(context.Background(), nil); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestReplaceCatalogCommitsRematchAndAutoAssignsLive(t *testing.T) {
 	if len(dur.replaceCatalogCalls) != 1 || !reflect.DeepEqual(dur.replaceCatalogCalls[0], peerInputs) {
 		t.Fatalf("replace calls=%v", dur.replaceCatalogCalls)
 	}
-	if len(dur.placeUnplacedCalls) != 1 || !reflect.DeepEqual(dur.placeUnplacedCalls[0], []centralstore.SessionID{"sess-a", "sess-b"}) {
+	if len(dur.placeUnplacedCalls) != 1 || !reflect.DeepEqual(dur.placeUnplacedCalls[0], []centralstore.SessionID{"18wnzse2", "1mw5c5n9"}) {
 		t.Fatalf("auto-assign candidates=%v", dur.placeUnplacedCalls)
 	}
 	// One combined invalidation for the whole operation.
@@ -112,7 +112,7 @@ func TestReplaceCatalogAutoAssignFailureStillPublishesReplace(t *testing.T) {
 	}
 	sink := &fakeDirtySink{}
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, sink, nil)
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-a", Generation: 1}, dead: make(chan struct{})})
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "1mw5c5n9", Generation: 1}, dead: make(chan struct{})})
 
 	catalog, err := coord.ReplaceCatalog(context.Background(), nil)
 	if !errors.Is(err, boom) {

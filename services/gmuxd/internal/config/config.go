@@ -37,7 +37,7 @@ type Config struct {
 // peerstore construct it directly.
 type PeerConfig struct {
 	// Name is a URL-safe slug used as the namespace prefix for session IDs
-	// (e.g. sessions become "sess-abc@name") and in URL routing (/@name/).
+	// (e.g. sessions become "1j6y9mx6@name") and in URL routing (/@name/).
 	Name string
 
 	// URL is the base HTTP URL of the remote gmuxd (e.g. "http://172.17.0.2:8790").

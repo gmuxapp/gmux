@@ -8,7 +8,7 @@ const GRAY = '\x1b[90m'
 const GREEN = '\x1b[32m'
 
 export default {
-  id: 'sess-pi-bench',
+  id: '1mp3mkju',
   created_at: ago(20),
   command: ['pi'],
   cwd: '/home/user/dev/api/bench',

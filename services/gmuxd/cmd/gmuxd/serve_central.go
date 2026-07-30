@@ -569,6 +569,26 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"slug": info.Slug, "adapter": info.Adapter, "title": info.Title, "cwd": info.Cwd, "resume_command": info.ResumeCommand, "created": info.Created}})
 		})
+		// Read-only, non-reserving preflight for client-minted IDs. Absence is
+		// advisory; POST /v1/register repeats the check under the coordinator's
+		// lifecycle fence to close the race.
+		mux.HandleFunc("GET /v1/session-ids/{id}", func(w http.ResponseWriter, r *http.Request) {
+			id := r.PathValue("id")
+			if !paths.IsValidSessionID(id) {
+				writeError(w, http.StatusBadRequest, "invalid_session_id", "invalid session id")
+				return
+			}
+			_, exists, err := boot.Store.Session(r.Context(), centralstore.SessionID(id))
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", err.Error())
+				return
+			}
+			if exists {
+				writeError(w, http.StatusConflict, "session_id_exists", "session id already exists")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
 		mux.HandleFunc("POST /v1/register", func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 			if err != nil {
@@ -588,6 +608,10 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				return
 			}
 			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath, AssertedID: centralstore.SessionID(req.SessionID)}); err != nil {
+				if errors.Is(err, sessioncoord.ErrSessionIDExists) {
+					writeError(w, http.StatusConflict, "session_id_exists", err.Error())
+					return
+				}
 				if errors.Is(err, sessioncoord.ErrInvalidSessionID) || errors.Is(err, sessioncoord.ErrAssertedIdentityMismatch) {
 					writeError(w, http.StatusBadRequest, "invalid_session_id", err.Error())
 					return

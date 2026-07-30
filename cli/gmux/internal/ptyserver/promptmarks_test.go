@@ -48,7 +48,7 @@ func collectStatusEvents(t *testing.T, ch chan session.Event, want int, deadline
 // pulse is what the daemon's send --wait keys on.
 func TestShellPromptMarksDriveStatus(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	st := session.New(session.Config{ID: "sess-promptmarks", Adapter: "shell"})
+	st := session.New(session.Config{ID: "1ckgob6e", Adapter: "shell"})
 
 	// Subscribe before launch so no transition can be missed.
 	ch := st.Subscribe()
@@ -98,7 +98,7 @@ func (hookedAdapter) ExtendCommand(args []string, _ string) []string {
 // must not fight it.
 func TestPromptMarksIgnoredForHookDrivenAdapters(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	st := session.New(session.Config{ID: "sess-nomarks", Adapter: "hooked"})
+	st := session.New(session.Config{ID: "1tonmmo3", Adapter: "hooked"})
 
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", `printf '\e]133;C\a\e]133;A\a'`},
@@ -132,7 +132,7 @@ func TestPromptMarksIgnoredForHookDrivenAdapters(t *testing.T) {
 // initial prompt — also an idle transition — does not.
 func TestPromptCycleSetsUnreadOnCommandCompletion(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	st := session.New(session.Config{ID: "sess-unread", Adapter: "shell"})
+	st := session.New(session.Config{ID: "11yfwihf", Adapter: "shell"})
 
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
@@ -178,7 +178,7 @@ func TestPromptCycleSetsUnreadOnCommandCompletion(t *testing.T) {
 // resolves waits on one-shot commands as "idle").
 func TestLifetimeTurnStaysOpenWithoutMarks(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	st := session.New(session.Config{ID: "sess-lifetime", Adapter: "shell"})
+	st := session.New(session.Config{ID: "10v2d7gc", Adapter: "shell"})
 
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", `echo plain output, no marks`},

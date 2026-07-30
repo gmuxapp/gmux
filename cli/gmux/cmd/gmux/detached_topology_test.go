@@ -235,7 +235,7 @@ func TestAwaitDetachedHandshakeProtocolValidation(t *testing.T) {
 		r, w, _ := os.Pipe()
 		defer r.Close()
 		go func() {
-			// Not a valid sess-<alphanumeric> id
+			// Not a valid 8-character base36 ID
 			_, _ = fmt.Fprintf(w, "TARGET %d\nnot!a!valid!sess!id\n", cmd.Process.Pid)
 			_ = w.Close()
 		}()

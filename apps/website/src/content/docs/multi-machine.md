@@ -72,9 +72,9 @@ Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https
 Remote sessions carry their origin in the session ID using `@` separators:
 
 ```
-sess-abc123               # local
-sess-abc123@desktop       # from spoke "desktop"
-sess-abc123@dev@server    # from "dev", a devcontainer attached to spoke "server"
+16y0lfv7               # local
+16y0lfv7@desktop       # from spoke "desktop"
+16y0lfv7@dev@server    # from "dev", a devcontainer attached to spoke "server"
 ```
 
 The UI parses these to attribute each session to its host (the `@host` suffix and devcontainer marker). Actions are routed by splitting on the last `@` and forwarding one hop; only devcontainer (local-peer) sessions forward through their parent host — sessions of one network peer are never relayed through another.

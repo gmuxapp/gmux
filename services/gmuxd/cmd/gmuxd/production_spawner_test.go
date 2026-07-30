@@ -72,11 +72,11 @@ func TestProductionSpawnerLaunchPolicyAndCleanup(t *testing.T) {
 			return runnerLaunchResult{PID: 77, Endpoint: "fake.sock", Terminate: func(context.Context) error { terminated = true; return nil }}, nil
 		},
 	}
-	ep, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-spawn", Adapter: "pi", ConversationRef: "conv-ref", CWD: "/gone", Command: []string{"old"}, TerminalCols: &cols, TerminalRows: &rows})
+	ep, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "1li6tis6", Adapter: "pi", ConversationRef: "conv-ref", CWD: "/gone", Command: []string{"old"}, TerminalCols: &cols, TerminalRows: &rows})
 	if err != nil || ep != "fake.sock" {
 		t.Fatalf("endpoint=%q err=%v", ep, err)
 	}
-	if got.ResumeID != "sess-spawn" || got.CWD != "/fallback" || got.InitialCols != cols || got.Rows != rows || !reflect.DeepEqual(got.Command, []string{"pi", "--resume", "conv-ref"}) {
+	if got.ResumeID != "1li6tis6" || got.CWD != "/fallback" || got.InitialCols != cols || got.Rows != rows || !reflect.DeepEqual(got.Command, []string{"pi", "--resume", "conv-ref"}) {
 		t.Fatalf("launch request=%+v", got)
 	}
 	spawner.FinalizeSpawn(ep)
@@ -88,7 +88,7 @@ func TestProductionSpawnerLaunchPolicyAndCleanup(t *testing.T) {
 		t.Fatalf("cleanup after finalize err=%v terminated=%v", err, terminated)
 	}
 	// Launch again to pin failed-registration cleanup termination.
-	ep, err = spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-spawn", Adapter: "pi", ConversationRef: "conv-ref", CWD: "/gone", TerminalCols: &cols, TerminalRows: &rows})
+	ep, err = spawner.Spawn(context.Background(), centralstore.Session{ID: "1li6tis6", Adapter: "pi", ConversationRef: "conv-ref", CWD: "/gone", TerminalCols: &cols, TerminalRows: &rows})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestProductionSpawnerLaunchPolicyAndCleanup(t *testing.T) {
 
 func TestProductionSpawnerExecTransfersPreparedLease(t *testing.T) {
 	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
-	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-exec.sock")
+	endpoint := filepath.Join(paths.SessionSocketDir(), "12iswpkq.sock")
 	dir := t.TempDir()
 	script := filepath.Join(dir, "lease-runner")
 	body := fmt.Sprintf(`#!/usr/bin/python3
@@ -123,7 +123,7 @@ time.sleep(30)
 		ResolveCommand: func(centralstore.Session) []string { return []string{"x"} },
 		ReadyTimeout:   2 * time.Second,
 	}
-	ep, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-exec"})
+	ep, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "12iswpkq"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ time.sleep(30)
 
 func TestProductionSpawnerLiveSocketAbortsBeforeLaunch(t *testing.T) {
 	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
-	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-live.sock")
+	endpoint := filepath.Join(paths.SessionSocketDir(), "184lbyqm.sock")
 	listener, err := net.Listen("unix", endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestProductionSpawnerLiveSocketAbortsBeforeLaunch(t *testing.T) {
 			return runnerLaunchResult{}, nil
 		},
 	}
-	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-live"}); !errors.Is(err, socklease.ErrSocketLive) {
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "184lbyqm"}); !errors.Is(err, socklease.ErrSocketLive) {
 		t.Fatalf("Spawn error=%v, want live-socket refusal", err)
 	}
 	if launched {
@@ -174,7 +174,7 @@ func TestProductionSpawnerLiveSocketAbortsBeforeLaunch(t *testing.T) {
 
 func TestProductionSpawnerIdentityChangeAbortsBeforeLaunch(t *testing.T) {
 	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
-	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-rebound.sock")
+	endpoint := filepath.Join(paths.SessionSocketDir(), "13kcxk20.sock")
 	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestProductionSpawnerIdentityChangeAbortsBeforeLaunch(t *testing.T) {
 			replacement.Close()
 		}
 	}()
-	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-rebound"}); !errors.Is(err, socklease.ErrIdentityChanged) {
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "13kcxk20"}); !errors.Is(err, socklease.ErrIdentityChanged) {
 		t.Fatalf("Spawn error=%v, want identity change", err)
 	}
 	if launched {
@@ -231,10 +231,10 @@ func TestProductionSpawnerLaunchFailureDropsPreparedHistory(t *testing.T) {
 		}
 		return runnerLaunchResult{}, errors.New("fork failed")
 	}}
-	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-no-launch"}); err == nil {
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "1c16hjsq"}); err == nil {
 		t.Fatal("launch failure swallowed")
 	}
-	lock := filepath.Join(paths.SessionSocketDir(), "sess-no-launch.sock") + socklease.Suffix
+	lock := filepath.Join(paths.SessionSocketDir(), "1c16hjsq.sock") + socklease.Suffix
 	if _, err := os.Stat(lock); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed launch retained fabricated history: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestProductionSpawnerLaunchFailureDropsPreparedHistory(t *testing.T) {
 
 func TestProductionSpawnerLaunchFailurePreservesExistingHistory(t *testing.T) {
 	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
-	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-existing.sock")
+	endpoint := filepath.Join(paths.SessionSocketDir(), "1rl73yvr.sock")
 	seed, err := socklease.Acquire(endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestProductionSpawnerLaunchFailurePreservesExistingHistory(t *testing.T) {
 			return runnerLaunchResult{}, errors.New("fork failed")
 		},
 	}
-	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-existing"}); err == nil {
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "1rl73yvr"}); err == nil {
 		t.Fatal("launch failure swallowed")
 	}
 	after, err := os.Stat(endpoint + socklease.Suffix)
@@ -283,7 +283,7 @@ func TestProductionSpawnerLaunchFailureLeavesNoCleanupHandle(t *testing.T) {
 	spawner := &productionRunnerSpawner{ResolveDir: func(centralstore.Session) (string, error) { return "/tmp", nil }, ResolveCommand: func(centralstore.Session) []string { return []string{"x"} }, Launch: func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error) {
 		return runnerLaunchResult{}, errors.New("fork failed")
 	}}
-	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-fail"}); err == nil {
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "1yg94xqm"}); err == nil {
 		t.Fatal("launch failure swallowed")
 	}
 	if err := spawner.CleanupSpawn(context.Background(), "anything"); err != nil {

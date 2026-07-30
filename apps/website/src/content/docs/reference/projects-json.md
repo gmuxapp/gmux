@@ -25,7 +25,7 @@ Projects control which sessions appear in the sidebar and how they’re grouped.
         { "remote": "github.com/gmuxapp/gmux" },
         { "path": "~/dev/gmux" }
       ],
-      "sessions": ["fix-auth", "sess-a1b2c3d4"]
+      "sessions": ["fix-auth", "10vjvid0"]
     },
     {
       "slug": "ml-data",

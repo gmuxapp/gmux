@@ -11,7 +11,7 @@ import (
 )
 
 func TestExplicitResumeIDNeverFallsBackToPhantomSession(t *testing.T) {
-	if mayRetrySessionID("sess-retained", ptyserver.ErrSocketInUse) {
+	if mayRetrySessionID("1juyvpd8", ptyserver.ErrSocketInUse) {
 		t.Fatal("explicit resume collision would mint an unrelated session id")
 	}
 	if !mayRetrySessionID("", ptyserver.ErrSocketInUse) {
@@ -48,7 +48,7 @@ func collectEvents(t *testing.T, ch chan session.Event, n int) []session.Event {
 // exit first would resolve waits as "died" and persist a stale
 // mid-turn Active=true.
 func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
-	st := session.New(session.Config{ID: "sess-finalize", Adapter: "shell"})
+	st := session.New(session.Config{ID: "1uo92yti", Adapter: "shell"})
 	st.SetStatus(&adapter.Status{Active: true}) // launch state, pre-subscription
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
@@ -80,7 +80,7 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 // killed mid-command stays Active=true and resolves as "died"; one
 // that exited at its prompt already reads idle.
 func TestFinalizeSessionStateLeavesUpgradedTurnAlone(t *testing.T) {
-	st := session.New(session.Config{ID: "sess-upgraded", Adapter: "shell"})
+	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell"})
 	st.SetStatus(&adapter.Status{Active: true}) // mid-command
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)

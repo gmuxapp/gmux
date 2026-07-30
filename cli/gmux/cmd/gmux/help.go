@@ -91,8 +91,8 @@ var verbHelpPages = map[string]string{
   --json/-j  emit a JSON array instead of the table, for scripts and
              agents; includes the exit_code of dead sessions
 
-IDs in the first column are the 8-character short form every other command
-accepts (also: a unique id prefix, the full id, or the session's slug).
+IDs in the first column are the full 8-character form every other command
+accepts (also: a unique ID prefix or the session's slug).
 `,
 
 	"attach": `gmux attach: reattach your terminal to a session

@@ -12,15 +12,15 @@ import (
 
 func TestNewState(t *testing.T) {
 	s := New(Config{
-		ID:         "sess-test",
+		ID:         "1c54cqk8",
 		Command:    []string{"echo", "hello"},
 		Cwd:        "/tmp",
 		Adapter:    "generic",
-		SocketPath: "/tmp/gmux-sessions/sess-test.sock",
+		SocketPath: "/tmp/gmux-sessions/1c54cqk8.sock",
 	})
 
-	if s.ID != "sess-test" {
-		t.Fatalf("expected 'sess-test', got %q", s.ID)
+	if s.ID != "1c54cqk8" {
+		t.Fatalf("expected '1c54cqk8', got %q", s.ID)
 	}
 	if s.Alive {
 		t.Fatal("new state should not be alive")
@@ -169,7 +169,7 @@ func TestCloseTurnRequiresReportedOpenTurn(t *testing.T) {
 
 func TestJSONIncludesComputedTitle(t *testing.T) {
 	s := New(Config{
-		ID:      "sess-json",
+		ID:      "19cq55c5",
 		Command: []string{"pi"},
 		Cwd:     "/home/user",
 		Adapter: "pi",
@@ -252,7 +252,7 @@ func TestEmitActivityThrottles(t *testing.T) {
 // would never reach the daemon. BindSlug therefore always emits, even when the
 // value is unchanged, so the daemon converges.
 func TestBindSlugAlwaysEmits(t *testing.T) {
-	s := New(Config{ID: "sess-x", Adapter: "pi", SocketPath: "/tmp/x.sock"})
+	s := New(Config{ID: "1108gm0e", Adapter: "pi", SocketPath: "/tmp/x.sock"})
 	ch := s.Subscribe()
 	defer s.Unsubscribe(ch)
 

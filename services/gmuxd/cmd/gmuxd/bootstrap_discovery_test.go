@@ -287,7 +287,7 @@ func TestReapStaleSocketDeclines(t *testing.T) {
 
 	t.Run("socket is live", func(t *testing.T) {
 		dir := socketDir(t)
-		r := startLiveRunner(t, dir, "a.sock", "sess-live", false)
+		r := startLiveRunner(t, dir, "a.sock", "184lbyqm", false)
 		// A live socket with a free lock file: the lease says nothing, only
 		// the probe does.
 		if err := os.WriteFile(socklease.LockPath(r.ep), nil, 0o600); err != nil {
@@ -352,7 +352,7 @@ func TestReapStaleSocketRemovesAbandonedSocketAndLockFile(t *testing.T) {
 func TestScanReapsStaleSocket(t *testing.T) {
 	h := newDiscoveryHarness(t)
 	h.converge(t) // nothing to converge yet: closes the barrier
-	ep := crashedRunnerSocket(t, h.dir, "sess-stale.sock")
+	ep := crashedRunnerSocket(t, h.dir, "1lu55wqv.sock")
 
 	h.scan(t)
 
@@ -378,7 +378,7 @@ func TestScanReapsStaleSocket(t *testing.T) {
 // be able to mask it.
 func TestConvergeReapsStaleSocket(t *testing.T) {
 	h := newDiscoveryHarness(t)
-	ep := crashedRunnerSocket(t, h.dir, "sess-stale.sock")
+	ep := crashedRunnerSocket(t, h.dir, "1lu55wqv.sock")
 
 	h.converge(t)
 
@@ -397,7 +397,7 @@ func TestConvergeReapsStaleSocket(t *testing.T) {
 func TestScanReportsUnreapableStaleSocketOnceOnly(t *testing.T) {
 	h := newDiscoveryHarness(t)
 	h.converge(t)
-	ep := crashedRunnerSocket(t, h.dir, "sess-legacy.sock")
+	ep := crashedRunnerSocket(t, h.dir, "1u6d750s.sock")
 	if err := os.Remove(socklease.LockPath(ep)); err != nil {
 		t.Fatal(err) // a pre-lease runner's leftovers
 	}
@@ -426,7 +426,7 @@ func TestScanReportsUnreapableStaleSocketOnceOnly(t *testing.T) {
 // makes the collision observable rather than silently ignored.
 func TestScanProbesReboundPathnameAndReportsCollision(t *testing.T) {
 	h := newDiscoveryHarness(t)
-	first := startLiveRunner(t, h.dir, "sess-rebind.sock", "sess-rebind", true)
+	first := startLiveRunner(t, h.dir, "1dvrwrho.sock", "1dvrwrho", true)
 	h.converge(t)
 
 	installed := h.boot.Registry.Snapshot()
@@ -448,7 +448,7 @@ func TestScanProbesReboundPathnameAndReportsCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(parked) })
-	second := startLiveRunner(t, h.dir, "sess-rebind.sock", "sess-rebind", false)
+	second := startLiveRunner(t, h.dir, "1dvrwrho.sock", "1dvrwrho", false)
 	after, ok := socklease.StatSocket(second.ep)
 	if !ok {
 		t.Fatal("the replacement is not a socket")
@@ -472,10 +472,10 @@ func TestScanProbesReboundPathnameAndReportsCollision(t *testing.T) {
 // must never be silenced by the same-socket shortcut.
 func TestScanReportsDistinctEndpointCollision(t *testing.T) {
 	h := newDiscoveryHarness(t)
-	startLiveRunner(t, h.dir, "sess-a.sock", "sess-collide", true)
+	startLiveRunner(t, h.dir, "1mw5c5n9.sock", "15w5nia8", true)
 	h.converge(t)
 
-	startLiveRunner(t, h.dir, "sess-b.sock", "sess-collide", true)
+	startLiveRunner(t, h.dir, "18wnzse2.sock", "15w5nia8", true)
 
 	h.scan(t)
 	if got := h.errs.countContaining("already installed"); got != 1 {
@@ -504,7 +504,7 @@ func TestScanKeepsProbingUnidentifiableEndpointsButReportsOnce(t *testing.T) {
 
 	const ep = "synthetic-endpoint" // not a filesystem socket: unidentifiable
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{
-		ID: "sess-synthetic", Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1,
+		ID: "1o949uu4", Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1,
 	}}
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{ep: meta}, blocked: map[string]bool{}}
 	errs := &recorder{}
@@ -594,7 +594,7 @@ func TestDiagnosticsReportRecoveryAndReoccurrence(t *testing.T) {
 	h.converge(t)
 
 	// Incident 1: a socket that refuses and cannot be reaped.
-	ep := crashedRunnerSocket(t, h.dir, "sess-flaky.sock")
+	ep := crashedRunnerSocket(t, h.dir, "1rw58zj1.sock")
 	if err := os.Remove(socklease.LockPath(ep)); err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestDiagnosticsReportRecoveryAndReoccurrence(t *testing.T) {
 	if err := os.Remove(ep); err != nil {
 		t.Fatal(err)
 	}
-	runner := startLiveRunner(t, h.dir, "sess-flaky.sock", "sess-flaky", true)
+	runner := startLiveRunner(t, h.dir, "1rw58zj1.sock", "1rw58zj1", true)
 	h.scan(t)
 	if got := h.notices.countContaining("recovered"); got != 1 {
 		t.Fatalf("recovery notices = %d, want 1: %v", got, h.notices.all())
@@ -635,7 +635,7 @@ func TestDiagnosticStateDoesNotAccumulateForVanishedEndpoints(t *testing.T) {
 	h.converge(t)
 
 	for i := range 20 {
-		ep := crashedRunnerSocket(t, h.dir, fmt.Sprintf("sess-gone-%02d.sock", i))
+		ep := crashedRunnerSocket(t, h.dir, fmt.Sprintf("%08d.sock", i))
 		if err := os.Remove(socklease.LockPath(ep)); err != nil {
 			t.Fatal(err) // unreapable, so each one is diagnosed...
 		}
@@ -723,7 +723,7 @@ func rebindToADistinctInode(t *testing.T, ep string, original socklease.Ident) s
 // nothing about whatever is there now.
 func TestReaperKeepsLeaseHistoryWhenItLearnsNothing(t *testing.T) {
 	dir := socketDir(t)
-	ep := crashedRunnerSocket(t, dir, "sess-ambiguous.sock")
+	ep := crashedRunnerSocket(t, dir, "1t3di8ht.sock")
 	original, ok := socklease.StatSocket(ep)
 	if !ok {
 		t.Fatalf("%s is not a socket", ep)
@@ -769,12 +769,12 @@ func TestReaperKeepsLeaseHistoryWhenItLearnsNothing(t *testing.T) {
 func TestReaperErasesLeaseHistoryWhenItLearnsTheOccupantIsUnleased(t *testing.T) {
 	dir := socketDir(t)
 	// A crashed lease-aware runner's leftovers...
-	ep := crashedRunnerSocket(t, dir, "sess-taken-over.sock")
+	ep := crashedRunnerSocket(t, dir, "1ggoslwu.sock")
 	// ...whose pathname an unleased runner has since taken over.
 	if err := os.Remove(ep); err != nil {
 		t.Fatal(err)
 	}
-	r := startLiveRunner(t, dir, "sess-taken-over.sock", "sess-taken-over", false)
+	r := startLiveRunner(t, dir, "1ggoslwu.sock", "1ggoslwu", false)
 
 	outcome := reapStaleSocket(r.ep)
 	if outcome.Reaped {
@@ -793,7 +793,7 @@ func TestReaperErasesLeaseHistoryWhenItLearnsTheOccupantIsUnleased(t *testing.T)
 // accumulating.
 func TestReaperCleansUpALockFileWhoseSocketVanished(t *testing.T) {
 	dir := socketDir(t)
-	ep := crashedRunnerSocket(t, dir, "sess-vanished.sock")
+	ep := crashedRunnerSocket(t, dir, "16h3i8rt.sock")
 	if err := os.Remove(ep); err != nil {
 		t.Fatal(err)
 	}
@@ -824,7 +824,7 @@ func TestReaperKeepsLeaseHistoryWhenTheProbeIsAmbiguous(t *testing.T) {
 		t.Skip("running as root: no mode denies a connect")
 	}
 	dir := socketDir(t)
-	ep := crashedRunnerSocket(t, dir, "sess-wedged.sock")
+	ep := crashedRunnerSocket(t, dir, "14n6dtux.sock")
 	// Deny the connect: the probe now fails without learning anything, exactly
 	// as it would against a wedged owner.
 	if err := os.Chmod(ep, 0o000); err != nil {
@@ -880,7 +880,7 @@ func TestReaperKeepsLeaseHistoryWhenTheProbeIsAmbiguous(t *testing.T) {
 // test unlinks a live runner).
 func TestReaperDoesNotUnlinkATakeoverRightAfterItsProbe(t *testing.T) {
 	dir := socketDir(t)
-	ep := crashedRunnerSocket(t, dir, "sess-taken-after-probe.sock")
+	ep := crashedRunnerSocket(t, dir, "1g5qke2p.sock")
 
 	// An unleased runner takes the pathname the instant the probe has answered.
 	var replacement *net.UnixListener

@@ -34,8 +34,8 @@ func TestConvergenceSweepsOnlyPreviouslyAliveUnclaimedRows(t *testing.T) {
 	durable := newFakeDurable(0)
 	durable.listSessions = func() ([]centralstore.Session, error) {
 		return []centralstore.Session{
-			exitedNilSession("sess-alive-unknown", 3),
-			exitedSession("sess-already-dead", 7),
+			exitedNilSession("1izwq4o0", 3),
+			exitedSession("1fpaqea0", 7),
 		}, nil
 	}
 	dirty := &fakeDirtySink{}
@@ -58,7 +58,7 @@ func TestConvergenceSweepsOnlyPreviouslyAliveUnclaimedRows(t *testing.T) {
 		t.Fatalf("swept calls=%d, want one durable sweep", len(durable.swept))
 	}
 	got := durable.swept[0]
-	if len(got) != 1 || got[0] != "sess-alive-unknown" {
+	if len(got) != 1 || got[0] != "1izwq4o0" {
 		t.Fatalf("sweep candidates=%#v", got)
 	}
 	if !isClosed(c.Converged()) {
@@ -80,7 +80,7 @@ func TestConvergenceExcludesRunnersThatReRegisteredDuringWindow(t *testing.T) {
 		return exitedNilSession(id, 1), centralstore.MutationResult{SessionVersion: 1}, nil
 	}
 	durable.listSessions = func() ([]centralstore.Session, error) {
-		return []centralstore.Session{exitedNilSession(id, 1), exitedNilSession("sess-gone", 2)}, nil
+		return []centralstore.Session{exitedNilSession(id, 1), exitedNilSession("1ve25bnc", 2)}, nil
 	}
 	client := newFakeClient(RunnerMeta{Registration: centralstore.RunnerRegistration{ID: id, Adapter: "shell", Alive: true}})
 	c := New(nil, client, durable, nil, nil)
@@ -95,7 +95,7 @@ func TestConvergenceExcludesRunnersThatReRegisteredDuringWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := durable.swept[0]
-	if len(got) != 1 || got[0] != "sess-gone" {
+	if len(got) != 1 || got[0] != "1ve25bnc" {
 		t.Fatalf("sweep candidates=%#v, want only the unclaimed row", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestConvergenceSweepFailureKeepsWindowOpenForRetry(t *testing.T) {
 	ctx := context.Background()
 	durable := newFakeDurable(0)
 	durable.listSessions = func() ([]centralstore.Session, error) {
-		return []centralstore.Session{exitedNilSession("sess-x", 4)}, nil
+		return []centralstore.Session{exitedNilSession("1108gm0e", 4)}, nil
 	}
 	boom := errors.New("sweep failed")
 	durable.sweepResult = func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
@@ -197,7 +197,7 @@ func TestConvergenceSweepFailureKeepsWindowOpenForRetry(t *testing.T) {
 	if !isClosed(c.Converged()) {
 		t.Fatal("retry must complete the barrier")
 	}
-	if len(durable.swept) != 2 || len(durable.swept[1]) != 1 || durable.swept[1][0] != "sess-x" {
+	if len(durable.swept) != 2 || len(durable.swept[1]) != 1 || durable.swept[1][0] != "1108gm0e" {
 		t.Fatalf("retry sweep candidates=%#v", durable.swept)
 	}
 }

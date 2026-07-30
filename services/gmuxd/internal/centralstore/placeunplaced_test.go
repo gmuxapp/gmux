@@ -26,17 +26,17 @@ func TestPlaceUnplacedSessionsPlacesMatchingAndSkipsRest(t *testing.T) {
 	project := cat[0].ID
 
 	// Matching unplaced, non-matching, already-placed, dismissed.
-	addSessionCwd(t, s, "sess-match", "", "/a/x", 1)
-	addSessionCwd(t, s, "sess-nomatch", "", "/b/x", 2)
-	addSessionCwd(t, s, "sess-placed", "", "/a/y", 3)
-	placeLocal(t, s, "sess-placed", project)
-	addSessionCwd(t, s, "sess-dismissed", "", "/a/z", 4)
-	if _, _, err := s.DismissSessionTree(ctx, "sess-dismissed", 5); err != nil {
+	addSessionCwd(t, s, "16ojhy50", "", "/a/x", 1)
+	addSessionCwd(t, s, "1uz7l5ot", "", "/b/x", 2)
+	addSessionCwd(t, s, "1pknzlg8", "", "/a/y", 3)
+	placeLocal(t, s, "1pknzlg8", project)
+	addSessionCwd(t, s, "1j0ydg3f", "", "/a/z", 4)
+	if _, _, err := s.DismissSessionTree(ctx, "1j0ydg3f", 5); err != nil {
 		t.Fatal(err)
 	}
 
-	placedBefore := localPlacementOf(t, s, "sess-placed")
-	result, err := s.PlaceUnplacedSessions(ctx, []SessionID{"sess-match", "sess-nomatch", "sess-placed", "sess-dismissed", "sess-gone"}, 6)
+	placedBefore := localPlacementOf(t, s, "1pknzlg8")
+	result, err := s.PlaceUnplacedSessions(ctx, []SessionID{"16ojhy50", "1uz7l5ot", "1pknzlg8", "1j0ydg3f", "1ve25bnc"}, 6)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,23 +44,23 @@ func TestPlaceUnplacedSessionsPlacesMatchingAndSkipsRest(t *testing.T) {
 		t.Fatalf("result=%+v, want changed+both dirty", result)
 	}
 
-	if rec := localPlacementOf(t, s, "sess-match"); rec == nil || rec.project != int64(project) {
-		t.Fatalf("sess-match not placed: %+v", rec)
+	if rec := localPlacementOf(t, s, "16ojhy50"); rec == nil || rec.project != int64(project) {
+		t.Fatalf("16ojhy50 not placed: %+v", rec)
 	}
-	if rec := localPlacementOf(t, s, "sess-nomatch"); rec != nil {
+	if rec := localPlacementOf(t, s, "1uz7l5ot"); rec != nil {
 		t.Fatal("non-matching session must stay unplaced")
 	}
-	if rec := localPlacementOf(t, s, "sess-dismissed"); rec != nil {
+	if rec := localPlacementOf(t, s, "1j0ydg3f"); rec != nil {
 		t.Fatal("dismissed session must stay unplaced")
 	}
-	placedAfter := localPlacementOf(t, s, "sess-placed")
+	placedAfter := localPlacementOf(t, s, "1pknzlg8")
 	if placedAfter == nil || placedAfter.project != placedBefore.project {
 		t.Fatal("already-placed session must keep its placement")
 	}
 	// Registration-placement semantics: the newcomer appends at the bottom
 	// of its root scope, after the pre-existing placement.
-	if !(placedAfter.pos < localPlacementOf(t, s, "sess-match").pos) {
-		t.Fatalf("expected append at bottom: placed=%d match=%d", placedAfter.pos, localPlacementOf(t, s, "sess-match").pos)
+	if !(placedAfter.pos < localPlacementOf(t, s, "16ojhy50").pos) {
+		t.Fatalf("expected append at bottom: placed=%d match=%d", placedAfter.pos, localPlacementOf(t, s, "16ojhy50").pos)
 	}
 }
 
@@ -70,9 +70,9 @@ func TestPlaceUnplacedSessionsNoOpWhenNothingMatches(t *testing.T) {
 	if _, _, err := s.ReplaceProjectCatalog(ctx, []ProjectEntrySpec{owned("a", "/a")}, 0); err != nil {
 		t.Fatal(err)
 	}
-	addSessionCwd(t, s, "sess-nomatch", "", "/b/x", 1)
+	addSessionCwd(t, s, "1uz7l5ot", "", "/b/x", 1)
 
-	result, err := s.PlaceUnplacedSessions(ctx, []SessionID{"sess-nomatch"}, 2)
+	result, err := s.PlaceUnplacedSessions(ctx, []SessionID{"1uz7l5ot"}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,22 +93,22 @@ func TestPlaceUnplacedSessionsChildJoinsParentScope(t *testing.T) {
 	}
 	project := cat[0].ID
 
-	addSessionCwd(t, s, "sess-parent", "", "/a/x", 1)
-	placeLocal(t, s, "sess-parent", project)
-	addSessionCwd(t, s, "sess-child", "sess-parent", "/a/x", 2)
+	addSessionCwd(t, s, "1rz9lyqa", "", "/a/x", 1)
+	placeLocal(t, s, "1rz9lyqa", project)
+	addSessionCwd(t, s, "10yeqnxg", "1rz9lyqa", "/a/x", 2)
 
-	if _, err := s.PlaceUnplacedSessions(ctx, []SessionID{"sess-child"}, 3); err != nil {
+	if _, err := s.PlaceUnplacedSessions(ctx, []SessionID{"10yeqnxg"}, 3); err != nil {
 		t.Fatal(err)
 	}
-	rec := localPlacementOf(t, s, "sess-child")
-	if rec == nil || rec.project != int64(project) || rec.parent != "sess-parent" {
+	rec := localPlacementOf(t, s, "10yeqnxg")
+	if rec == nil || rec.project != int64(project) || rec.parent != "1rz9lyqa" {
 		t.Fatalf("child placement: %+v", rec)
 	}
 }
 
 func TestPlaceUnplacedSessionsRejectsNegativeTimestamp(t *testing.T) {
 	s := placeUnplacedStore(t)
-	if _, err := s.PlaceUnplacedSessions(context.Background(), []SessionID{"sess-x"}, -1); err == nil {
+	if _, err := s.PlaceUnplacedSessions(context.Background(), []SessionID{"1108gm0e"}, -1); err == nil {
 		t.Fatal("expected error for negative timestamp")
 	}
 }

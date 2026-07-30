@@ -74,7 +74,7 @@ func TestSubscribeReplacesExistingForSameID(t *testing.T) {
 	}))
 	t.Cleanup(r2.cleanup)
 
-	const id = "sess-restart-race"
+	const id = "1gmcpop8"
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true, SocketPath: r1.socketPath})
 
@@ -152,7 +152,7 @@ func TestSubscribeOldDeferDoesNotEvictNewEntry(t *testing.T) {
 	}))
 	t.Cleanup(second.cleanup)
 
-	const id = "sess-defer-eviction"
+	const id = "1dxjgwfg"
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
@@ -189,7 +189,7 @@ func TestSubscribeOldDeferDoesNotEvictNewEntry(t *testing.T) {
 }
 
 func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
-	const id = "sess-dismissed-exit-race"
+	const id = "130fsf81"
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:      id,
@@ -243,7 +243,7 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 // contract by timing — a live wait on a cleanly-exited agent resolved
 // "idle" while a wait issued a moment later resolved "died".
 func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
-	const id = "sess-exit-turn-state"
+	const id = "1nift86i"
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:      id,
@@ -277,13 +277,13 @@ func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
 
 func TestConversationFileEventRecordsPath(t *testing.T) {
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	sessions.Upsert(store.Session{ID: "1vshk4fu", Alive: true})
 	subs := NewSubscriptions(sessions)
 
 	const path = "/home/u/.pi/agent/sessions/x/2026_sess.jsonl"
-	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":"`+path+`"}`))
+	subs.handleEvent("1vshk4fu", "/sock", "conversation_file", []byte(`{"path":"`+path+`"}`))
 
-	got, ok := sessions.Get("sess-1")
+	got, ok := sessions.Get("1vshk4fu")
 	if !ok || got.ConversationRef != path {
 		t.Fatalf("ConversationRef = %q (ok=%v), want %q", got.ConversationRef, ok, path)
 	}
@@ -294,13 +294,13 @@ func TestConversationFileEventRecordsPath(t *testing.T) {
 // for one release. TODO(v2.1): drop alongside the subscribe.go case.
 func TestLegacySessionFileEventStillAccepted(t *testing.T) {
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	sessions.Upsert(store.Session{ID: "1vshk4fu", Alive: true})
 	subs := NewSubscriptions(sessions)
 
 	const path = "/home/u/.claude/projects/x/old-runner.jsonl"
-	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":"`+path+`"}`))
+	subs.handleEvent("1vshk4fu", "/sock", "session_file", []byte(`{"path":"`+path+`"}`))
 
-	got, ok := sessions.Get("sess-1")
+	got, ok := sessions.Get("1vshk4fu")
 	if !ok || got.ConversationRef != path {
 		t.Fatalf("ConversationRef = %q (ok=%v), want %q", got.ConversationRef, ok, path)
 	}
@@ -308,10 +308,10 @@ func TestLegacySessionFileEventStillAccepted(t *testing.T) {
 
 func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	sessions.Upsert(store.Session{ID: "1vshk4fu", Alive: true})
 	subs := NewSubscriptions(sessions)
-	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":""}`))
-	if got, _ := sessions.Get("sess-1"); got.ConversationRef != "" {
+	subs.handleEvent("1vshk4fu", "/sock", "conversation_file", []byte(`{"path":""}`))
+	if got, _ := sessions.Get("1vshk4fu"); got.ConversationRef != "" {
 		t.Errorf("empty path should not set ConversationRef, got %q", got.ConversationRef)
 	}
 }
@@ -326,24 +326,24 @@ func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 //     conversation; the web falls back to the gmux session id).
 func TestMetaEventSlugSemantics(t *testing.T) {
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	sessions.Upsert(store.Session{ID: "1vshk4fu", Alive: true})
 	subs := NewSubscriptions(sessions)
 
-	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"slug":"fix-the-login-bug"}`))
-	if got, _ := sessions.Get("sess-1"); got.Slug != "fix-the-login-bug" {
+	subs.handleEvent("1vshk4fu", "/sock", "meta", []byte(`{"slug":"fix-the-login-bug"}`))
+	if got, _ := sessions.Get("1vshk4fu"); got.Slug != "fix-the-login-bug" {
 		t.Fatalf("Slug = %q, want %q", got.Slug, "fix-the-login-bug")
 	}
 
 	// Title-only update (no slug key): the recorded slug must survive.
-	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"adapter_title":"Fix the login bug"}`))
-	if got, _ := sessions.Get("sess-1"); got.Slug != "fix-the-login-bug" {
+	subs.handleEvent("1vshk4fu", "/sock", "meta", []byte(`{"adapter_title":"Fix the login bug"}`))
+	if got, _ := sessions.Get("1vshk4fu"); got.Slug != "fix-the-login-bug" {
 		t.Errorf("Slug after title-only meta = %q, want %q preserved", got.Slug, "fix-the-login-bug")
 	}
 
 	// Explicit empty slug (re-bind to an untitled conversation): must clear,
 	// so the web falls back to the short session-id prefix.
-	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"slug":""}`))
-	got, _ := sessions.Get("sess-1")
+	subs.handleEvent("1vshk4fu", "/sock", "meta", []byte(`{"slug":""}`))
+	got, _ := sessions.Get("1vshk4fu")
 	if got.Slug != "" {
 		t.Errorf("Slug after explicit empty = %q, want cleared", got.Slug)
 	}

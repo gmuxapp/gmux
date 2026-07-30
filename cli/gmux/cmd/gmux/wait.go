@@ -83,10 +83,10 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 		return waitExitError
 	}
 	if sess.Peer != "" {
-		// Use the bare shortID here: the message already names the peer
-		// separately, so displayID's "shortID@peer" would just repeat it.
+		// Use the bare session ID here: the message already names the peer
+		// separately, so displayID's "ID@peer" would just repeat it.
 		fmt.Fprintf(os.Stderr, "gmux: wait is only supported for local sessions (%s is on peer %q)\n",
-			shortID(sess.ID), sess.Peer)
+			sess.ID, sess.Peer)
 		return waitExitError
 	}
 

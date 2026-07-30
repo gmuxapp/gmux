@@ -117,7 +117,7 @@ export default function (pi) {
     // Report the title as the slug source too (runner slugifies it). Until the
     // session has a title we send no slug: pi's session id is a UUID, and the
     // runner deliberately won't synthesize a slug from it — it leaves the slug
-    // empty so the web layer falls back to a short id.slice(0,8). Mirrors the
+    // empty so the web layer falls back to a sigiled full session ID. Mirrors the
     // codex and claude hooks, which also send a title-derived slug only once
     // they have a title.
     post(sock, {

@@ -25,6 +25,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/scrollback"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
 
@@ -235,6 +236,13 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		log.Fatalf("cannot determine cwd: %v", err)
 	}
 
+	// Detached launch already owns a bounded daemon startup budget. Bring the
+	// daemon up before the read-only ID preflight; foreground remains
+	// daemon-optional and merely skips the preflight when unavailable.
+	if handshakeOwned {
+		ensureGmuxdContext(registrationCtx)
+	}
+
 	// --resume-id, when the daemon passed it on /resume or
 	// /restart, makes the runner keep the existing session id
 	// across the seam (including its scrollback directory on
@@ -246,34 +254,65 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		sessionID = naming.SessionID()
 	}
 	socketDir := paths.SessionSocketDir()
-	sockPath := filepath.Join(socketDir, sessionID+".sock")
+	var (
+		sockPath    string
+		pendingPath string
+		listener    *ptyserver.BoundSocket
+	)
 
-	// Bind the socket BEFORE any sessionID-dependent setup
-	// (scrollback path, env, state). Ordinary new sessions may recover from an
-	// unexpected generated-id collision by minting another id. An explicit
-	// resume id is an identity contract with gmuxd: silently changing it starts
-	// an unrelated durable session, which a failed resume then exposes as a
-	// phantom resumable entry.
-	var listener *ptyserver.BoundSocket
-	if rawFD := os.Getenv("GMUX_SOCKET_LEASE_FD"); rawFD != "" {
-		_ = os.Unsetenv("GMUX_SOCKET_LEASE_FD")
-		fd, parseErr := strconv.Atoi(rawFD)
-		if parseErr != nil || fd < 3 {
-			err = fmt.Errorf("invalid inherited socket lease fd %q", rawFD)
-		} else {
-			listener, err = ptyserver.BindSocketWithInheritedLease(sockPath, os.NewFile(uintptr(fd), "gmux-socket-lease"))
-		}
-	} else {
-		listener, err = ptyserver.BindSocket(sockPath)
-	}
-	if mayRetrySessionID(dir.ResumeID, err) {
-		log.Printf("gmux: generated session id %s is in use; falling back to a fresh id", sessionID)
-		sessionID = naming.SessionID()
+	// Bind and preflight BEFORE any sessionID-dependent setup (state, env,
+	// scrollback, or child start). New sessions retry both the live socket
+	// namespace and the daemon's durable namespace. The preflight is advisory
+	// and read-only; registration repeats the durable check authoritatively.
+	for {
 		sockPath = filepath.Join(socketDir, sessionID+".sock")
-		listener, err = ptyserver.BindSocket(sockPath)
-	}
-	if err != nil {
-		log.Fatalf("failed to bind session socket: %v", err)
+		namespace, lockErr := socklease.LockNamespace(socketDir, false)
+		if lockErr != nil {
+			log.Fatalf("failed to lock session socket namespace: %v", lockErr)
+		}
+		if dir.ResumeID == "" {
+			pendingPath = sockPath + ".registering"
+			if err = os.WriteFile(pendingPath, nil, 0o600); err != nil {
+				socklease.UnlockNamespace(namespace)
+				log.Fatalf("failed to publish session registration intent: %v", err)
+			}
+		}
+		if rawFD := os.Getenv("GMUX_SOCKET_LEASE_FD"); rawFD != "" {
+			_ = os.Unsetenv("GMUX_SOCKET_LEASE_FD")
+			fd, parseErr := strconv.Atoi(rawFD)
+			if parseErr != nil || fd < 3 {
+				err = fmt.Errorf("invalid inherited socket lease fd %q", rawFD)
+			} else {
+				listener, err = ptyserver.BindSocketWithInheritedLease(sockPath, os.NewFile(uintptr(fd), "gmux-socket-lease"))
+			}
+		} else {
+			listener, err = ptyserver.BindSocket(sockPath)
+		}
+		if err != nil {
+			_ = os.Remove(pendingPath)
+			pendingPath = ""
+		}
+		socklease.UnlockNamespace(namespace)
+		if mayRetrySessionID(dir.ResumeID, err) {
+			_ = os.Remove(pendingPath)
+			pendingPath = ""
+			log.Printf("gmux: generated session id %s is in use; falling back to a fresh id", sessionID)
+			sessionID = naming.SessionID()
+			continue
+		}
+		if err != nil {
+			log.Fatalf("failed to bind session socket: %v", err)
+		}
+		if dir.ResumeID == "" && checkSessionIDAvailability(registrationCtx, sessionID) == sessionIDExists {
+			log.Printf("gmux: generated session id %s already exists; falling back to a fresh id", sessionID)
+			_ = os.Remove(pendingPath)
+			pendingPath = ""
+			_ = listener.ReleaseOwnership()
+			_ = listener.Close()
+			sessionID = naming.SessionID()
+			continue
+		}
+		break
 	}
 
 	// Get adapter-specific env vars
@@ -486,7 +525,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	}
 
 	// Auto-start gmuxd if not running (one-shot, never retried), then
-	// register. The goroutine signals regDone when the registration
+	// register. Detached launch already performed this before preflight;
+	// repeating the cheap health path keeps foreground behavior unchanged.
+	// The goroutine signals regDone when the registration
 	// HTTP call has completed (succeeded or exhausted retries) and the
 	// handshake — if any — has been delivered to the parent. We block
 	// on regDone before exit so a fast-exiting command (echo, true,
@@ -496,6 +537,10 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	go func() {
 		defer close(regDone)
 		outcome := registerWithGmuxd(registrationCtx, sessionID, sockPath)
+		_ = os.Remove(pendingPath)
+		if outcome == registerIDConflict && !handshakeOwned {
+			log.Printf("gmux: registration refused for %s: session id already exists; child continues unregistered", sessionID)
+		}
 		if reapOnRegistrationFailure(outcome, interactive, handshakeOwned) {
 			log.Printf("gmux: registration failed for %s; shutting down orphaned runner", sessionID)
 			shutdownDetachedTarget(srv)

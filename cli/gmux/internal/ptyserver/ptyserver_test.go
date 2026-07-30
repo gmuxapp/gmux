@@ -1610,8 +1610,8 @@ func TestKillReleasesSocketPathBeforeResponding(t *testing.T) {
 func TestBuildChildEnv_StripsResumeID(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin",
-		"GMUX_RESUME_ID=sess-parent",
-		"GMUX_SESSION_ID=sess-parent", // intentionally NOT stripped (children consume this)
+		"GMUX_RESUME_ID=1rz9lyqa",
+		"GMUX_SESSION_ID=1rz9lyqa", // intentionally NOT stripped (children consume this)
 		"HOME=/home/u",
 	}
 	env := buildChildEnv(parent, nil, "1.2.3")
@@ -1660,7 +1660,7 @@ func TestPutSlugValidation(t *testing.T) {
 		Cwd:        "/tmp",
 		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
-		State:      session.New(session.Config{ID: "sess-abcd1234"}),
+		State:      session.New(session.Config{ID: "1va8lvdv"}),
 	})
 	if err != nil {
 		t.Fatalf("new server: %v", err)

@@ -249,9 +249,9 @@ func TestParseCLI(t *testing.T) {
 		{name: "auth", args: []string{"auth"}, wantMode: modeAuth},
 		{name: "remote", args: []string{"remote"}, wantMode: modeRemote},
 
-		{name: "internal __run with directives", args: []string{"__run", "--resume-id=sess-1", "--initial-cols=80", "--", "pi"}, wantMode: modeRun,
+		{name: "internal __run with directives", args: []string{"__run", "--resume-id=1vshk4fu", "--initial-cols=80", "--", "pi"}, wantMode: modeRun,
 			check: func(t *testing.T, c *command) {
-				if c.resumeID != "sess-1" || c.initialCols != 80 {
+				if c.resumeID != "1vshk4fu" || c.initialCols != 80 {
 					t.Errorf("resumeID=%q cols=%d", c.resumeID, c.initialCols)
 				}
 				if strings.Join(c.runArgs, " ") != "pi" {

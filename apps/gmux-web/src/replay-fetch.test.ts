@@ -10,16 +10,16 @@ describe('fetchScrollback', () => {
     const payload = new Uint8Array([0x68, 0x69, 0x0d, 0x0a]) // "hi\r\n"
     const fakeFetch = vi.fn().mockResolvedValue(ok(payload))
 
-    const result = await fetchScrollback('sess-abc', fakeFetch)
+    const result = await fetchScrollback('1j6y9mx6', fakeFetch)
 
-    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc/scrollback')
+    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/1j6y9mx6/scrollback')
     expect(result).toEqual({ kind: 'bytes', bytes: payload })
   })
 
   test('200 with empty body returns kind=empty', async () => {
     const fakeFetch = vi.fn().mockResolvedValue(ok(new Uint8Array(0)))
 
-    const result = await fetchScrollback('sess-empty', fakeFetch)
+    const result = await fetchScrollback('1lm71dfs', fakeFetch)
 
     expect(result).toEqual({ kind: 'empty' })
   })
@@ -27,7 +27,7 @@ describe('fetchScrollback', () => {
   test('404 returns kind=not-found', async () => {
     const fakeFetch = vi.fn().mockResolvedValue(new Response('not found', { status: 404 }))
 
-    const result = await fetchScrollback('sess-missing', fakeFetch)
+    const result = await fetchScrollback('13stq9rd', fakeFetch)
 
     expect(result).toEqual({ kind: 'not-found' })
   })
@@ -35,7 +35,7 @@ describe('fetchScrollback', () => {
   test('5xx returns kind=error with status and message', async () => {
     const fakeFetch = vi.fn().mockResolvedValue(new Response('boom', { status: 500, statusText: 'Internal Server Error' }))
 
-    const result = await fetchScrollback('sess-bad', fakeFetch)
+    const result = await fetchScrollback('1u44a1lf', fakeFetch)
 
     expect(result).toEqual({ kind: 'error', status: 500, message: 'Internal Server Error' })
   })
@@ -43,7 +43,7 @@ describe('fetchScrollback', () => {
   test('network failure returns kind=error with status 0', async () => {
     const fakeFetch = vi.fn().mockRejectedValue(new Error('connection refused'))
 
-    const result = await fetchScrollback('sess-x', fakeFetch)
+    const result = await fetchScrollback('1108gm0e', fakeFetch)
 
     expect(result).toEqual({ kind: 'error', status: 0, message: 'connection refused' })
   })
@@ -58,7 +58,7 @@ describe('fetchScrollback', () => {
     })
     const fakeFetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }))
 
-    const result = await fetchScrollback('sess-abc', fakeFetch)
+    const result = await fetchScrollback('1j6y9mx6', fakeFetch)
 
     expect(result.kind).toBe('error')
     if (result.kind === 'error') {
@@ -70,10 +70,10 @@ describe('fetchScrollback', () => {
   test('peer-owned session id is URL-encoded', async () => {
     const fakeFetch = vi.fn().mockResolvedValue(ok(new Uint8Array(0)))
 
-    await fetchScrollback('sess-abc@hs', fakeFetch)
+    await fetchScrollback('1j6y9mx6@hs', fakeFetch)
 
     // @ would otherwise be unsafe in some HTTP routers; verify the call site
     // round-trips through encodeURIComponent.
-    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc%40hs/scrollback')
+    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/1j6y9mx6%40hs/scrollback')
   })
 })

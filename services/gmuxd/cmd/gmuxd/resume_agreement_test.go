@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,7 +53,7 @@ func TestResumeDerivationPresentationMatchesSpawn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := centralstore.Session{
-				ID: centralstore.SessionID("sess-" + tc.name), Adapter: "pi",
+				ID: centralstore.SessionID(fmt.Sprintf("%07d1", len(tc.name))), Adapter: "pi",
 				Command: []string{"pi"}, CWD: dir, ConversationRef: tc.ref,
 				CreatedAt: 1700000000000, StatusReported: true,
 			}

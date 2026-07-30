@@ -94,11 +94,11 @@ func TestOutcomeBusRemove(t *testing.T) {
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	if err := coord.Remove(context.Background(), "sess-r", 1); err != nil {
+	if err := coord.Remove(context.Background(), "11qpvu53", 1); err != nil {
 		t.Fatal(err)
 	}
 	o := recvOutcome(t, ch)
-	if o.Type != OutcomeRemoved || o.ID != "sess-r" || o.Session != nil || o.Alive {
+	if o.Type != OutcomeRemoved || o.ID != "11qpvu53" || o.Session != nil || o.Alive {
 		t.Fatalf("outcome=%+v", o)
 	}
 }
@@ -113,21 +113,21 @@ func TestOutcomeBusDismissUpsertsRetainedRows(t *testing.T) {
 		return centralstore.Session{ID: id, Version: 2, DismissedAt: &dismissedAt}, true, nil
 	}
 	dur.dismissResult = func(root centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
-		return []centralstore.SessionID{"sess-p", "sess-c"}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
+		return []centralstore.SessionID{"151zemtf", "10cel6cx"}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
 	}
 	coord := newDismissCoord(t, dur, &fakeDirtySink{})
 
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	if _, err := coord.Dismiss(context.Background(), "sess-p"); err != nil {
+	if _, err := coord.Dismiss(context.Background(), "151zemtf"); err != nil {
 		t.Fatal(err)
 	}
 	first, second := recvOutcome(t, ch), recvOutcome(t, ch)
-	if first.Type != OutcomeUpserted || first.ID != "sess-p" || first.Session == nil || first.Session.DismissedAt == nil {
+	if first.Type != OutcomeUpserted || first.ID != "151zemtf" || first.Session == nil || first.Session.DismissedAt == nil {
 		t.Fatalf("first=%+v", first)
 	}
-	if second.Type != OutcomeUpserted || second.ID != "sess-c" {
+	if second.Type != OutcomeUpserted || second.ID != "10cel6cx" {
 		t.Fatalf("second=%+v", second)
 	}
 }
@@ -165,10 +165,10 @@ func TestOutcomeBusActivityLossyUnderBacklog(t *testing.T) {
 	defer cancel()
 
 	for range outcomeActivityBacklog + 100 {
-		coord.PublishActivity("sess-act")
+		coord.PublishActivity("1m2jkaw3")
 	}
 	// A durable outcome enqueues regardless of backlog.
-	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "sess-last"})
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "1m6s8sy2"})
 
 	activities := 0
 	for {
@@ -177,7 +177,7 @@ func TestOutcomeBusActivityLossyUnderBacklog(t *testing.T) {
 			activities++
 			continue
 		}
-		if o.ID != "sess-last" {
+		if o.ID != "1m6s8sy2" {
 			t.Fatalf("unexpected outcome %+v", o)
 		}
 		break
@@ -203,7 +203,7 @@ func TestOutcomeBusUnsubscribeClosesChannel(t *testing.T) {
 	cancel()
 	cancel() // idempotent
 
-	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "sess-x"})
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "1108gm0e"})
 	select {
 	case _, ok := <-ch:
 		if ok {
@@ -227,7 +227,7 @@ func TestOutcomeBusNoSubscribersSkipsReads(t *testing.T) {
 		return centralstore.Session{}, false, nil
 	}
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
-	coord.emitOutcomes(context.Background(), 0, "sess-a", "sess-b")
+	coord.emitOutcomes(context.Background(), 0, "1mw5c5n9", "18wnzse2")
 	if reads != 0 {
 		t.Fatalf("expected no reads without subscribers, got %d", reads)
 	}
@@ -318,11 +318,11 @@ func TestOutcomeBusRemovedResetsWatermark(t *testing.T) {
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	v5 := centralstore.Session{ID: "sess-w", Version: 5}
-	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "sess-w", Session: &v5})
-	coord.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: "sess-w"})
-	v1 := centralstore.Session{ID: "sess-w", Version: 1}
-	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "sess-w", Session: &v1})
+	v5 := centralstore.Session{ID: "1vbfhza6", Version: 5}
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "1vbfhza6", Session: &v5})
+	coord.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: "1vbfhza6"})
+	v1 := centralstore.Session{ID: "1vbfhza6", Version: 1}
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: "1vbfhza6", Session: &v1})
 
 	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted || o.Session.Version != 5 {
 		t.Fatalf("first=%+v", o)
@@ -355,7 +355,7 @@ func TestOutcomeBusLateRemovedDroppedAfterNewerUpserted(t *testing.T) {
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	id := centralstore.SessionID("sess-r2")
+	id := centralstore.SessionID("1b4k46rv")
 	v1 := centralstore.Session{ID: id, Version: 1}
 
 	// Publish in arrival order: newer Upserted (seq=2) first, stale Removed
@@ -393,7 +393,7 @@ func TestOutcomeBusOldGenerationUpsertDroppedAfterReregistered(t *testing.T) {
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	id := centralstore.SessionID("sess-r2-old-upsert")
+	id := centralstore.SessionID("1o6ocu1e")
 	fresh := centralstore.Session{ID: id, Version: 1}
 	old := centralstore.Session{ID: id, Version: 5}
 
@@ -436,7 +436,7 @@ func TestOutcomeBusOldWatermarkAcceptsFreshGeneration(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
-	id := centralstore.SessionID("sess-old-watermark")
+	id := centralstore.SessionID("13y9ugnk")
 	old := centralstore.Session{ID: id, Version: 5}
 	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &old, Sequence: 1})
 	if o := recvOutcome(t, ch); o.Session == nil || o.Session.Version != 5 {
@@ -449,7 +449,7 @@ func TestOutcomeBusOldWatermarkAcceptsFreshGeneration(t *testing.T) {
 // schedule when old v5 came from SubscribeOutcomesSeed and therefore has a row
 // watermark but no commit-sequence stamp.
 func TestOutcomeBusSeededOldWatermarkAcceptsFreshGeneration(t *testing.T) {
-	id := centralstore.SessionID("sess-seeded-old-watermark")
+	id := centralstore.SessionID("1ig01k68")
 	dur := newFakeDurable(0)
 	dur.listSessions = func() ([]centralstore.Session, error) {
 		return []centralstore.Session{{ID: id, Version: 5}}, nil
@@ -473,7 +473,7 @@ func TestOutcomeBusNewerSequenceDeduplicatesIdenticalProjection(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
-	id := centralstore.SessionID("sess-identical-projection")
+	id := centralstore.SessionID("1xf1h2dn")
 	row := centralstore.Session{ID: id, Version: 5, Title: "same"}
 	first := Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Alive: true, Generation: 7, Sequence: 1}
 	second := first
@@ -497,7 +497,7 @@ func TestOutcomeBusSameVersionNewGenerationDelivered(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
-	id := centralstore.SessionID("sess-same-version-generation")
+	id := centralstore.SessionID("1sutoynf")
 	row1 := centralstore.Session{ID: id, Version: 1}
 	row2 := row1
 	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row1, Alive: true, Generation: 7, Sequence: 1})
@@ -514,7 +514,7 @@ func TestOutcomeBusSameVersionNewGenerationDelivered(t *testing.T) {
 // stamped publisher for a commit already represented by Seed advances the
 // sequence watermark but does not emit the identical projection again.
 func TestOutcomeBusSeedDeduplicatesReflectedCommit(t *testing.T) {
-	id := centralstore.SessionID("sess-seed-dedup")
+	id := centralstore.SessionID("1c4is9hf")
 	row := centralstore.Session{ID: id, Version: 5, Title: "seeded"}
 	dur := newFakeDurable(0)
 	dur.listSessions = func() ([]centralstore.Session, error) { return []centralstore.Session{row}, nil }
@@ -567,7 +567,7 @@ func corruptAliasSession(s *centralstore.Session) {
 // projection nor pre-corrupt the baseline to suppress a real future update.
 func TestOutcomeBusEventProjectionSnapshotOwned(t *testing.T) {
 	t.Run("unchanged row remains deduplicated", func(t *testing.T) {
-		id := centralstore.SessionID("sess-event-alias-duplicate")
+		id := centralstore.SessionID("15nm9eeg")
 		coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 		ch, cancel := coord.SubscribeOutcomes()
 		defer cancel()
@@ -584,7 +584,7 @@ func TestOutcomeBusEventProjectionSnapshotOwned(t *testing.T) {
 	})
 
 	t.Run("real update remains deliverable", func(t *testing.T) {
-		id := centralstore.SessionID("sess-event-alias-change")
+		id := centralstore.SessionID("1v2ulglf")
 		coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 		ch, cancel := coord.SubscribeOutcomes()
 		defer cancel()
@@ -605,7 +605,7 @@ func TestOutcomeBusEventProjectionSnapshotOwned(t *testing.T) {
 // to the Seed value, which escapes synchronously while its dedup baseline is
 // retained by the subscriber.
 func TestOutcomeBusSeedProjectionSnapshotOwned(t *testing.T) {
-	id := centralstore.SessionID("sess-seed-alias")
+	id := centralstore.SessionID("1znq2hep")
 	seedRow := aliasTestSession(id, 1, "real")
 	dur := newFakeDurable(0)
 	dur.listSessions = func() ([]centralstore.Session, error) { return []centralstore.Session{seedRow}, nil }
@@ -629,7 +629,7 @@ func TestOutcomeBusConcurrentConsumerMutationDoesNotRaceProjection(t *testing.T)
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 	for i := range 100 {
-		id := centralstore.SessionID(fmt.Sprintf("sess-alias-race-%d", i))
+		id := centralstore.SessionID(fmt.Sprintf("%08d", i))
 		row := aliasTestSession(id, 1, "real")
 		coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Sequence: uint64(i*2 + 1)})
 		got := recvOutcome(t, ch)
@@ -646,7 +646,7 @@ func TestOutcomeBusConcurrentConsumerMutationDoesNotRaceProjection(t *testing.T)
 }
 
 func TestOutcomeBusSeedMutationCannotSuppressRealUpdate(t *testing.T) {
-	id := centralstore.SessionID("sess-seed-alias-change")
+	id := centralstore.SessionID("1v435n4r")
 	seedRow := aliasTestSession(id, 1, "old")
 	dur := newFakeDurable(0)
 	dur.listSessions = func() ([]centralstore.Session, error) { return []centralstore.Session{seedRow}, nil }
@@ -687,10 +687,10 @@ func TestCloneOutcomeSessionOwnsEveryReferenceField(t *testing.T) {
 	if len(allowed) != 10 {
 		t.Fatalf("reference-field inventory changed: %v", allowed)
 	}
-	original := aliasTestSession("sess-clone-shape", 1, "real")
+	original := aliasTestSession("1xke0d7j", 1, "real")
 	clone := cloneOutcomeSession(&original)
 	corruptAliasSession(&original)
-	want := aliasTestSession("sess-clone-shape", 1, "real")
+	want := aliasTestSession("1xke0d7j", 1, "real")
 	if !reflect.DeepEqual(clone, &want) {
 		t.Fatalf("clone retained reference alias:\n got %+v\nwant %+v", clone, &want)
 	}
@@ -701,7 +701,7 @@ func TestOutcomeProjectionPreservesCommandNilness(t *testing.T) {
 		coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 		ch, cancel := coord.SubscribeOutcomes()
 		defer cancel()
-		id := centralstore.SessionID("sess-command-empty-dedup")
+		id := centralstore.SessionID("16rzmogz")
 		first := centralstore.Session{ID: id, Version: 1, Command: []string{}}
 		second := centralstore.Session{ID: id, Version: 1, Command: []string{}}
 		coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &first, Sequence: 1})
@@ -726,7 +726,7 @@ func TestOutcomeProjectionPreservesCommandNilness(t *testing.T) {
 			coord := New(nil, newFakeClient(RunnerMeta{}), newFakeDurable(0), &fakeDirtySink{}, nil)
 			ch, cancel := coord.SubscribeOutcomes()
 			defer cancel()
-			id := centralstore.SessionID("sess-command-" + tc.name)
+			id := centralstore.SessionID("1cb2gy89" + tc.name)
 			first := centralstore.Session{ID: id, Version: 1, Command: tc.first}
 			next := centralstore.Session{ID: id, Version: 1, Command: tc.next}
 			coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &first, Sequence: 1})
@@ -818,7 +818,7 @@ func (d *delayedRemovalDurable) ListSessions(_ context.Context) ([]centralstore.
 // invariant, the non-zero stamps make this test kill allocSeq=>0 and
 // Sequence-propagation=>0 mutations.
 func TestCoordinatorReregisterBeatsDelayedRemoval(t *testing.T) {
-	id := centralstore.SessionID("sess-production-order")
+	id := centralstore.SessionID("1xmkuqe4")
 	old := centralstore.Session{ID: id, Version: 5}
 	dur := &delayedRemovalDurable{
 		fakeDurable:       newFakeDurable(0),
@@ -881,7 +881,7 @@ func (s *registerBlockSink) Committed(_ context.Context, result centralstore.Mut
 // and publishes that same current v1 with its older stamp; finally Register's
 // newer-stamped identical projection must advance sequence state but not emit.
 func TestCoordinatorRacingPublishersDeduplicateCurrentProjection(t *testing.T) {
-	id := centralstore.SessionID("sess-production-dedup")
+	id := centralstore.SessionID("1di0ttkr")
 	old := centralstore.Session{ID: id, Version: 5}
 	dur := &delayedRemovalDurable{
 		fakeDurable: newFakeDurable(0),
@@ -942,7 +942,7 @@ func TestOutcomeBusLateRemovedNormalOrderDelivered(t *testing.T) {
 	ch, cancel := coord.SubscribeOutcomes()
 	defer cancel()
 
-	id := centralstore.SessionID("sess-r2b")
+	id := centralstore.SessionID("1mfaar53")
 	v1 := centralstore.Session{ID: id, Version: 1}
 
 	// Normal order: Upserted (seq=1) then Removed (seq=2).

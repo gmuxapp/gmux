@@ -32,7 +32,7 @@ import (
 // never accept me" (exit) from "gmuxd is unreachable" (retry). This is
 // the seam the orphaned-resume bug turned up: a convIndex-rehydrated
 // agent session is keyed by its conversation UUID, which is not a
-// sess-<hex> id, so its resume runner used to retry-then-linger forever.
+// 8-character base36 ID, so its resume runner used to retry-then-linger forever.
 var ErrInvalidSessionID = errors.New("register: invalid session id")
 
 // ExpectedRunnerHash is the sha256 hash of the gmux binary that gmuxd
@@ -265,7 +265,7 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onD
 
 	// The runner's /meta supplies the session ID, which is then used
 	// as a path segment for persisted metadata and scrollback. Reject
-	// anything that isn't a well-formed sess-<hex> ID so a crafted
+	// anything that isn't a well-formed 8-character base36 ID so a crafted
 	// socket_path cannot steer writes outside the sessions dir.
 	if !paths.IsValidSessionID(newSess.ID) {
 		return fmt.Errorf("%w %q from %s", ErrInvalidSessionID, newSess.ID, socketPath)

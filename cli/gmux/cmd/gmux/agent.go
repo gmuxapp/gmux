@@ -397,7 +397,7 @@ func resolveAgentSession(ref, verb string) (cliSession, bool) {
 	}
 	if sess.Peer != "" {
 		fmt.Fprintf(os.Stderr, "gmux: agent %s is only supported for local sessions (%s is on peer %q); run gmux agent in a session on that host instead\n",
-			verb, shortID(sess.ID), sess.Peer)
+			verb, sess.ID, sess.Peer)
 		return cliSession{}, false
 	}
 	return sess, true
@@ -811,7 +811,7 @@ const (
 // telling them to send keystrokes answers a question they did not ask.
 // `logs` is the read path that routes through here.
 func agentErrorHint(code, verb string, sess cliSession) string {
-	tailHint := "'gmux tail " + shortID(sess.ID) + "' shows this session directly"
+	tailHint := "'gmux tail " + sess.ID + "' shows this session directly"
 	switch code {
 	case codeUnsupportedAdapter, codeUnsupportedAction:
 		if verb == "logs" {

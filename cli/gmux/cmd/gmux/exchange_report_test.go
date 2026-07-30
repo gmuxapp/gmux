@@ -172,7 +172,7 @@ func TestAgentLogsRequiresExchangeScopeMarker(t *testing.T) {
 			})
 			var code int
 			var stderr string
-			stdout := captureStdout(t, func() { stderr = captureStderr(t, func() { code = cmdAgentLogs("abcd1234", 1) }) })
+			stdout := captureStdout(t, func() { stderr = captureStderr(t, func() { code = cmdAgentLogs("1va8lvdv", 1) }) })
 			if present {
 				if code != 0 || stdout != "[USER]: stored\n" || stderr != "" {
 					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)

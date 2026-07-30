@@ -93,7 +93,7 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	endpoint := filepath.Join(t.TempDir(), "sess-periodic.sock")
+	endpoint := filepath.Join(t.TempDir(), "13x80wc7.sock")
 	ln, err := net.Listen("unix", endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	defer ln.Close()
 	ref := "multi-megabyte-transcript"
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{
-		ID: "sess-periodic", Adapter: "pi", Alive: true, CreatedAt: 1, ObservedAt: 1,
+		ID: "13x80wc7", Adapter: "pi", Alive: true, CreatedAt: 1, ObservedAt: 1,
 	}, Incarnation: "incarnation-periodic"}
 	meta.Registration.Facts.ConversationRef = &ref
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{endpoint: meta}, blocked: map[string]bool{}}
@@ -220,7 +220,7 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 	defer store.Close()
 	now := centralstore.UnixMillis(1000)
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{
-		"good": {Registration: centralstore.RunnerRegistration{ID: "sess-bootstrap", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}},
+		"good": {Registration: centralstore.RunnerRegistration{ID: "1g8schlb", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}},
 	}, blocked: map[string]bool{"slow": true}}
 	b, err := newBootstrap(BootstrapConfig{Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"good", "slow"}, nil }), Clock: func() centralstore.UnixMillis { return now }, RunnerBudget: 100 * time.Millisecond, ConvergeDeadline: 2 * time.Second, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
 	if err != nil {
@@ -252,7 +252,7 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unsubscribe()
-	if events == nil || len(seed) != 1 || seed[0].ID != "sess-bootstrap" || !seed[0].Alive || seed[0].Generation == 0 {
+	if events == nil || len(seed) != 1 || seed[0].ID != "1g8schlb" || !seed[0].Alive || seed[0].Generation == 0 {
 		t.Fatalf("seed=%+v events=%v", seed, events)
 	}
 }

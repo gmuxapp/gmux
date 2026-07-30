@@ -553,18 +553,18 @@ func TestShouldForwardActivity(t *testing.T) {
 		want      bool
 	}{
 		// Browser sees everything, regardless of namespace.
-		{"browser local session", false, "sess-1", true},
-		{"browser devcontainer session", false, "sess-1@dc", true},
-		{"browser network-peer session", false, "sess-1@hub-b", true},
+		{"browser local session", false, "1vshk4fu", true},
+		{"browser devcontainer session", false, "1vshk4fu@dc", true},
+		{"browser network-peer session", false, "1vshk4fu@hub-b", true},
 
 		// Hub (asPeer) only sees activity for sessions this node owns.
-		{"asPeer local session", true, "sess-1", true},
-		{"asPeer devcontainer session", true, "sess-1@dc", true},
-		{"asPeer network-peer session dropped", true, "sess-1@hub-b", false},
+		{"asPeer local session", true, "1vshk4fu", true},
+		{"asPeer devcontainer session", true, "1vshk4fu@dc", true},
+		{"asPeer network-peer session dropped", true, "1vshk4fu@hub-b", false},
 
 		// Defense: nil isLocalPeer means “no locals”, so any namespaced
 		// id is dropped for asPeer (e.g. peerManager not yet wired).
-		{"asPeer nil isLocalPeer drops namespaced", true, "sess-1@dc", false},
+		{"asPeer nil isLocalPeer drops namespaced", true, "1vshk4fu@dc", false},
 	}
 
 	for _, tc := range cases {
@@ -602,7 +602,7 @@ func TestIsAllowedPeerProxyPath(t *testing.T) {
 		{"reorder root denied", http.MethodPatch, "v1/projects", false},
 		{"reorder add denied", http.MethodPatch, "v1/projects/add", false},
 		{"projects bare denied", http.MethodPatch, "v1/projects/gmux", false},
-		{"sessions endpoint denied", http.MethodPatch, "v1/sessions/sess-1/kill", false},
+		{"sessions endpoint denied", http.MethodPatch, "v1/sessions/1vshk4fu/kill", false},
 		{"unrelated path denied", http.MethodPatch, "v1/health", false},
 
 		// Defense: never allow without the v1/ prefix even if shape matches.
@@ -635,10 +635,10 @@ func TestBuildLaunchArgs(t *testing.T) {
 	})
 
 	t.Run("restart: directives precede --, then the command", func(t *testing.T) {
-		got := buildLaunchArgs("sess-abc", 142, 47, cmd)
+		got := buildLaunchArgs("1j6y9mx6", 142, 47, cmd)
 		want := []string{
 			"__run",
-			"--resume-id=sess-abc",
+			"--resume-id=1j6y9mx6",
 			"--initial-cols=142",
 			"--initial-rows=47",
 			"--",
@@ -650,8 +650,8 @@ func TestBuildLaunchArgs(t *testing.T) {
 	})
 
 	t.Run("zero dims omit the size flags", func(t *testing.T) {
-		got := buildLaunchArgs("sess-1", 0, 0, cmd)
-		want := append([]string{"__run", "--resume-id=sess-1", "--"}, cmd...)
+		got := buildLaunchArgs("1vshk4fu", 0, 0, cmd)
+		want := append([]string{"__run", "--resume-id=1vshk4fu", "--"}, cmd...)
 		if !slices.Equal(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
@@ -660,10 +660,10 @@ func TestBuildLaunchArgs(t *testing.T) {
 	t.Run("command flags survive intact (-- terminator)", func(t *testing.T) {
 		// The `--` terminator delivers the command verbatim even when its
 		// own args look like directive flags.
-		got := buildLaunchArgs("sess-1", 80, 24, []string{"weirdcli", "--resume-id=evil"})
+		got := buildLaunchArgs("1vshk4fu", 80, 24, []string{"weirdcli", "--resume-id=evil"})
 		want := []string{
 			"__run",
-			"--resume-id=sess-1",
+			"--resume-id=1vshk4fu",
 			"--initial-cols=80",
 			"--initial-rows=24",
 			"--",

@@ -37,7 +37,7 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
-	path, err := WriteShellStateFile("sess-abc123", "/home/user/dev/project", []string{"fish"})
+	path, err := WriteShellStateFile("16y0lfv7", "/home/user/dev/project", []string{"fish"})
 	if err != nil {
 		t.Fatalf("WriteShellStateFile: %v", err)
 	}
@@ -52,8 +52,8 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 		t.Fatalf("DescribeConversation: %v", err)
 	}
 
-	if info.ID != "sess-abc123" {
-		t.Errorf("ID = %q, want %q", info.ID, "sess-abc123")
+	if info.ID != "16y0lfv7" {
+		t.Errorf("ID = %q, want %q", info.ID, "16y0lfv7")
 	}
 	if info.Cwd != "/home/user/dev/project" {
 		t.Errorf("Cwd = %q, want %q", info.Cwd, "/home/user/dev/project")
@@ -74,7 +74,7 @@ func TestShellResumeCommandResumability(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
-	path, err := WriteShellStateFile("sess-resume1", "/home/user/work", []string{"bash"})
+	path, err := WriteShellStateFile("1rhfrwzz", "/home/user/work", []string{"bash"})
 	if err != nil {
 		t.Fatalf("WriteShellStateFile: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestShellRemoveStateFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
-	path, err := WriteShellStateFile("sess-remove1", "/home/user/dev", []string{"zsh"})
+	path, err := WriteShellStateFile("1eke8b59", "/home/user/dev", []string{"zsh"})
 	if err != nil {
 		t.Fatalf("WriteShellStateFile: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestShellRemoveStateFile(t *testing.T) {
 		t.Fatalf("state file should exist: %v", err)
 	}
 
-	RemoveShellStateFile("sess-remove1", "/home/user/dev")
+	RemoveShellStateFile("1eke8b59", "/home/user/dev")
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("state file should be removed after RemoveShellStateFile")
@@ -177,13 +177,13 @@ func TestShellOnRegister(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", tmp)
 
 	sh := NewShell()
-	info, err := sh.OnRegister("sess-reg1", "/home/user/dev/myproject", []string{"bash"})
+	info, err := sh.OnRegister("127iehs4", "/home/user/dev/myproject", []string{"bash"})
 	if err != nil {
 		t.Fatalf("OnRegister: %v", err)
 	}
 
 	// State file should exist so the session can be rediscovered after restart.
-	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/myproject"), "sess-reg1.json")
+	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/myproject"), "127iehs4.json")
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state file not created at %s: %v", statePath, err)
 	}
@@ -200,16 +200,16 @@ func TestShellOnDismiss(t *testing.T) {
 
 	sh := NewShell()
 	// Register creates the state file.
-	if _, err := sh.OnRegister("sess-dis1", "/home/user/dev/proj", []string{"zsh"}); err != nil {
+	if _, err := sh.OnRegister("1moiukxc", "/home/user/dev/proj", []string{"zsh"}); err != nil {
 		t.Fatalf("OnRegister: %v", err)
 	}
-	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/proj"), "sess-dis1.json")
+	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/proj"), "1moiukxc.json")
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state file should exist before dismiss: %v", err)
 	}
 
 	// Dismiss removes it.
-	sh.OnDismiss("sess-dis1", "/home/user/dev/proj")
+	sh.OnDismiss("1moiukxc", "/home/user/dev/proj")
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Error("state file should be gone after OnDismiss")
 	}

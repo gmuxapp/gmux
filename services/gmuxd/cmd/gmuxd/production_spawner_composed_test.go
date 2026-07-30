@@ -110,7 +110,7 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	row := insertRetainedDead(t, st, "sess-resume-composed")
+	row := insertRetainedDead(t, st, "1mehznrf")
 	// Simulate a runner from before the lease protocol crashing: the canonical
 	// socket refuses connections and has no sidecar lock file. This was the
 	// production regression shape: BindSocket refused to reclaim it, silently
@@ -189,7 +189,7 @@ func TestProductionSpawnerWaitsForRunnerSocketBeforeRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	row := insertRetainedDead(t, st, "sess-delayed-runner")
+	row := insertRetainedDead(t, st, "1paqkuyt")
 
 	childReady := make(chan *unixFakeRunner, 1)
 	prod := &productionRunnerSpawner{
@@ -240,7 +240,7 @@ func TestProductionSpawnerResumeRegistrationFailureCleansAndReleasesClaim(t *tes
 		t.Fatal(err)
 	}
 	defer st.Close()
-	row := insertRetainedDead(t, st, "sess-resume-failure")
+	row := insertRetainedDead(t, st, "1l0bkvgs")
 	var launches atomic.Int32
 	terminated := make(chan struct{}, 2)
 	prod := &productionRunnerSpawner{ResolveDir: func(centralstore.Session) (string, error) { return t.TempDir(), nil }, ResolveCommand: func(centralstore.Session) []string { return []string{"x"} }}

@@ -5,7 +5,7 @@ const DIM = '\x1b[2m'
 const GRAY = '\x1b[90m'
 
 export default {
-  id: 'sess-openclaw-logs',
+  id: '176jgh4z',
   created_at: ago(20),
   command: ['openclaw', 'logs', '-f'],
   cwd: '/home/user/dev/openclaw',

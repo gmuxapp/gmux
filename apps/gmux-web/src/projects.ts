@@ -493,9 +493,9 @@ function compareFolderSessions(a: Session, b: Session): number {
  * Parse a (possibly namespaced) session ID into its original identity and
  * host path.
  *
- *   "sess-abc"            -> { originalId: "sess-abc", path: [] }
- *   "sess-abc@spoke"      -> { originalId: "sess-abc", path: ["spoke"] }
- *   "sess-abc@dev@spoke"  -> { originalId: "sess-abc", path: ["spoke", "dev"] }
+ *   "1j6y9mx6"            -> { originalId: "1j6y9mx6", path: [] }
+ *   "1j6y9mx6@spoke"      -> { originalId: "1j6y9mx6", path: ["spoke"] }
+ *   "1j6y9mx6@dev@spoke"  -> { originalId: "1j6y9mx6", path: ["spoke", "dev"] }
  *
  * The `@` chain is innermost-first (peering.NamespaceID *appends* when
  * propagating up), so reversing gives the outermost-first path a human

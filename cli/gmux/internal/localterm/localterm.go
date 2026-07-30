@@ -21,7 +21,7 @@ type Attach struct {
 	stdin  *os.File
 	stdout *os.File
 
-	ptyWriter io.Writer   // where stdin bytes go (ptmx)
+	ptyWriter io.Writer            // where stdin bytes go (ptmx)
 	resizeFn  func(uint16, uint16) // called on SIGWINCH
 
 	oldState *term.State

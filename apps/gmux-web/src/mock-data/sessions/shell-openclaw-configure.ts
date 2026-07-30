@@ -5,7 +5,7 @@ const DIM = '\x1b[2m'
 const GREEN = '\x1b[32m'
 
 export default {
-  id: 'sess-openclaw-cfg',
+  id: '1u3n0gci',
   created_at: ago(10),
   command: ['openclaw', 'configure'],
   cwd: '/home/user/dev/openclaw',

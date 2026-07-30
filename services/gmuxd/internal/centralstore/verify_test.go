@@ -24,7 +24,7 @@ func TestVerifyHealthyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.InsertSession(ctx, NewSession{ID: "sess-v1", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
+	if _, _, err := store.InsertSession(ctx, NewSession{ID: "1eeu8zl6", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -91,7 +91,7 @@ func TestVerifyCorruptDatabaseFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.InsertSession(ctx, NewSession{ID: "sess-v2", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
+	if _, _, err := store.InsertSession(ctx, NewSession{ID: "1urmoa0p", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -119,7 +119,7 @@ func TestOpenCorruptDatabaseFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.InsertSession(ctx, NewSession{ID: "sess-v3", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
+	if _, _, err := store.InsertSession(ctx, NewSession{ID: "16x6ocfm", Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -158,7 +158,7 @@ func TestVerifyUnderConcurrentWriter(t *testing.T) {
 				return
 			default:
 			}
-			id := SessionID(fmt.Sprintf("sess-w%04d", i))
+			id := SessionID(fmt.Sprintf("%08d", i))
 			if _, _, err := store.InsertSession(ctx, NewSession{ID: id, Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: UnixMillis(i)}); err != nil {
 				t.Errorf("writer insert: %v", err)
 				return

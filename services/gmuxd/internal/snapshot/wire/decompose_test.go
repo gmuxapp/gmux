@@ -50,11 +50,11 @@ func newRoundTripFixture(t *testing.T) *roundTripFixture {
 			t.Fatal(err)
 		}
 	}
-	insert(centralstore.NewSession{ID: "sess-a", Adapter: "shell", CWD: "/work", CreatedAt: 1})
-	insert(centralstore.NewSession{ID: "sess-b", Adapter: "claude", CWD: "/work", CreatedAt: 2, Slug: "fix-auth"})
-	insert(centralstore.NewSession{ID: "sess-c", Adapter: "shell", CWD: "/work", CreatedAt: 3})
-	parent := centralstore.SessionID("sess-a")
-	insert(centralstore.NewSession{ID: "sess-child", Adapter: "shell", CWD: "/work", CreatedAt: 4, LaunchParentID: &parent})
+	insert(centralstore.NewSession{ID: "1mw5c5n9", Adapter: "shell", CWD: "/work", CreatedAt: 1})
+	insert(centralstore.NewSession{ID: "18wnzse2", Adapter: "claude", CWD: "/work", CreatedAt: 2, Slug: "fix-auth"})
+	insert(centralstore.NewSession{ID: "10cel6cx", Adapter: "shell", CWD: "/work", CreatedAt: 3})
+	parent := centralstore.SessionID("1mw5c5n9")
+	insert(centralstore.NewSession{ID: "10yeqnxg", Adapter: "shell", CWD: "/work", CreatedAt: 4, LaunchParentID: &parent})
 	if _, err := s.UpsertLocalPeerPlacement(ctx, centralstore.LocalPeerSubject{PeerKey: "box", SessionID: "cont-1"}, proj); err != nil {
 		t.Fatal(err)
 	}
@@ -128,20 +128,20 @@ func TestGoldenRoundTripRootReorder(t *testing.T) {
 	f := newRoundTripFixture(t)
 
 	initial := f.flatOrder()
-	want := []string{"sess-a", "sess-child", "sess-b", "sess-c", "cont-1@box"}
+	want := []string{"1mw5c5n9", "10yeqnxg", "18wnzse2", "10cel6cx", "cont-1@box"}
 	if !reflect.DeepEqual(initial, want) {
 		t.Fatalf("registration order: %v", initial)
 	}
 
-	// Roots today: [sess-a, sess-b, sess-c, cont-1@box]. Request:
-	// container first (namespaced key), sess-b's SLUG key (dropped — slug
-	// keys are not production PATCH currency), sess-c (plain ID, twice —
-	// dedup keeps the first mention), an unknown ghost key, then sess-a.
-	// sess-b, never validly mentioned, keeps relative order at the tail.
-	f.apply([]string{"cont-1@box", "fix-auth", "sess-c", "ghost-key", "sess-a", "sess-c"})
+	// Roots today: [1mw5c5n9, 18wnzse2, 10cel6cx, cont-1@box]. Request:
+	// container first (namespaced key), 18wnzse2's SLUG key (dropped — slug
+	// keys are not production PATCH currency), 10cel6cx (plain ID, twice —
+	// dedup keeps the first mention), an unknown ghost key, then 1mw5c5n9.
+	// 18wnzse2, never validly mentioned, keeps relative order at the tail.
+	f.apply([]string{"cont-1@box", "fix-auth", "10cel6cx", "ghost-key", "1mw5c5n9", "10cel6cx"})
 
 	got := f.flatOrder()
-	want = []string{"cont-1@box", "sess-c", "sess-a", "sess-child", "sess-b"}
+	want = []string{"cont-1@box", "10cel6cx", "1mw5c5n9", "10yeqnxg", "18wnzse2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("after reorder: %v want %v", got, want)
 	}
@@ -154,32 +154,32 @@ func TestGoldenRoundTripRootReorder(t *testing.T) {
 func TestGoldenRoundTripPartialRequest(t *testing.T) {
 	f := newRoundTripFixture(t)
 
-	// Mention only sess-c (root scope). Everything else keeps relative
+	// Mention only 10cel6cx (root scope). Everything else keeps relative
 	// order behind it.
-	f.apply([]string{"sess-c"})
+	f.apply([]string{"10cel6cx"})
 	got := f.flatOrder()
-	want := []string{"sess-c", "sess-a", "sess-child", "sess-b", "cont-1@box"}
+	want := []string{"10cel6cx", "1mw5c5n9", "10yeqnxg", "18wnzse2", "cont-1@box"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("partial reorder: %v want %v", got, want)
 	}
 }
 
-// TestGoldenRoundTripChildScope: give sess-a a second child; reordering the
+// TestGoldenRoundTripChildScope: give 1mw5c5n9 a second child; reordering the
 // child keys touches only the child scope (parent order intact), proving
 // the decompose emits scoped orders rather than flat rewrites.
 func TestGoldenRoundTripChildScope(t *testing.T) {
 	f := newRoundTripFixture(t)
-	parent := centralstore.SessionID("sess-a")
-	if _, _, err := f.store.InsertSession(f.ctx, centralstore.NewSession{ID: "sess-child2", Adapter: "shell", CWD: "/work", CreatedAt: 5, LaunchParentID: &parent}); err != nil {
+	parent := centralstore.SessionID("1mw5c5n9")
+	if _, _, err := f.store.InsertSession(f.ctx, centralstore.NewSession{ID: "1dy2rn04", Adapter: "shell", CWD: "/work", CreatedAt: 5, LaunchParentID: &parent}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.PlaceLocalSession(f.ctx, "sess-child2", f.proj); err != nil {
+	if _, err := f.store.PlaceLocalSession(f.ctx, "1dy2rn04", f.proj); err != nil {
 		t.Fatal(err)
 	}
 
-	f.apply([]string{"sess-child2", "sess-child"})
+	f.apply([]string{"1dy2rn04", "10yeqnxg"})
 	got := f.flatOrder()
-	want := []string{"sess-a", "sess-child2", "sess-child", "sess-b", "sess-c", "cont-1@box"}
+	want := []string{"1mw5c5n9", "1dy2rn04", "10yeqnxg", "18wnzse2", "10cel6cx", "cont-1@box"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("child reorder: %v want %v", got, want)
 	}

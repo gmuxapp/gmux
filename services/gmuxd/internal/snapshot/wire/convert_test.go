@@ -69,14 +69,14 @@ func TestTitlePrecedence(t *testing.T) {
 // concrete on the wire.
 func TestSessionConversionOverlays(t *testing.T) {
 	conv := &Converter{}
-	alive := localRow("sess-a", true, func(r *central.SessionRow) {
+	alive := localRow("1mw5c5n9", true, func(r *central.SessionRow) {
 		r.Session.StartedAt = ms(1700000001500) // sub-second component truncated
 		r.Session.Active = true
 		cols, rows := uint16(80), uint16(24)
 		r.Session.TerminalCols, r.Session.TerminalRows = &cols, &rows
 	})
 	got := conv.session(alive)
-	if !got.Alive || got.Pid != 42 || got.SocketPath != "/tmp/sess-a.sock" || got.RunnerVersion != "1.2.3" || got.BinaryHash != "abc" {
+	if !got.Alive || got.Pid != 42 || got.SocketPath != "/tmp/1mw5c5n9.sock" || got.RunnerVersion != "1.2.3" || got.BinaryHash != "abc" {
 		t.Fatalf("runtime overlay lost: %+v", got)
 	}
 	if got.CreatedAt != "2023-11-14T22:13:20Z" || got.StartedAt != "2023-11-14T22:13:21Z" {
@@ -94,12 +94,12 @@ func TestSessionConversionOverlays(t *testing.T) {
 
 	// Never-reported status emits null (production Status-pointer parity;
 	// gmux wait derives died-vs-idle from this — not an accepted diff).
-	unreported := localRow("sess-n", true, func(r *central.SessionRow) { r.Session.StatusReported = false })
+	unreported := localRow("1o6h184m", true, func(r *central.SessionRow) { r.Session.StatusReported = false })
 	if got := conv.session(unreported); got.Status != nil {
 		t.Fatalf("never-reported status must be null on the wire: %+v", got.Status)
 	}
 
-	dead := localRow("sess-d", false, func(r *central.SessionRow) {
+	dead := localRow("1or99tfj", false, func(r *central.SessionRow) {
 		r.Session.ExitedAt = ms(1700000002000)
 		code := 1
 		r.Session.ExitCode = &code
@@ -129,7 +129,7 @@ func TestResumeCommandRewrite(t *testing.T) {
 	}
 	conv := &Converter{ResumeCommand: resolver}
 
-	dead := localRow("sess-d", false, func(r *central.SessionRow) { r.Session.ConversationRef = "known-ref" })
+	dead := localRow("1or99tfj", false, func(r *central.SessionRow) { r.Session.ConversationRef = "known-ref" })
 	if got := conv.session(dead); !reflect.DeepEqual(got.Command, []string{"shell", "resume", "known-ref"}) || !got.Resumable {
 		t.Fatalf("rewrite: %+v", got)
 	}
@@ -137,20 +137,20 @@ func TestResumeCommandRewrite(t *testing.T) {
 		t.Fatal("durable command mutated")
 	}
 
-	live := localRow("sess-a", true, func(r *central.SessionRow) { r.Session.ConversationRef = "known-ref" })
+	live := localRow("1mw5c5n9", true, func(r *central.SessionRow) { r.Session.ConversationRef = "known-ref" })
 	if got := conv.session(live); !reflect.DeepEqual(got.Command, []string{"bash"}) {
 		t.Fatalf("live row rewritten: %+v", got)
 	}
 
 	// Non-resumable conversation: presentation must agree with execution.
-	unresolved := localRow("sess-u", false, func(r *central.SessionRow) { r.Session.ConversationRef = "gone-ref" })
+	unresolved := localRow("140zgci1", false, func(r *central.SessionRow) { r.Session.ConversationRef = "gone-ref" })
 	if got := conv.session(unresolved); len(got.Command) != 0 || got.Resumable {
 		t.Fatalf("empty resolution must not advertise a resume: %+v", got)
 	}
 
 	// No conversation ref at all: nothing to derive from, so the durable
 	// launch command stands (unchanged behavior).
-	noRef := localRow("sess-n", false)
+	noRef := localRow("1o6h184m", false)
 	if got := conv.session(noRef); !reflect.DeepEqual(got.Command, []string{"bash"}) || !got.Resumable {
 		t.Fatalf("ref-less row must keep launch command: %+v", got)
 	}
@@ -162,7 +162,7 @@ func TestResumeCommandRewrite(t *testing.T) {
 
 	// Verdict narrowing (composer Resumable=false despite durable command)
 	// wins over a successful rewrite.
-	gone := localRow("sess-g", false, func(r *central.SessionRow) {
+	gone := localRow("1k41uwyr", false, func(r *central.SessionRow) {
 		r.Session.ConversationRef = "known-ref"
 		r.Resumable = false
 	})
@@ -173,7 +173,7 @@ func TestResumeCommandRewrite(t *testing.T) {
 	// Empty durable command + a resolvable ref: resumable derives from the
 	// rewritten command (production parity — Resumable follows the
 	// post-rewrite command).
-	empty := localRow("sess-e", false, func(r *central.SessionRow) {
+	empty := localRow("1q4ts9e1", false, func(r *central.SessionRow) {
 		r.Session.Command = []string{}
 		r.Session.ConversationRef = "known-ref"
 		r.Resumable = false // composer: no durable command

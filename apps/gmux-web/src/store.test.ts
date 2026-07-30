@@ -330,7 +330,7 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
 describe('toUISession project stamp passthrough', () => {
   it('preserves project_slug and project_index from the wire', () => {
     const ui = toUISession({
-      id: 'sess-1', alive: true,
+      id: '1vshk4fu', alive: true,
       project_slug: 'gmux', project_index: 3,
     } as any)
     expect(ui.project_slug).toBe('gmux')
@@ -342,7 +342,7 @@ describe('toUISession project stamp passthrough', () => {
     // falsy in JS. Guards against future ||-coercion regressions on
     // this field.
     const ui = toUISession({
-      id: 'sess-1', alive: true,
+      id: '1vshk4fu', alive: true,
       project_slug: 'gmux', project_index: 0,
     } as any)
     expect(ui.project_index).toBe(0)
@@ -350,7 +350,7 @@ describe('toUISession project stamp passthrough', () => {
 
   it('leaves stamps undefined when the wire omits them', () => {
     const ui = toUISession({
-      id: 'sess-1', alive: true,
+      id: '1vshk4fu', alive: true,
     } as any)
     expect(ui.project_slug).toBeUndefined()
   })
@@ -360,14 +360,14 @@ describe('toUISession project stamp passthrough', () => {
     // dashboard's Recent section sort. Pure passthrough at the
     // boundary; no client-side derivation.
     const ui = toUISession({
-      id: 'sess-1', alive: true,
+      id: '1vshk4fu', alive: true,
       last_output_at: '2026-01-15T08:00:00Z',
     } as any)
     expect(ui.last_output_at).toBe('2026-01-15T08:00:00Z')
   })
 
   it('leaves last_output_at undefined when the wire omits it', () => {
-    const ui = toUISession({ id: 'sess-1', alive: true } as any)
+    const ui = toUISession({ id: '1vshk4fu', alive: true } as any)
     expect(ui.last_output_at).toBeUndefined()
   })
 
@@ -377,7 +377,7 @@ describe('toUISession project stamp passthrough', () => {
     // as no stamp; normalize at the boundary so consumers never
     // see the difference.
     const ui = toUISession({
-      id: 'sess-1', alive: true, project_slug: '',
+      id: '1vshk4fu', alive: true, project_slug: '',
     } as any)
     expect(ui.project_slug).toBeUndefined()
   })
@@ -386,18 +386,18 @@ describe('toUISession project stamp passthrough', () => {
 describe('upsertSession', () => {
   it('inserts a new session and returns true', () => {
     const isNew = upsertSession({
-      id: 'sess-1', alive: true, cwd: '/home/user',
+      id: '1vshk4fu', alive: true, cwd: '/home/user',
       command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(isNew).toBe(true)
     expect(sessions.value).toHaveLength(1)
-    expect(sessions.value[0].id).toBe('sess-1')
+    expect(sessions.value[0].id).toBe('1vshk4fu')
   })
 
   it('updates an existing session and returns false', () => {
-    _rawSessions.value = [makeSession({ id: 'sess-1', title: 'old' })]
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', title: 'old' })]
     const isNew = upsertSession({
-      id: 'sess-1', alive: true, title: 'new',
+      id: '1vshk4fu', alive: true, title: 'new',
       cwd: '/home/user', command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(isNew).toBe(false)
@@ -407,11 +407,11 @@ describe('upsertSession', () => {
 
   it('preserves other sessions during update', () => {
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', title: 'first' }),
-      makeSession({ id: 'sess-2', title: 'second' }),
+      makeSession({ id: '1vshk4fu', title: 'first' }),
+      makeSession({ id: '155mk8b7', title: 'second' }),
     ]
     upsertSession({
-      id: 'sess-1', alive: false, title: 'updated',
+      id: '1vshk4fu', alive: false, title: 'updated',
       cwd: '/home/user', command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(sessions.value).toHaveLength(2)
@@ -427,21 +427,21 @@ describe('upsertSession', () => {
     sessionsLoaded.value = true
     worldLoaded.value = true
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
     ]
     // Simulate the session being selected via URL.
     urlPath.value = '/myproject/pi/fix-auth'
-    expect(selectedId.value).toBe('sess-1')
+    expect(selectedId.value).toBe('1vshk4fu')
 
     // SSE upserts with a new slug (e.g., /new changed the active file).
     upsertSession({
-      id: 'sess-1', alive: true, cwd: '/dev/project', adapter: 'pi',
+      id: '1vshk4fu', alive: true, cwd: '/dev/project', adapter: 'pi',
       slug: 'refactor-login', command: ['pi'], title: 'pi',
     } as any)
 
     // URL should be atomically rewritten; session stays selected.
     expect(urlPath.value).toBe('/myproject/pi/refactor-login')
-    expect(selectedId.value).toBe('sess-1')
+    expect(selectedId.value).toBe('1vshk4fu')
   })
 
   it('does not rewrite URL when a non-selected session slug changes', () => {
@@ -452,21 +452,21 @@ describe('upsertSession', () => {
     sessionsLoaded.value = true
     worldLoaded.value = true
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
-      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'old-slug' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: '155mk8b7', cwd: '/dev/project', adapter: 'pi', slug: 'old-slug' }),
     ]
     urlPath.value = '/myproject/pi/fix-auth'
-    expect(selectedId.value).toBe('sess-1')
+    expect(selectedId.value).toBe('1vshk4fu')
 
-    // sess-2's slug changes, but it's not the selected session.
+    // 155mk8b7's slug changes, but it's not the selected session.
     upsertSession({
-      id: 'sess-2', alive: true, cwd: '/dev/project', adapter: 'pi',
+      id: '155mk8b7', alive: true, cwd: '/dev/project', adapter: 'pi',
       slug: 'new-slug', command: ['pi'], title: 'pi',
     } as any)
 
     // URL should be unchanged.
     expect(urlPath.value).toBe('/myproject/pi/fix-auth')
-    expect(selectedId.value).toBe('sess-1')
+    expect(selectedId.value).toBe('1vshk4fu')
   })
 })
 
@@ -492,7 +492,7 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     setNavigate((url, replace) => { navCalls.push([url, replace]) })
     _setRawWorld({ projects: testProjects })
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
     ]
     sessionsLoaded.value = true
     worldLoaded.value = true
@@ -500,53 +500,53 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
   })
 
   it('rewrites the URL and keeps the session view when the selected slug changes', () => {
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
 
     // Snapshot: same id, resumed slug, brand-new array (the wire shape).
     applySessionsSnapshot([
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'refactor-login' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'refactor-login' }),
     ])
 
     expect(urlPath.value).toBe('/myproject/pi/refactor-login')
     // The user stays on the terminal — no boot to the project hub.
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
     // Address bar synced via replaceState (replace=true), so back/forward
     // history isn't polluted.
     expect(navCalls).toContainEqual(['/myproject/pi/refactor-login', true])
   })
 
   it('atomically switches the selected row to its full ID when a duplicate slug arrives', () => {
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
 
     applySessionsSnapshot([
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: true }),
-      makeSession({ id: 'sess-dead', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: false }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: true }),
+      makeSession({ id: '1eha7rdu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: false }),
     ])
 
-    expect(urlPath.value).toBe('/myproject/pi/sess-1')
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
-    expect(navCalls).toContainEqual(['/myproject/pi/sess-1', true])
+    expect(urlPath.value).toBe('/myproject/pi/~1vshk4fu')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
+    expect(navCalls).toContainEqual(['/myproject/pi/~1vshk4fu', true])
   })
 
   it('leaves the URL untouched when the selected slug is unchanged', () => {
     applySessionsSnapshot([
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', title: 'now working' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', title: 'now working' }),
     ])
 
     expect(urlPath.value).toBe('/myproject/pi/fix-auth')
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
     expect(navCalls).toEqual([])
   })
 
   it('does not rewrite when a non-selected session changes slug', () => {
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
-      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'old' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: '155mk8b7', cwd: '/dev/project', adapter: 'pi', slug: 'old' }),
     ]
 
     applySessionsSnapshot([
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
-      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'new' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: '155mk8b7', cwd: '/dev/project', adapter: 'pi', slug: 'new' }),
     ])
 
     expect(urlPath.value).toBe('/myproject/pi/fix-auth')
@@ -566,10 +566,10 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     urlPath.value = '/'
     sessionsLoaded.value = false
     applySessionsSnapshot([
-      makeSession({ id: 'sess-9', cwd: '/dev/project', adapter: 'pi', slug: 'x' }),
+      makeSession({ id: '12ak7jhz', cwd: '/dev/project', adapter: 'pi', slug: 'x' }),
     ])
     expect(sessionsLoaded.value).toBe(true)
-    expect(sessions.value.map(s => s.id)).toContain('sess-9')
+    expect(sessions.value.map(s => s.id)).toContain('12ak7jhz')
     expect(navCalls).toEqual([])
   })
 })
@@ -586,7 +586,7 @@ describe('deep-link refresh: snapshot ordering race (#308-adjacent)', () => {
   it('does not resolve a session URL to home before the world loads', () => {
     urlPath.value = '/myproject/pi/fix-auth'
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', project_slug: 'myproject' }),
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', project_slug: 'myproject' }),
     ]
     // Sessions snapshot arrived; world has not (projects still empty).
     sessionsLoaded.value = true
@@ -600,23 +600,23 @@ describe('deep-link refresh: snapshot ordering race (#308-adjacent)', () => {
     _setRawWorld({ projects: [{ slug: 'myproject', match: [{ path: '/dev/project' }] }] })
     worldLoaded.value = true
 
-    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
-    expect(selectedId.value).toBe('sess-1')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
+    expect(selectedId.value).toBe('1vshk4fu')
   })
 })
 
 describe('removeSession', () => {
   it('removes the session with the given id', () => {
     _rawSessions.value = [
-      makeSession({ id: 'sess-1' }),
-      makeSession({ id: 'sess-2' }),
+      makeSession({ id: '1vshk4fu' }),
+      makeSession({ id: '155mk8b7' }),
     ]
-    removeSession('sess-1')
-    expect(sessions.value.map(s => s.id)).toEqual(['sess-2'])
+    removeSession('1vshk4fu')
+    expect(sessions.value.map(s => s.id)).toEqual(['155mk8b7'])
   })
 
   it('is a no-op for unknown ids', () => {
-    _rawSessions.value = [makeSession({ id: 'sess-1' })]
+    _rawSessions.value = [makeSession({ id: '1vshk4fu' })]
     removeSession('ghost')
     expect(sessions.value).toHaveLength(1)
   })
@@ -628,34 +628,34 @@ describe('markSessionRead', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
   it('clears unread flag on the target session', () => {
-    _rawSessions.value = [makeSession({ id: 'sess-1', unread: true })]
-    markSessionRead('sess-1')
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true })]
+    markSessionRead('1vshk4fu')
     expect(sessions.value[0].unread).toBe(false)
   })
 
   it('clears error flag from status', () => {
     _rawSessions.value = [makeSession({
-      id: 'sess-1',
+      id: '1vshk4fu',
       status: { active: false, error: true },
     })]
-    markSessionRead('sess-1')
+    markSessionRead('1vshk4fu')
     expect(sessions.value[0].status?.error).toBe(false)
   })
 
   it('does not touch other sessions', () => {
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', unread: true }),
-      makeSession({ id: 'sess-2', unread: true }),
+      makeSession({ id: '1vshk4fu', unread: true }),
+      makeSession({ id: '155mk8b7', unread: true }),
     ]
-    markSessionRead('sess-1')
+    markSessionRead('1vshk4fu')
     expect(sessions.value[0].unread).toBe(false)
     expect(sessions.value[1].unread).toBe(true)
   })
 
   it('posts to the server', () => {
-    _rawSessions.value = [makeSession({ id: 'sess-1', unread: true })]
-    markSessionRead('sess-1')
-    expect(fetch).toHaveBeenCalledWith('/v1/sessions/sess-1/read', { method: 'POST' })
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true })]
+    markSessionRead('1vshk4fu')
+    expect(fetch).toHaveBeenCalledWith('/v1/sessions/1vshk4fu/read', { method: 'POST' })
   })
 })
 
@@ -670,31 +670,31 @@ describe('activity tracking', () => {
   })
 
   it('marks a session as active immediately', () => {
-    handleActivity('sess-1')
-    expect(isSessionActive('sess-1')).toBe(true)
-    expect(isSessionFading('sess-1')).toBe(false)
+    handleActivity('1vshk4fu')
+    expect(isSessionActive('1vshk4fu')).toBe(true)
+    expect(isSessionFading('1vshk4fu')).toBe(false)
   })
 
   it('transitions to fading after the active window', () => {
-    handleActivity('sess-1')
+    handleActivity('1vshk4fu')
     vi.advanceTimersByTime(3000)
-    expect(isSessionActive('sess-1')).toBe(false)
-    expect(isSessionFading('sess-1')).toBe(true)
+    expect(isSessionActive('1vshk4fu')).toBe(false)
+    expect(isSessionFading('1vshk4fu')).toBe(true)
   })
 
   it('clears completely after fade-out', () => {
-    handleActivity('sess-1')
+    handleActivity('1vshk4fu')
     vi.advanceTimersByTime(3000 + 800)
-    expect(isSessionActive('sess-1')).toBe(false)
-    expect(isSessionFading('sess-1')).toBe(false)
+    expect(isSessionActive('1vshk4fu')).toBe(false)
+    expect(isSessionFading('1vshk4fu')).toBe(false)
   })
 
   it('resets the timer when activity fires again', () => {
-    handleActivity('sess-1')
+    handleActivity('1vshk4fu')
     vi.advanceTimersByTime(2000) // still active
-    handleActivity('sess-1')     // reset
+    handleActivity('1vshk4fu')     // reset
     vi.advanceTimersByTime(2000) // 2s since reset, still active
-    expect(isSessionActive('sess-1')).toBe(true)
+    expect(isSessionActive('1vshk4fu')).toBe(true)
   })
 })
 
@@ -793,17 +793,17 @@ describe('navigateToSession', () => {
   })
 
   it('returns false and does not navigate when projects have not loaded', () => {
-    _rawSessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p' })]
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', cwd: '/dev/p' })]
     // projects left empty: simulates the snapshot.sessions-vs-snapshot.world
     // race where sessions arrive before projects.
-    expect(navigateToSession('sess-1')).toBe(false)
+    expect(navigateToSession('1vshk4fu')).toBe(false)
     expect(navigateMock).not.toHaveBeenCalled()
   })
 
   it('returns true and dispatches the project-prefixed URL once both are loaded', () => {
     _setRawWorld({ projects: [{ slug: 'myproject', match: [{ path: '/dev/p' }] }] })
-    _rawSessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p', adapter: 'shell' })]
-    expect(navigateToSession('sess-1', true)).toBe(true)
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', cwd: '/dev/p', adapter: 'shell' })]
+    expect(navigateToSession('1vshk4fu', true)).toBe(true)
     expect(navigateMock).toHaveBeenCalledTimes(1)
     const [url, replace] = navigateMock.mock.calls[0]
     expect(url).toMatch(/^\/myproject\/shell\//)

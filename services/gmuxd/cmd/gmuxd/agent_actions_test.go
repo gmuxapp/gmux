@@ -1715,7 +1715,7 @@ func TestAgentResumeGuard(t *testing.T) {
 
 // productionSessionID is a well-formed local session ID: the coordinator
 // validates it because the ID becomes a filesystem path segment.
-const productionSessionID = centralstore.SessionID("sess-agent-production")
+const productionSessionID = centralstore.SessionID("1o6lhevd")
 
 // productionIncarnation is the registered runner's ephemeral identity. It is
 // not decoration: semantic delivery is conditional on it, so a registration

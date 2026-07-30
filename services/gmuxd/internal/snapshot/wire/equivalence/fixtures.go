@@ -482,25 +482,25 @@ func DefaultWorld() *World {
 		LocalPeers: []string{"box"},
 		Sessions: []FixtureSession{
 			{
-				ID: "sess-live", Adapter: "codex", Command: []string{"codex", "--full-auto"},
+				ID: "184lbyqm", Adapter: "codex", Command: []string{"codex", "--full-auto"},
 				Cwd: "/work/app", WorkspaceRoot: "/work/app", Remotes: map[string]string{"origin": "git@x:app"},
 				AdapterTitle: "Fix auth flow", Subtitle: "3 files", Slug: "fix-auth",
-				ConversationRef: "/conv/live.jsonl", Alive: true, Pid: 101, SocketPath: "/tmp/sess-live.sock",
+				ConversationRef: "/conv/live.jsonl", Alive: true, Pid: 101, SocketPath: "/tmp/184lbyqm.sock",
 				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Active: true,
 				Created: base, Started: base.Add(time.Second), LastActivity: base.Add(time.Minute),
 				TerminalCols: 120, TerminalRows: 40,
 			},
 			{
-				ID: "sess-child", Adapter: "shell", Command: []string{"nvim", "."},
-				Cwd: "/work/app", ShellTitle: "nvim", Parent: "sess-live",
-				Alive: true, Pid: 102, SocketPath: "/tmp/sess-child.sock",
+				ID: "10yeqnxg", Adapter: "shell", Command: []string{"nvim", "."},
+				Cwd: "/work/app", ShellTitle: "nvim", Parent: "184lbyqm",
+				Alive: true, Pid: 102, SocketPath: "/tmp/10yeqnxg.sock",
 				RunnerVersion: "2.0.0", BinaryHash: "hash-a",
 				Created: base.Add(2 * time.Second),
 			},
 			{
 				// Dead + resumable: conversation ref present, resume-command
 				// rewrite applies; empty titles with a command and no titler.
-				ID: "sess-dead", Adapter: "claude", Command: []string{"claude", "--continue"},
+				ID: "1eha7rdu", Adapter: "claude", Command: []string{"claude", "--continue"},
 				Cwd: "/work/app", ConversationRef: "/conv/dead.jsonl",
 				Alive: false, ExitCode: &exit, Unread: true, Error: true,
 				Created: base.Add(-time.Hour), Started: base.Add(-time.Hour), Exited: base.Add(-30 * time.Minute),
@@ -510,10 +510,10 @@ func DefaultWorld() *World {
 				// Intentionally interrupted turn (ADR 0027): a durable
 				// third status fact that must survive every projection —
 				// inactive, NOT an error, and never unread.
-				ID: "sess-interrupted", Adapter: "pi", Command: []string{"pi"},
+				ID: "19vfj30y", Adapter: "pi", Command: []string{"pi"},
 				Cwd: "/work/app", AdapterTitle: "Stopped mid-thought",
 				ConversationRef: "/conv/interrupted.jsonl",
-				Alive:           true, Pid: 105, SocketPath: "/tmp/sess-interrupted.sock",
+				Alive:           true, Pid: 105, SocketPath: "/tmp/19vfj30y.sock",
 				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Interrupted: true,
 				Created: base.Add(8 * time.Second), Started: base.Add(9 * time.Second),
 				LastActivity: base.Add(10 * time.Second),
@@ -522,20 +522,20 @@ func DefaultWorld() *World {
 				// Active AND error: a retry/rate-limit condition is an
 				// attention state on an OPEN turn — the orthogonality the
 				// status model has to keep representable end to end.
-				ID: "sess-retrying", Adapter: "codex", Command: []string{"codex"},
+				ID: "1hzt4gya", Adapter: "codex", Command: []string{"codex"},
 				Cwd: "/work/lib", AdapterTitle: "Rate limited",
-				Alive: true, Pid: 106, SocketPath: "/tmp/sess-retrying.sock",
+				Alive: true, Pid: 106, SocketPath: "/tmp/1hzt4gya.sock",
 				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Active: true, Error: true,
 				Created: base.Add(11 * time.Second), Started: base.Add(12 * time.Second),
 			},
 			{
 				// Empty-title edge: no titles, no command → adapter name.
-				ID: "sess-bare", Adapter: "shell", Command: []string{},
+				ID: "1ucq946m", Adapter: "shell", Command: []string{},
 				Cwd: "/work/lib", Alive: false,
 				Created: base.Add(-2 * time.Hour),
 			},
 			{
-				ID: "sess-hidden", Adapter: "shell", Command: []string{"bash"},
+				ID: "17gy8vj5", Adapter: "shell", Command: []string{"bash"},
 				Cwd: "/work/app", Alive: false, Dismissed: true,
 				Created: base.Add(-3 * time.Hour),
 			},
@@ -543,8 +543,8 @@ func DefaultWorld() *World {
 				// Never-reported status: production Status == nil, wire
 				// "status": null (fable M-1 — NOT an accepted diff). Also
 				// breaks the alive/dead count symmetry (tests review H-1).
-				ID: "sess-nostatus", Adapter: "shell", Command: []string{"bash"},
-				Cwd: "/work/lib", Alive: true, Pid: 103, SocketPath: "/tmp/sess-nostatus.sock",
+				ID: "101tbmj3", Adapter: "shell", Command: []string{"bash"},
+				Cwd: "/work/lib", Alive: true, Pid: 103, SocketPath: "/tmp/101tbmj3.sock",
 				StatusNeverReported: true,
 				Created:             base.Add(5 * time.Second),
 			},
@@ -552,9 +552,9 @@ func DefaultWorld() *World {
 				// Promoted child (design §8 "incl. promoted children"): a
 				// launched child promoted back to a sidebar root — FD-1
 				// places it in the root scope, not under its parent.
-				ID: "sess-promoted", Adapter: "shell", Command: []string{"htop"},
-				Cwd: "/work/app", ShellTitle: "htop", Parent: "sess-live", Promoted: true,
-				Alive: true, Pid: 104, SocketPath: "/tmp/sess-promoted.sock",
+				ID: "1o4zbq7b", Adapter: "shell", Command: []string{"htop"},
+				Cwd: "/work/app", ShellTitle: "htop", Parent: "184lbyqm", Promoted: true,
+				Alive: true, Pid: 104, SocketPath: "/tmp/1o4zbq7b.sock",
 				Created: base.Add(6 * time.Second),
 			},
 			{
@@ -588,7 +588,7 @@ func DefaultWorld() *World {
 			// FD-1 flatten order: parent directly followed by its child;
 			// the promoted child sits at the root-scope tail, not under
 			// its parent.
-			Sessions: []string{"sess-live", "sess-child", "sess-dead", "sess-promoted", "cont-1@box"},
+			Sessions: []string{"184lbyqm", "10yeqnxg", "1eha7rdu", "1o4zbq7b", "cont-1@box"},
 		}},
 		References:      []FixtureReference{{Slug: "tower-proj", Peer: "tower", NodeID: "node-tower-1"}},
 		Peers:           []peering.PeerInfo{{Name: "box", Status: "connected", Local: true, Source: "devcontainer"}, {Name: "tower", URL: "https://tower:443", Status: "connected", Version: "2.0.0"}},

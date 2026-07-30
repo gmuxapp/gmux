@@ -38,7 +38,7 @@ func metaHandler(sess store.Session) http.Handler {
 // runner's /meta cannot speak to it on resume.
 func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 	srv := startUnixServer(t, metaHandler(store.Session{
-		ID:      "sess-resume",
+		ID:      "1o4q9sgw",
 		Adapter: "shell",
 		Cwd:     t.TempDir(),
 		Alive:   true,
@@ -49,7 +49,7 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 
 	sessions := store.New()
 	sessions.Upsert(store.Session{
-		ID:      "sess-resume",
+		ID:      "1o4q9sgw",
 		Adapter: "shell",
 		Cwd:     "/old/cwd",
 		Alive:   false, // dead: the resume target
@@ -60,9 +60,9 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	got, ok := sessions.Get("sess-resume")
+	got, ok := sessions.Get("1o4q9sgw")
 	if !ok {
-		t.Fatal("session sess-resume missing from store after Register")
+		t.Fatal("session 1o4q9sgw missing from store after Register")
 	}
 	if got.Slug != "post-attribution-name" {
 		t.Errorf("Slug = %q, want %q (persisted slug must survive re-registration)", got.Slug, "post-attribution-name")
@@ -87,7 +87,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 	// The runner reports fresh runtime state with empty values
 	// for everything the agent hook would have set.
 	srv := startUnixServer(t, metaHandler(store.Session{
-		ID:        "sess-resume",
+		ID:        "1o4q9sgw",
 		Adapter:   "pi",
 		Cwd:       "/work/repo",
 		Alive:     true,
@@ -98,7 +98,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 
 	sessions := store.New()
 	sessions.Upsert(store.Session{
-		ID:            "sess-resume",
+		ID:            "1o4q9sgw",
 		Adapter:       "pi",
 		Cwd:           "/work/repo",
 		Alive:         false,
@@ -115,7 +115,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	got, ok := sessions.Get("sess-resume")
+	got, ok := sessions.Get("1o4q9sgw")
 	if !ok {
 		t.Fatal("session missing after Register")
 	}
@@ -161,7 +161,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 	cwd := filepath.Join(t.TempDir(), "myproject")
 	srv := startUnixServer(t, metaHandler(store.Session{
-		ID:      "sess-fresh",
+		ID:      "1bi7j545",
 		Adapter: "shell",
 		Cwd:     cwd,
 		Alive:   true,
@@ -177,9 +177,9 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	got, ok := sessions.Get("sess-fresh")
+	got, ok := sessions.Get("1bi7j545")
 	if !ok {
-		t.Fatal("session sess-fresh missing from store after Register")
+		t.Fatal("session 1bi7j545 missing from store after Register")
 	}
 	if got.Slug == "" {
 		t.Error("Slug = \"\", want non-empty (Shell.OnRegister derives a slug from cwd)")
@@ -217,14 +217,14 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 
 	sessions := store.New()
 	sessions.Upsert(store.Session{
-		ID:         "sess-graceful-kill",
+		ID:         "1zk0mnrf",
 		Adapter:    "shell",
 		Alive:      true,
 		SocketPath: srv.socketPath,
 	})
 
 	subs := NewSubscriptions(sessions)
-	subs.Subscribe("sess-graceful-kill", srv.socketPath)
+	subs.Subscribe("1zk0mnrf", srv.socketPath)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
 
 	// Wait for the subscription's HTTP request to actually land at
@@ -234,7 +234,7 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 	// and the daemon is committed to that runner as its source of
 	// truth.
 	srv.waitOpen(t, 1)
-	if !subs.IsActive("sess-graceful-kill") {
+	if !subs.IsActive("1zk0mnrf") {
 		t.Fatal("subscription dropped before test could exercise the race")
 	}
 
@@ -248,7 +248,7 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 	// classifies the session as dead and clears its attribution.
 	Scan(sessions, subs, nil)
 
-	got, _ := sessions.Get("sess-graceful-kill")
+	got, _ := sessions.Get("1zk0mnrf")
 	if !got.Alive {
 		t.Errorf("session marked dead by Scan while subscription was still active; the SSE flow is the authoritative liveness signal during graceful kill")
 	}
