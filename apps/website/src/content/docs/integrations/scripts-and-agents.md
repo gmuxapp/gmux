@@ -32,7 +32,7 @@ When stdin is not a TTY, `gmux -- <cmd>`:
 
 - **Blocks** until the child exits.
 - **Streams the child's output to stdout** — ANSI escapes stripped and CRLF normalised to LF, so `gmux -- make build | tail` reads the build's own last lines. The full escape stream still reaches the UI and scrollback.
-- **Prints the session id on stderr**, before the child runs, so a watcher can attach or `gmux tail` the session mid-run without disturbing stdout.
+- **Prints the session id on stderr** as soon as the child and PTY exist, so a watcher can attach or `gmux tail` the session while it runs without disturbing stdout. A fast child may write some or all of its stdout before the id appears on stderr.
 - **Exits with the child's exit code**, so `gmux -- make build < /dev/null && deploy.sh` works.
 - **Keeps the session in the UI** for the duration: a human can watch it live in the browser without affecting the script.
 
