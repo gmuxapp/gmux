@@ -72,9 +72,8 @@ without polling. `-d` must come before `--`.
 
 Sessions are **local by default**: a bare id only ever matches a session on
 this machine, so you can't accidentally act on another host. To target a peer,
-suffix the id with `@<peer>` (see `gmux ls --all`). IDs are the 8-character
-full eight-character form; verbs also accept a unique ID prefix or
-the session's slug.
+suffix the id with `@<peer>` (see `gmux ls --all`). IDs use the full
+8-character form; verbs also accept a unique ID prefix or the session's slug.
 
 ### `gmux ls`
 
@@ -209,9 +208,10 @@ gmuxd's local IPC: the daemon's Unix socket is owner-only, so only your user
 can send to sessions on this host. Peer sessions are reached through gmuxd's
 authenticated proxy.
 
-### `gmux wait <id>`
+### `gmux wait <id>...`
 
 ```
+gmux wait [--quiet] [--timeout N] <id> [<id>...]
 gmux wait [--quiet] [--timeout N] [--for-text S|--for-regex P] <id>
 ```
 
@@ -286,17 +286,48 @@ report=$(gmux wait a3f20187)      # the exchange report; check $? for the verdic
 gmux wait --quiet a3f20187        # synchronize only, print nothing
 ```
 
+**Multiple sessions.** `gmux wait` accepts several ids and waits on all of
+them concurrently; one `--timeout` bounds the whole call. All ids are resolved
+before anything is armed — an unknown or ambiguous id fails the command
+immediately on stderr (exit 1, nothing waited, running agents untouched).
+Reports print after every session settles, in **argument order**, each block
+preceded by a header when more than one id was given:
+
+```
+=== a3f20187 ===
+
+[USER]: review the diff …
+…
+
+=== b7c01123 ===
+
+[USER]: check concurrency …
+…
+```
+
+The exit code is the worst verdict across the sessions: `0` only if every
+activity completed; else `1` if any failed or the timeout elapsed; else `2` if
+any was interrupted. Duplicate resolved ids are refused, and
+`--for-text`/`--for-regex` remain single-id.
+
 **The exit code is the verdict; stdout is the report.** The report is printed
 for **every** outcome gmux can observe — completed, interrupted, failed, and
 timed out alike. A nonzero exit with a stdout report means "the wait did its
 job; here is the bad news": an interrupted activity's report ends
 `[Agent interrupted]` (exit 2), a failed one ends `[Agent failed: <reason>]`
-(exit 1), and a timeout ends
-`[Wait timed out after Ns; agent active, N iterations so far...]` (exit 1) —
-the agent keeps running. stderr is reserved for gmux's **inability** to produce
+(exit 1). An authoritative timeout report ends
+`[Wait timed out after Ns; agent active, N iterations so far...]` (exit 1); if
+the whole-call deadline wins before that report arrives, gmux instead prints
+`[Wait timed out after Ns; session state unknown]`. In either case the agent
+keeps running. stderr is reserved for gmux's **inability** to produce
 the report at all: an unknown session, an unsupported adapter, a daemon or
-protocol failure. Those exit 1 with an empty stdout. There is no `--json` on
-`wait` today; script against the exit code and the report.
+protocol failure. A pre-arm resolution failure exits 1 with empty stdout, as
+does the applicable single-session inability-to-report case. Once a
+multi-wait is armed, however, one report-production failure can coexist with
+ordered stdout blocks from sessions that succeeded (headers still identify
+all requested sessions) while stderr diagnoses the missing report. The
+aggregate exit remains 1. There is no `--json` on `wait` today; script against
+the exit code, available report blocks, and stderr.
 
 **The wait is observational.** Nothing that enters the running loop ends the
 wait early: somebody else's `--steer`, a `--follow-up` merged into the loop, a
@@ -329,9 +360,13 @@ only what it knows rather than guessing; read the conversation with
 `--quiet` the first signal prints nothing either — exit `128+N`,
 verdict-only. `gmux wait <id>` re-arms.
 
-Also result-free, and perfectly waitable: shell/process sessions, agents
-without a renderer (Claude, Codex), and output-condition waits — they
-synchronize and exit by the verdict, printing no report.
+Shell/process sessions and agents without rendered conversation history are
+still perfectly waitable. A non-quiet bare wait prints the exchange format's
+minimal status markers (typically `[No exchanges yet]`, plus an outcome marker
+for failure, interruption, or timeout) rather than terminal output; it does
+not silently produce an empty stream. Output-condition waits are the
+result-free exception: they synchronize and exit by the verdict without a
+report. Use `--quiet` to suppress all bare-wait report or marker output.
 
 **Output conditions.** Instead of the idle signal, wait until specific text
 appears in the session's output:
@@ -366,7 +401,9 @@ support is pending).
 `gmux send` types bytes at a terminal. The `gmux agent` verbs speak to the
 agent itself: they wait until it can accept input, submit the way that agent
 expects, and report what the daemon actually observed. Use them for agent
-sessions and keep `send`/`send-keys` for raw keystrokes.
+sessions and keep `send`/`send-keys` for raw keystrokes. For the patterns —
+launch/harvest, parallel fan-out, workspaces per agent — see
+[Orchestrating agents](/orchestrating-agents/).
 
 Agent sessions on **this host** only, and **pi** only for now. Other agents
 (Claude Code, Codex) report an explicit "unsupported" error rather than
