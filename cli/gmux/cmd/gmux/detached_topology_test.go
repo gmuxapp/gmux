@@ -127,7 +127,10 @@ func TestDetachedTopologyCleanup(t *testing.T) {
 			_ = gateR.Close()
 			holdR, hold, _ := os.Pipe()
 			_ = holdR.Close()
-			_, err = awaitDetachedHandshake(cmd, controlR, gateW, hold, time.Now().Add(50*time.Millisecond), 250*time.Millisecond)
+			// CI can take well over 50ms merely to schedule the two nested
+			// test processes. Keep the deadline finite while allowing the
+			// target to publish its PID before exercising cleanup.
+			_, err = awaitDetachedHandshake(cmd, controlR, gateW, hold, time.Now().Add(500*time.Millisecond), 250*time.Millisecond)
 			_ = controlR.Close()
 			if err == nil {
 				t.Fatal("expected failure")
