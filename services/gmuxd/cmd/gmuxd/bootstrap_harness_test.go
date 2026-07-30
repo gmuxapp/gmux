@@ -165,6 +165,9 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	dir := t.TempDir()
 	fleet := newHarnessFleet(2)
 	s, first := openHarness(t, dir, fleet, nil)
+	// This test validates restart boundaries, not the tiny timeout behavior
+	// covered above. Leave enough scheduling budget for loaded/race CI hosts.
+	first.cfg.RunnerBudget, first.cfg.ConvergeDeadline = 300*time.Millisecond, time.Second
 	firstCtx, stopFirst := context.WithCancel(context.Background())
 	if _, err := first.Converge(firstCtx); err != nil {
 		t.Fatal(err)
@@ -202,6 +205,7 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	}
 
 	s, third := openHarness(t, dir, fleet2, nil)
+	third.cfg.RunnerBudget, third.cfg.ConvergeDeadline = 300*time.Millisecond, time.Second
 	defer s.Close()
 	if _, err := third.Converge(context.Background()); err != nil {
 		t.Fatal(err)
