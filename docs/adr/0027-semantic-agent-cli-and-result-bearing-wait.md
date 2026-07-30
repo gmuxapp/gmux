@@ -993,6 +993,14 @@ property of that agent's cold start, not of the caller's patience.
 
 ### Output contract: the bare id is always stdout line 1
 
+> **Superseded in part (2026-07-30) by ADR 0028's payload-rule amendment:**
+> the synchronous shape prints the bare id on **stderr** and its stdout is
+> the exchange report alone; only `--no-wait` keeps the id on stdout, because
+> there the id is the payload. The id is still emitted exactly once, the
+> moment the session exists and before delivery, and nothing is emitted when
+> no session exists. The rest of this section — what the id means, the
+> exit-code contract, post-spawn ownership — stands.
+
 Under `--new` the session id is written to stdout, on its own line, **the
 moment the session exists** — after the spawn registers and *before* the prompt
 is delivered. With `--no-wait` it is the only output and exit 0 means admitted:

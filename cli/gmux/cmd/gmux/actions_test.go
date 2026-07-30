@@ -290,6 +290,7 @@ func TestStripANSI(t *testing.T) {
 		{"cursor-move CSI removed", "a\x1b[2Kb\x1b[1;5Hc", "abc"},
 		{"OSC title (BEL-terminated) removed", "\x1b]0;my title\x07done", "done"},
 		{"OSC (ST-terminated) removed", "\x1b]8;;http://x\x1b\\link", "link"},
+		{"DCS payload removed", "before\x1bPq?sixel-data\x1b\\after", "beforeafter"},
 		{"CRLF normalized to LF", "line1\r\nline2\r\n", "line1\nline2\n"},
 		{"UTF-8 multibyte preserved", "café — π ✓", "café — π ✓"},
 		{"lone ESC at end does not panic", "trailing\x1b", "trailing"},

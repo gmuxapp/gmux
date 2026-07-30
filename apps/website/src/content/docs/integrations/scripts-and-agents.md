@@ -31,7 +31,8 @@ Running a command always uses the explicit `--` separator — there is no bare `
 When stdin is not a TTY, `gmux -- <cmd>`:
 
 - **Blocks** until the child exits.
-- **Streams bounded metadata** to stdout (session id, adapter, command, pid, exit status), not the full PTY output. Your script's logs stay readable.
+- **Streams the child's output to stdout** — ANSI escapes stripped and CRLF normalised to LF, so `gmux -- make build | tail` reads the build's own last lines. The full escape stream still reaches the UI and scrollback.
+- **Prints the session id on stderr**, before the child runs, so a watcher can attach or `gmux tail` the session mid-run without disturbing stdout.
 - **Exits with the child's exit code**, so `gmux -- make build < /dev/null && deploy.sh` works.
 - **Keeps the session in the UI** for the duration: a human can watch it live in the browser without affecting the script.
 
@@ -74,18 +75,18 @@ sends the prompt as its first turn.
 id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
 gmux wait "$id"
 
-gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'   # id, blank line, report
+gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'   # report on stdout; id on stderr
 ```
 
-**The session id is stdout line 1**, written the moment the session exists —
+**The session id is written immediately**, the moment the session exists —
 before the prompt is even delivered — so you can always address the session you
 just paid for, including when admission or the work then fails. It means only
 that: the session exists and is addressable. It is not an admission receipt and
-not a readiness signal — the exit code carries those. Under `--new`
-the completion signal is therefore the **exit code**, not non-empty stdout: a
-successful synchronous run prints the id, a blank line, then the exchange
-report. With `--no-wait`
-the bare id is the only output and exit `0` means the work was **admitted** — the
+not a readiness signal — the exit code carries those. Under synchronous `--new`,
+the bare id goes to stderr and stdout contains only the exchange report; the
+completion signal is therefore the **exit code**, not non-empty stdout. With
+`--no-wait`, the bare id is instead the stdout payload and the only output, and
+exit `0` means the work was **admitted** — the
 agent actually started it. The id still prints immediately, but the process
 returns only once that happened (or the 60 s admission window expires), so on a
 sick session the launch line can block that long instead of returning at

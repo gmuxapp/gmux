@@ -649,47 +649,12 @@ func emitSessionsJSON(sessions []cliSession) int {
 }
 
 // stripANSI removes ANSI/VT escape sequences from PTY output so the
-// scrollback view of `gmux tail` is grep-friendly plain text. The
-// broker already renders tail responses through a terminal emulator,
-// so this is belt-and-braces for whatever survives that pass.
-// Handles CSI (ESC [ ... letter), OSC (ESC ] ... BEL/ST), and
-// lone two-byte escapes; this is a pragmatic stripper, not a full
-// terminal emulator.
+// scrollback view of `gmux tail` is grep-friendly text. The broker already
+// renders tail responses through a terminal emulator, so this is
+// belt-and-braces for whatever survives that pass. Reuse the foreground
+// relay's parser so tail and `gmux -- <cmd>` cannot drift in what they strip.
 func stripANSI(b []byte) []byte {
-	out := make([]byte, 0, len(b))
-	for i := 0; i < len(b); {
-		c := b[i]
-		if c != 0x1b { // not ESC
-			if c != '\r' { // collapse bare CRs that survive re-render
-				out = append(out, c)
-			}
-			i++
-			continue
-		}
-		// ESC sequence.
-		if i+1 >= len(b) {
-			break
-		}
-		switch b[i+1] {
-		case '[': // CSI: ESC [ params... final-byte (0x40-0x7e)
-			j := i + 2
-			for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
-				j++
-			}
-			i = j + 1
-		case ']': // OSC: ESC ] ... (BEL | ESC \)
-			j := i + 2
-			for j < len(b) && b[j] != 0x07 {
-				if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
-					j++
-					break
-				}
-				j++
-			}
-			i = j + 1
-		default: // two-byte escape
-			i += 2
-		}
-	}
-	return out
+	var out strings.Builder
+	_, _ = newANSIStrippingWriter(&out).Write(b) // strings.Builder never fails
+	return []byte(out.String())
 }
