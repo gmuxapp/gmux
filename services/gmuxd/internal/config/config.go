@@ -31,8 +31,8 @@ type Config struct {
 	Sessions  SessionsConfig  `toml:"sessions"`
 
 	// NOTE: there is no `[[peers]]` array (removed in ADR 0007). Manually
-	// added peers are now runtime state in peers.json (see internal/
-	// peerstore), managed via the "Connect to host" flow.
+	// added peers are now runtime state in state.db, managed via the
+	// "Connect to host" flow.
 }
 
 // PeerConfig describes a remote gmuxd spoke to subscribe to. It is no
@@ -66,7 +66,7 @@ type PeerConfig struct {
 // Peer sources (see PeerConfig.Source).
 const (
 	SourceDevcontainer = "devcontainer" // auto-discovered Docker devcontainer
-	SourceManual       = "manual"       // added via peers.json / POST /v1/peers
+	SourceManual       = "manual"       // added via state.db / POST /v1/peers
 )
 
 // DiscoveryConfig controls automatic peer discovery.
@@ -141,7 +141,7 @@ func Load() (Config, error) {
 				log.Printf("config: %s: ignoring deprecated discovery.tailscale (removed in ADR 0008); tailscale autodiscovery was removed, add tailnet peers via \"Connect to host\". Remove it to silence this warning.", path)
 			case key == "peers" || strings.HasPrefix(key, "peers."):
 				if !warnedPeers {
-					log.Printf("config: %s: ignoring deprecated [[peers]] (removed in ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in peers.json). Remove it to silence this warning.", path)
+					log.Printf("config: %s: ignoring deprecated [[peers]] (removed in ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in state.db). Remove it to silence this warning.", path)
 					warnedPeers = true
 				}
 			default:

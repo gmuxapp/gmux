@@ -45,7 +45,16 @@ export default defineConfig({
         },
         {
           label: 'Reference',
-          autogenerate: { directory: 'reference' },
+          items: [
+            { label: 'CLI', slug: 'reference/cli' },
+            { label: 'Environment variables', slug: 'reference/environment' },
+            { label: 'File paths', slug: 'reference/file-paths' },
+            { label: 'host.toml', slug: 'reference/host-toml' },
+            { label: 'Interface stability', slug: 'reference/stability' },
+            { label: 'projects.json', slug: 'reference/projects-json' },
+            { label: 'Settings', slug: 'reference/settings' },
+            { label: 'Theme', slug: 'reference/theme' },
+          ],
         },
         {
           label: 'Integrations',

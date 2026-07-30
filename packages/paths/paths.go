@@ -113,8 +113,8 @@ func SessionsDir() string {
 //
 // gmuxd bounds the growth of these artifacts (see ADR 0016 and
 // services/gmuxd/internal/sessionmeta): scrollback is treated as a
-// cache capped at an aggregate byte budget (GMUX_SCROLLBACK_CACHE_MB,
-// default 256), evicted oldest-first while meta.json survives; a dead
+// cache capped by `sessions.scrollback_cache_mb` in host.toml (default
+// 256), evicted oldest-first while meta.json survives; a dead
 // session's whole entry is retired when its conversation file
 // disappears, and conversation-less corpses fall back to an age/count
 // cap (`sessions.retention_days` / `sessions.retention_max` in host.toml).
