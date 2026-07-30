@@ -48,7 +48,25 @@ import (
 //
 // The returned function uninstalls the handler; callers defer it so a
 // long-running process (the test binary) does not accumulate handlers.
-func noticeInterruptedWait(w io.Writer, _ string, options ...any) func() {
+func noticeInterruptedWait(w io.Writer, sessionID string, options ...any) func() {
+	stop, observed := observeInterruptedWait(w, sessionID, options...)
+	return func() {
+		stop()
+		select {
+		case sig := <-observed:
+			// The notice has been written. Do not let a synchronous prompt
+			// continue into normal report output during the fallback death delay.
+			exitImmediately(exitSignaled(sig))
+		default:
+		}
+	}
+}
+
+// observeInterruptedWait is the signal observer used by multi-wait. In
+// addition to the ordinary stop function it exposes the first observed signal
+// so the caller can suppress buffered reports while the asynchronous death
+// path is still completing (notably when SIGINT was inherited as ignored).
+func observeInterruptedWait(w io.Writer, _ string, options ...any) (func(), <-chan os.Signal) {
 	out := w
 	quiet := false
 	if len(options) > 0 {
@@ -62,25 +80,62 @@ func noticeInterruptedWait(w io.Writer, _ string, options ...any) func() {
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	done := make(chan struct{})
+	finished := make(chan struct{})
+	observed := make(chan os.Signal, 1)
 	go func() {
+		defer close(finished)
+		handle := func(sig os.Signal) {
+			noticeDone := make(chan struct{})
+			go func() {
+				if !quiet {
+					_, _ = out.Write(adapter.RenderExchangeReport(adapter.ExchangeReport{Outcome: adapter.ExchangeWaitSignal}))
+				}
+				close(noticeDone)
+			}()
+			doneCh := done
+			for {
+				select {
+				case <-noticeDone:
+					// Publication means the notice write is complete, not merely that a
+					// signal was dequeued. Callers may safely exit without losing stdout.
+					observed <- sig
+					go dieFromSignal(sig)
+					select {
+					case second := <-ch:
+						exitImmediately(exitSignaled(second))
+					case <-done:
+					}
+					return
+				case second := <-ch:
+					// The emergency second signal must not depend on stdout making
+					// progress. In production exitImmediately never returns.
+					exitImmediately(exitSignaled(second))
+					return
+				case <-doneCh:
+					// Teardown still joins the first notice write, but disable this
+					// already-closed case so a second signal remains observable.
+					doneCh = nil
+				}
+			}
+		}
 		select {
 		case sig := <-ch:
-			if !quiet {
-				_, _ = out.Write(adapter.RenderExchangeReport(adapter.ExchangeReport{Outcome: adapter.ExchangeWaitSignal}))
-			}
-			go dieFromSignal(sig)
-			select {
-			case second := <-ch:
-				exitImmediately(exitSignaled(second))
-			case <-done:
-			}
+			handle(sig)
 		case <-done:
+			// signal.Stop guarantees no later sends. Drain a signal already
+			// queued before teardown so settlement cannot swallow a concurrent ^C.
+			select {
+			case sig := <-ch:
+				handle(sig)
+			default:
+			}
 		}
 	}()
 	return func() {
 		signal.Stop(ch)
 		close(done)
-	}
+		<-finished
+	}, observed
 }
 
 // dieFromSignal is the terminal step: undo our handler, re-raise so the process

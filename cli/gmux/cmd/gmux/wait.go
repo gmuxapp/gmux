@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -38,6 +43,11 @@ const (
 	waitExitOK          = 0
 	waitExitError       = 1
 	waitExitInterrupted = 2
+
+	// Leave a small part of the hard invocation deadline for the daemon's
+	// timeout response to cross HTTP and be decoded. This is not a grace
+	// period: responses at or after the invocation deadline are still rejected.
+	waitResponseReserve = 100 * time.Millisecond
 )
 
 // exitUsage is the exit code for a command line gmux could not parse. It is
@@ -56,7 +66,7 @@ const (
 	waitOutcomeInterrupted = "interrupted"
 )
 
-// cmdWait implements `gmux wait <id> [--quiet] [--timeout N]
+// cmdWait implements `gmux wait <id>... [--quiet] [--timeout N]
 // [--for-text S | --for-regex P]`.
 //
 // The wait itself happens server-side: gmuxd already subscribes to
@@ -76,23 +86,120 @@ const (
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) int {
-	sess, err := resolveSession(ref)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return waitExitError
+func cmdWait(refs []string, timeoutSecs int, forText, forRegex string, quiet bool) int {
+	// Start the one invocation deadline before resolution. Resolution remains
+	// all-or-none, but its requests and read-your-writes retries consume the same
+	// budget as the waits they precede.
+	ctx := context.Background()
+	cancel := func() {}
+	if timeoutSecs > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
 	}
-	if sess.Peer != "" {
-		// Use the bare session ID here: the message already names the peer
-		// separately, so displayID's "ID@peer" would just repeat it.
-		fmt.Fprintf(os.Stderr, "gmux: wait is only supported for local sessions (%s is on peer %q)\n",
-			sess.ID, sess.Peer)
-		return waitExitError
+	defer cancel()
+
+	// Resolve the complete set before issuing any wait request. Besides making
+	// unknown and ambiguous refs fail fast, this is what makes duplicate
+	// detection meaningful for aliases and prefixes that name the same session.
+	sessions := make([]cliSession, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for i, ref := range refs {
+		sess, err := resolveSessionContext(ctx, ref)
+		if err != nil {
+			if timeoutSecs > 0 && (errors.Is(err, context.DeadlineExceeded) || waitInvocationExpired(ctx)) {
+				reportWaitInvocationTimeout(timeoutSecs)
+			} else {
+				fmt.Fprintln(os.Stderr, "gmux:", err)
+			}
+			return waitExitError
+		}
+		if sess.Peer != "" {
+			fmt.Fprintf(os.Stderr, "gmux: wait is only supported for local sessions (%s is on peer %q)\n",
+				sess.ID, sess.Peer)
+			return waitExitError
+		}
+		if _, duplicate := seen[sess.ID]; duplicate {
+			fmt.Fprintf(os.Stderr, "gmux: wait: duplicate session %s\n", sess.ID)
+			return waitExitError
+		}
+		seen[sess.ID] = struct{}{}
+		sessions[i] = sess
+	}
+
+	type result struct {
+		code   int
+		report bytes.Buffer
+	}
+	results := make([]result, len(sessions))
+	serverTimeout := time.Duration(0)
+	if timeoutSecs > 0 {
+		// Resolution is inside the hard whole-call deadline. Hand the daemon the
+		// precise budget that remains, less a bounded response/transport reserve,
+		// so its authoritative partial timeout report normally arrives first.
+		deadline, ok := ctx.Deadline()
+		remaining := time.Until(deadline)
+		if ok && remaining > waitResponseReserve {
+			serverTimeout = (remaining - waitResponseReserve).Truncate(time.Millisecond)
+		}
+	}
+
+	stopNotice, signalObserved := observeInterruptedWait(os.Stderr, "", os.Stdout, quiet)
+	var wg sync.WaitGroup
+	wg.Add(len(sessions))
+	for i := range sessions {
+		go func() {
+			defer wg.Done()
+			results[i].code = waitSession(ctx, sessions[i], timeoutSecs, serverTimeout, forText, forRegex, quiet, &results[i].report)
+		}()
+	}
+	wg.Wait()
+	stopNotice()
+	select {
+	case sig := <-signalObserved:
+		// The notice is already the complete stdout contract. Do not flush
+		// reports that happened to settle during dieFromSignal's fallback delay.
+		return exitSignaled(sig)
+	default:
+	}
+
+	if !quiet {
+		multi := len(sessions) > 1
+		for i := range sessions {
+			if multi {
+				if i > 0 {
+					fmt.Fprintln(os.Stdout)
+				}
+				fmt.Fprintf(os.Stdout, "=== %s ===\n\n", sessions[i].ID)
+			}
+			_, _ = results[i].report.WriteTo(os.Stdout)
+		}
+	}
+
+	// Failure and timeout dominate interruption; interruption dominates clean
+	// completion. This is independent of settlement and argv order.
+	exit := waitExitOK
+	for i := range results {
+		if results[i].code == waitExitError {
+			return waitExitError
+		}
+		if results[i].code == waitExitInterrupted {
+			exit = waitExitInterrupted
+		}
+	}
+	return exit
+}
+
+// waitSession performs one already-resolved wait. Resolution and signal
+// handling belong to cmdWait so a multi-wait arms all-or-none and installs one
+// process-wide signal notice.
+func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTimeout time.Duration, forText, forRegex string, quiet bool, stdout io.Writer) int {
+	predicate := forText != "" || forRegex != ""
+	if timeoutSecs > 0 && serverTimeout < time.Millisecond {
+		return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
 	}
 
 	query := url.Values{}
 	if timeoutSecs > 0 {
-		query.Set("timeout", strconv.Itoa(timeoutSecs))
+		query.Set("timeout_ms", strconv.FormatInt(serverTimeout.Milliseconds(), 10))
 	}
 	if forText != "" {
 		query.Set("for_text", forText)
@@ -106,41 +213,49 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 	}
 
 	client := gmuxdClient()
-	// The default 5s client timeout would cut off any wait that
-	// outlasts a turn on a slow agent. With no client-side timeout
-	// the only deadline is the optional server-side --timeout.
+	// The default 5s client timeout would cut off an unbounded wait on a slow
+	// agent. With it disabled, the shared invocation context is the only local
+	// deadline; the timeout query also lets the daemon return a detailed report.
 	client.Timeout = 0
 
 	// No request body; pass http.NoBody so we don't advertise a
-	// content-type for bytes that don't exist.
-	// A blocking wait says what a ^C does and does not mean: only the wait stops.
-	// The session and its turn keep running, and re-arming is one command away —
-	// without the notice, the interrupt reads like the agent was stopped.
-	//
-	// Installed around the blocking call ONLY, and torn down the moment the
-	// response is in hand: a notice printed after the wait already resolved (and
-	// printed its answer) would be a lie, and that window is reachable — a ^C
-	// pressed just as the turn ended lands there.
-	stopNotice := noticeInterruptedWait(os.Stderr, sess.ID, os.Stdout, quiet)
-	resp, err := client.Post(endpoint, "", http.NoBody)
-	stopNotice()
+	// content-type for bytes that don't exist. The shared context is a hard
+	// whole-group deadline; the daemon timeout normally wins and supplies the
+	// partial exchange report, while this catches delayed or stalled requests.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return waitExitError
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if timeoutSecs > 0 && (errors.Is(err, context.DeadlineExceeded) || waitInvocationExpired(ctx)) {
+			return reportLocalWaitTimeout(forText != "" || forRegex != "", quiet, timeoutSecs, stdout)
+		}
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
 	}
 	defer resp.Body.Close()
 
-	predicate := forText != "" || forRegex != ""
+	if timeoutSecs > 0 && waitInvocationExpired(ctx) {
+		return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
+	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var env struct {
 			Data waitResult `json:"data"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+			if timeoutSecs > 0 && (errors.Is(err, context.DeadlineExceeded) || waitInvocationExpired(ctx)) {
+				return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
+			}
 			fmt.Fprintln(os.Stderr, "gmux: decode wait response:", err)
 			return waitExitError
 		}
-		return reportWaitResult(env.Data, predicate, quiet, os.Stdout)
+		if timeoutSecs > 0 && waitInvocationExpired(ctx) {
+			return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
+		}
+		return reportWaitResult(env.Data, predicate, quiet, stdout)
 	case http.StatusRequestTimeout:
 		if predicate {
 			fmt.Fprintf(os.Stderr, "gmux: the session's output did not match within %ds\n", timeoutSecs)
@@ -150,10 +265,16 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 			Data waitResult `json:"data"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+			if timeoutSecs > 0 && (errors.Is(err, context.DeadlineExceeded) || waitInvocationExpired(ctx)) {
+				return reportLocalWaitTimeout(false, quiet, timeoutSecs, stdout)
+			}
 			fmt.Fprintln(os.Stderr, "gmux: decode timeout report:", err)
 			return waitExitError
 		}
-		return renderExchangeWait(env.Data, quiet, timeoutSecs, "", os.Stdout)
+		if timeoutSecs > 0 && waitInvocationExpired(ctx) {
+			return reportLocalWaitTimeout(false, quiet, timeoutSecs, stdout)
+		}
+		return renderExchangeWait(env.Data, quiet, timeoutSecs, "", stdout)
 	case http.StatusUnprocessableEntity:
 		// Current daemons only send 422 on the send --wait path
 		// (input_no_submit); older daemons also rejected sessions
@@ -172,6 +293,30 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 		fmt.Fprintf(os.Stderr, "gmux: wait failed: %s: %s\n", resp.Status, extractMessage(body))
 		return waitExitError
 	}
+}
+
+func waitInvocationExpired(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && !time.Now().Before(deadline)
+}
+
+func reportWaitInvocationTimeout(timeoutSecs int) {
+	fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds before any session was armed\n", timeoutSecs)
+}
+
+// reportLocalWaitTimeout is the hard-deadline fallback for a daemon that did
+// not return its authoritative timeout frame. Do not invent exchange history,
+// activity state, or iteration counts the client never received.
+func reportLocalWaitTimeout(predicate, quiet bool, timeoutSecs int, stdout io.Writer) int {
+	if predicate {
+		fmt.Fprintf(os.Stderr, "gmux: the session's output did not match within %ds\n", timeoutSecs)
+	} else if !quiet {
+		fmt.Fprintf(stdout, "[Wait timed out after %ds; session state unknown]\n", timeoutSecs)
+	}
+	return waitExitError
 }
 
 // waitResult is the daemon's resolved-wait payload.

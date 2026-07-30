@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,9 +42,20 @@ type cliSession struct {
 // if it's not already running so management commands work on a cold
 // machine, the same way `gmux <cmd>` does.
 func fetchSessions() ([]cliSession, error) {
-	ensureGmuxd()
+	return fetchSessionsContext(context.Background())
+}
+
+func fetchSessionsContext(ctx context.Context) ([]cliSession, error) {
+	ensureGmuxdContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	client := gmuxdClient()
-	resp, err := client.Get(gmuxdBaseURL() + "/v1/sessions")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gmuxdBaseURL()+"/v1/sessions", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build sessions request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("contact gmuxd: %w", err)
 	}
@@ -75,12 +87,16 @@ func fetchSessions() ([]cliSession, error) {
 // snappy, and only fires on a clean miss — ambiguous/malformed refs
 // fail immediately.
 func resolveSession(ref string) (cliSession, error) {
+	return resolveSessionContext(context.Background(), ref)
+}
+
+func resolveSessionContext(ctx context.Context, ref string) (cliSession, error) {
 	const (
 		maxRetries = 6
 		retryDelay = 100 * time.Millisecond
 	)
 	for attempt := 0; ; attempt++ {
-		sessions, err := fetchSessions()
+		sessions, err := fetchSessionsContext(ctx)
 		if err != nil {
 			return cliSession{}, err
 		}
@@ -93,7 +109,13 @@ func resolveSession(ref string) (cliSession, error) {
 		if attempt >= maxRetries || !isNoMatchError(err) {
 			return cliSession{}, err
 		}
-		time.Sleep(retryDelay)
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return cliSession{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

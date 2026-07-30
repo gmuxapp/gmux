@@ -12,10 +12,11 @@ import (
 )
 
 type stubDaemon struct {
-	mu       sync.Mutex
-	requests []recordedRequest
-	handler  func(http.ResponseWriter, *http.Request)
-	sessions []cliSession
+	mu              sync.Mutex
+	requests        []recordedRequest
+	handler         func(http.ResponseWriter, *http.Request)
+	sessionsHandler func(http.ResponseWriter, *http.Request)
+	sessions        []cliSession
 }
 type recordedRequest struct{ method, path, query, body string }
 
@@ -35,6 +36,13 @@ func startStubDaemon(t *testing.T, sessions []cliSession) *stubDaemon {
 		_, _ = w.Write([]byte(`{"ok":true,"data":{"version":"dev"}}`))
 	})
 	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		d.mu.Lock()
+		h := d.sessionsHandler
+		d.mu.Unlock()
+		if h != nil {
+			h(w, r)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": d.sessions})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +66,11 @@ func (d *stubDaemon) on(h func(http.ResponseWriter, *http.Request)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.handler = h
+}
+func (d *stubDaemon) onSessions(h func(http.ResponseWriter, *http.Request)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sessionsHandler = h
 }
 func (d *stubDaemon) lastRequest(t *testing.T) recordedRequest {
 	d.mu.Lock()
