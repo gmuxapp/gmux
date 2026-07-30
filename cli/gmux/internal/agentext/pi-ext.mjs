@@ -137,6 +137,7 @@ export default function (pi) {
   // startup | new | resume | fork. This is what catches a cache-served
   // /resume-select, where no file is read for an fs probe to observe.
   pi.on("session_start", (ev, ctx) => {
+    rememberNotifier(ctx);
     // Readiness: pi can accept input. Reported FIRST and UNCONDITIONALLY —
     // before reportSession, and regardless of whether pi has a conversation
     // file yet. gmux's semantic actions (`gmux agent prompt/cancel`) block on
@@ -458,8 +459,33 @@ function truncateTitle(s) {
 //     overall deadline settles each link exactly once;
 //   - transport failures never surface into pi.
 const POST_TIMEOUT_MS = 2000;
+const DELIVERY_NOTICE_INTERVAL_MS = 5000;
 
 let deliveryChain = Promise.resolve();
+let deliveryNotifier;
+let lastDeliveryNotice = 0;
+
+// Capture pi's UI notifier without retaining or depending on the rest of an
+// event context. Notification itself is best-effort: reporting a reporting
+// failure must never become another failure path into pi.
+function rememberNotifier(ctx) {
+  if (typeof ctx?.ui?.notify !== "function") return;
+  deliveryNotifier = (message) => ctx.ui.notify(message, "warning");
+}
+
+function notifyDeliveryFailure(error) {
+  const now = Date.now();
+  if (now - lastDeliveryNotice < DELIVERY_NOTICE_INTERVAL_MS) return;
+  lastDeliveryNotice = now;
+  const detail = error?.code ? `${error.code}: ${error.message}` : String(error);
+  const message = `gmux hook unavailable (${detail}); pi will continue`;
+  try {
+    if (deliveryNotifier) deliveryNotifier(message);
+    else console.warn(message);
+  } catch {
+    // A broken UI or console must not escape the extension either.
+  }
+}
 
 function sendOne(socketPath, event) {
   return new Promise((resolve) => {
@@ -483,12 +509,22 @@ function sendOne(socketPath, event) {
         timeout: POST_TIMEOUT_MS,
         headers: { "content-type": "application/json", "content-length": body.length },
       });
-      req.on("response", (res) => res.resume()); // drain so the socket can close
+      req.on("response", (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          const error = new Error(`hook endpoint answered HTTP ${res.statusCode}`);
+          error.code = `HTTP_${res.statusCode}`;
+          notifyDeliveryFailure(error);
+        }
+        res.resume(); // drain so the socket can close
+      });
       req.on("timeout", () => req.destroy());
-      // Two settle paths, not six: "close" fires after response end, after a
-      // transport error and after a destroy, so it subsumes them all, and the
-      // unref'd deadline above covers the one case it cannot (a socket that
-      // accepts and never answers or closes).
+      // EventEmitter "error" is special: without a listener Node promotes it
+      // to uncaughtException even though "close" follows. Consume it, notify
+      // best-effort, and settle this delivery link so later hooks still run.
+      req.on("error", (error) => {
+        notifyDeliveryFailure(error);
+        settle();
+      });
       req.on("close", settle);
       req.end(body);
     } catch {

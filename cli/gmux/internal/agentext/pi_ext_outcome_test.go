@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -347,6 +348,37 @@ func TestPiExtDeliveryChainSurvivesUnresponsiveRunner(t *testing.T) {
 // Scope note: today the sender catches its own throws and settles, so this
 // exercises the "one event lost, chain intact" property. post()'s terminal
 // .catch is the belt-and-braces for a future path that rejects instead.
+func TestPiExtMissingSocketNotifiesWithoutCrashingNode(t *testing.T) {
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; skipping pi-ext behavior test")
+	}
+	dir := t.TempDir()
+	extPath := filepath.Join(dir, "pi-ext.mjs")
+	if err := os.WriteFile(extPath, extSource, 0o644); err != nil {
+		t.Fatalf("materialize extension: %v", err)
+	}
+	driver := `
+		const { post } = await import(process.argv[2]);
+		process.on("uncaughtException", (e) => { console.error("uncaught:", e); process.exit(3); });
+		process.on("unhandledRejection", (e) => { console.error("unhandled:", e); process.exit(4); });
+		await post(process.argv[3], { op: "ready" });
+	`
+	driverPath := filepath.Join(dir, "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	missing := filepath.Join(dir, "missing.sock")
+	cmd := exec.Command(nodeBin, driverPath, extPath, missing)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("driver exited %v; socket failure escaped the extension\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "gmux hook unavailable") || !strings.Contains(string(out), "ENOENT") {
+		t.Fatalf("missing-socket notification = %q, want gmux warning with ENOENT", out)
+	}
+}
+
 func TestPiExtDeliveryChainSurvivesFailedLink(t *testing.T) {
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
