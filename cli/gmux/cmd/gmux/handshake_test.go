@@ -124,7 +124,7 @@ func TestCaptureHandshakeFD_RejectsInvalidEnv(t *testing.T) {
 // TestCaptureHandshakeFD_UnsetsEnvImmediately is the regression test
 // for the env-leak crash: the env var must be gone BEFORE any child
 // is spawned (i.e. right after capture), not merely after the ack.
-// A leaked GMUX_HANDSHAKE_FD=3 makes a nested gmux inside the session
+// A leaked _GMXINTERNAL_HANDSHAKE_FD=3 makes a nested gmux inside the session
 // close its own fd 3 — typically the Go runtime's epoll fd — which is
 // a fatal `netpoll failed`.
 func TestCaptureHandshakeFD_UnsetsEnvImmediately(t *testing.T) {
@@ -143,7 +143,7 @@ func TestCaptureHandshakeFD_UnsetsEnvImmediately(t *testing.T) {
 }
 
 // TestCaptureHandshakeFD_RejectsNonPipeFD guards the rolling-upgrade
-// window: an OLD runner may still leak GMUX_HANDSHAKE_FD=3 into its
+// window: an OLD runner may still leak _GMXINTERNAL_HANDSHAKE_FD=3 into its
 // session, where a NEW nested gmux's fd 3 is something unrelated
 // (epoll fd, an open file, ...). Capture must refuse any fd that
 // isn't a pipe, and must not close or touch it.

@@ -189,6 +189,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// comes).
 	a := resolveAdapter(args)
 	if pt, ok := a.(adapter.PassthroughDetector); ok && pt.IsPassthrough(args) {
+		if !attach {
+			log.Fatalf("gmux: -d/--detach cannot be used with one-shot passthrough commands")
+		}
 		execPassthrough(args)
 	}
 
@@ -241,14 +244,11 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		defer cancelRegistration()
 	}
 
-	// Honour the legacy GMUX_RESUME_ID env var when --resume-id
-	// wasn't provided. Older gmuxd builds set it via env; newer
-	// gmuxd sets the flag instead. The env-var path is kept for
-	// rolling-upgrade scenarios (a daemon installed before the
-	// flag existed talking to a newer runner) and will be removed
-	// in a future release.
+	// Honour the private _GMXINTERNAL_RESUME_ID fallback when --resume-id
+	// wasn't provided. Current gmuxd builds use the flag; this legacy path
+	// remains for same-build callers that have not migrated to flag transport.
 	if dir.ResumeID == "" {
-		dir.ResumeID = os.Getenv("GMUX_RESUME_ID")
+		dir.ResumeID = os.Getenv("_GMXINTERNAL_RESUME_ID")
 	}
 
 	workDir, err := os.Getwd()
@@ -297,8 +297,8 @@ func runSession(args []string, attach bool, dir runDirectives) {
 				log.Fatalf("failed to publish session registration intent: %v", err)
 			}
 		}
-		if rawFD := os.Getenv("GMUX_SOCKET_LEASE_FD"); rawFD != "" {
-			_ = os.Unsetenv("GMUX_SOCKET_LEASE_FD")
+		if rawFD := os.Getenv("_GMXINTERNAL_SOCKET_LEASE_FD"); rawFD != "" {
+			_ = os.Unsetenv("_GMXINTERNAL_SOCKET_LEASE_FD")
 			fd, parseErr := strconv.Atoi(rawFD)
 			if parseErr != nil || fd < 3 {
 				err = fmt.Errorf("invalid inherited socket lease fd %q", rawFD)
@@ -367,7 +367,6 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		"GMUX_SOCKET=" + sockPath,
 		"GMUX_SESSION_ID=" + sessionID,
 		"GMUX_ADAPTER=" + a.Name(),
-		"GMUX_RUNNER_VERSION=" + version,
 	}
 	env = append(env, adapterEnv...)
 	env = append(env, sessionEditorEnv(os.LookupEnv, os.Executable)...)
@@ -427,7 +426,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		}
 		ptyCfg.CommandWrapper = []string{self, "__detached-target"}
 		ptyCfg.ExtraFiles = []*os.File{controlFile, targetGateFile}
-		ptyCfg.Env = append(ptyCfg.Env, targetControlFDEnv+"=3", targetGateFDEnv+"=4")
+		ptyCfg.CommandWrapperEnv = []string{targetControlFDEnv + "=3", targetGateFDEnv + "=4"}
 	}
 	// Conditional assignment: a typed nil *scrollback.Writer
 	// stored in ptyCfg.Scrollback (an io.WriteCloser) would
@@ -757,6 +756,24 @@ func resolveAdapter(args []string) adapter.Adapter {
 	return registry.Resolve(args)
 }
 
+// passthroughEnv removes only gmux's private process-control variables. A
+// passthrough is otherwise a direct one-shot exec, so public GMUX_* variables
+// and the ordinary user environment deliberately remain unchanged.
+func passthroughEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key := entry
+		if i := strings.IndexByte(entry, '='); i >= 0 {
+			key = entry[:i]
+		}
+		if strings.HasPrefix(key, "_GMXINTERNAL_") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 // execPassthrough replaces the gmux process with args, so a one-shot
 // invocation runs exactly as if typed directly. Never returns on success.
 func execPassthrough(args []string) {
@@ -764,7 +781,7 @@ func execPassthrough(args []string) {
 	if err != nil {
 		log.Fatalf("gmux: %s: %v", args[0], err)
 	}
-	if err := syscall.Exec(bin, args, os.Environ()); err != nil {
+	if err := syscall.Exec(bin, args, passthroughEnv(os.Environ())); err != nil {
 		log.Fatalf("gmux: exec %s: %v", args[0], err)
 	}
 }

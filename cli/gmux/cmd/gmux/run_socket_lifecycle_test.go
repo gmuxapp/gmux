@@ -146,7 +146,7 @@ func launchEnv(stateHome, socketDir string) []string {
 			strings.HasPrefix(kv, "GMUX_SOCKET_DIR="),
 			strings.HasPrefix(kv, "GMUX_SESSION_ID="),
 			strings.HasPrefix(kv, "GMUX_SOCKET="),
-			strings.HasPrefix(kv, "GMUX_HANDSHAKE_FD="):
+			strings.HasPrefix(kv, "_GMXINTERNAL_HANDSHAKE_FD="):
 			continue
 		}
 		env = append(env, kv)
@@ -243,7 +243,7 @@ func TestResumedSessionIDRebindsAfterExit(t *testing.T) {
 	stateHome := t.TempDir()
 	socketDir := filepath.Join(t.TempDir(), "sessions")
 	startFakeDaemon(t, filepath.Join(stateHome, "gmux", "gmuxd.sock"))
-	env := append(launchEnv(stateHome, socketDir), "GMUX_RESUME_ID=10khtpym")
+	env := append(launchEnv(stateHome, socketDir), "_GMXINTERNAL_RESUME_ID=10khtpym")
 
 	for i := range 5 {
 		cmd := exec.Command(bin, "--", "true")

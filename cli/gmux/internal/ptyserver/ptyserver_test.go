@@ -1369,7 +1369,7 @@ func envValue(env []string, name string) string {
 // terminfo entry.
 func TestBuildChildEnv_DefaultsTermWhenAbsent(t *testing.T) {
 	parent := []string{"PATH=/usr/bin", "HOME=/home/test"}
-	env := buildChildEnv(parent, nil, "1.2.3")
+	env := buildChildEnv(parent, []string{"_GMXINTERNAL_TARGET_GATE_FD=4"}, "1.2.3")
 
 	if got := envValue(env, "TERM"); got != "xterm-256color" {
 		t.Errorf("TERM = %q, want xterm-256color", got)
@@ -1380,7 +1380,7 @@ func TestBuildChildEnv_DefaultsTermWhenAbsent(t *testing.T) {
 // terminal's terminfo entry.
 func TestBuildChildEnv_PreservesParentTerm(t *testing.T) {
 	parent := []string{"TERM=screen-256color"}
-	env := buildChildEnv(parent, nil, "1.2.3")
+	env := buildChildEnv(parent, []string{"_GMXINTERNAL_TARGET_GATE_FD=4"}, "1.2.3")
 
 	if got := envValue(env, "TERM"); got != "screen-256color" {
 		t.Errorf("TERM = %q, want parent value screen-256color", got)
@@ -1409,7 +1409,7 @@ func TestBuildChildEnv_AdvertisesTerminalCapabilities(t *testing.T) {
 		"TERM_PROGRAM_VERSION=3.4.0",
 		"COLORTERM=",
 	}
-	env := buildChildEnv(parent, nil, "1.2.3")
+	env := buildChildEnv(parent, []string{"_GMXINTERNAL_TARGET_GATE_FD=4"}, "1.2.3")
 
 	if got := envValue(env, "TERM_PROGRAM"); got != "gmux" {
 		t.Errorf("TERM_PROGRAM = %q, want gmux", got)
@@ -1474,6 +1474,56 @@ func TestNewSpawnsChildWithComposedEnv(t *testing.T) {
 	want := "TERM=xterm-256color|TPV=9.9.9-test|TP=gmux"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("child env: want substring %q, got: %q", want, out.String())
+	}
+}
+
+func TestNewSpawnedChildScrubsInternalEnv(t *testing.T) {
+	for key, value := range map[string]string{
+		"_GMXINTERNAL_RESUME_ID":    "inherited-secret",
+		"_GMXINTERNAL_HANDSHAKE_FD": "3",
+		"GMUX":                      "1",
+		"GMUX_SESSION_ID":           "sess-public",
+		"GMUX_ADAPTER":              "shell",
+		"GMUX_SOCKET":               "/tmp/gmux-public.sock",
+	} {
+		t.Setenv(key, value)
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	var out syncBuffer
+	srv, err := New(Config{
+		Command:    []string{"sh", "-c", "env"},
+		Cwd:        "/tmp",
+		Env:        []string{"_GMXINTERNAL_TARGET_GATE_FD=4", "_GMXINTERNAL_EXTRA=secret"},
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		LocalOut:   &out,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit")
+	}
+	<-srv.PTYDone()
+
+	childEnv := strings.ReplaceAll(out.String(), "\r", "")
+	if strings.Contains(childEnv, "_GMXINTERNAL_") {
+		t.Errorf("spawned child leaked internal environment: %q", childEnv)
+	}
+	for _, want := range []string{
+		"GMUX=1\n",
+		"GMUX_SESSION_ID=sess-public\n",
+		"GMUX_ADAPTER=shell\n",
+		"GMUX_SOCKET=/tmp/gmux-public.sock\n",
+	} {
+		if !strings.Contains(childEnv, want) {
+			t.Errorf("spawned child env missing %q: %q", want, childEnv)
+		}
 	}
 }
 
@@ -1600,28 +1650,34 @@ func TestKillReleasesSocketPathBeforeResponding(t *testing.T) {
 	_ = ln.ReleaseOwnership()
 }
 
-// TestBuildChildEnv_StripsResumeID guards the runner→child boundary
-// against leaking GMUX_RESUME_ID. The runner inherits this env var
+// TestBuildChildEnv_StripsInternalEnv guards the runner→child boundary
+// against leaking _GMXINTERNAL_RESUME_ID. The runner inherits this env var
 // from gmuxd as a private "use this id when you bind" directive
 // (ADR 0003); leaking it to the PTY child would let a nested
 // `gmux foo` invocation try to re-bind the parent runner's id and
 // rely on the collision fallback as a safety net, which is exactly
 // the scenario the dedicated env var name was meant to eliminate.
-func TestBuildChildEnv_StripsResumeID(t *testing.T) {
+func TestBuildChildEnv_StripsInternalEnv(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin",
-		"GMUX_RESUME_ID=1rz9lyqa",
-		"GMUX_SESSION_ID=1rz9lyqa", // intentionally NOT stripped (children consume this)
+		"_GMXINTERNAL_RESUME_ID=1rz9lyqa",
+		"_GMXINTERNAL_HANDSHAKE_FD=3",
+		"GMUX=1",
+		"GMUX_SESSION_ID=1rz9lyqa",
+		"GMUX_ADAPTER=shell",
+		"GMUX_SOCKET=/tmp/session.sock",
 		"HOME=/home/u",
 	}
-	env := buildChildEnv(parent, nil, "1.2.3")
+	env := buildChildEnv(parent, []string{"_GMXINTERNAL_TARGET_GATE_FD=4"}, "1.2.3")
 	for _, e := range env {
-		if strings.HasPrefix(e, "GMUX_RESUME_ID=") {
-			t.Errorf("child env must not contain GMUX_RESUME_ID; got %q", e)
+		if strings.HasPrefix(e, "_GMXINTERNAL_") {
+			t.Errorf("child env must not contain internal variables; got %q", e)
 		}
 	}
-	if !hasEnv(env, "GMUX_SESSION_ID") {
-		t.Errorf("child env must retain GMUX_SESSION_ID for adapter / hook consumption")
+	for _, key := range []string{"GMUX", "GMUX_SESSION_ID", "GMUX_ADAPTER", "GMUX_SOCKET"} {
+		if !hasEnv(env, key) {
+			t.Errorf("child env must retain public variable %s", key)
+		}
 	}
 	if !hasEnv(env, "PATH") || !hasEnv(env, "HOME") {
 		t.Errorf("child env dropped unrelated parent vars")

@@ -219,7 +219,6 @@ Every child launched by `gmux` gets a small protocol for detecting gmux and repo
 | `GMUX_SOCKET` | Unix socket path for callbacks to the runner |
 | `GMUX_SESSION_ID` | Unique session identifier |
 | `GMUX_ADAPTER` | Name of the matched adapter |
-| `GMUX_RUNNER_VERSION` | Version of the gmux runner hosting the session |
 | `GMUX_SESSION_SOCK` | Same socket as `GMUX_SOCKET`; set only when an agent hook was injected — the socket the hook posts to (the hook contract is deliberately independent of the general child env) |
 
 Most tools ignore these. gmux-aware tools, wrappers, or hooks can use them to integrate directly.

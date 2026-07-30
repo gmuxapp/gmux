@@ -56,12 +56,12 @@ import (
 // an instant `netpoll failed` crash. Capturing + unsetting first
 // thing in main() makes the inheritance impossible.
 const (
-	handshakeFDEnv       = "GMUX_HANDSHAKE_FD"
-	handshakeGateFDEnv   = "GMUX_HANDSHAKE_GATE_FD"
-	handshakeHoldFDEnv   = "GMUX_HANDSHAKE_HOLD_FD"
-	handshakeDeadlineEnv = "GMUX_HANDSHAKE_DEADLINE"
-	targetControlFDEnv   = "GMUX_TARGET_CONTROL_FD"
-	targetGateFDEnv      = "GMUX_TARGET_GATE_FD"
+	handshakeFDEnv       = "_GMXINTERNAL_HANDSHAKE_FD"
+	handshakeGateFDEnv   = "_GMXINTERNAL_HANDSHAKE_GATE_FD"
+	handshakeHoldFDEnv   = "_GMXINTERNAL_HANDSHAKE_HOLD_FD"
+	handshakeDeadlineEnv = "_GMXINTERNAL_HANDSHAKE_DEADLINE"
+	targetControlFDEnv   = "_GMXINTERNAL_TARGET_CONTROL_FD"
+	targetGateFDEnv      = "_GMXINTERNAL_TARGET_GATE_FD"
 )
 
 // capturedHandshakeFD is the fd number recorded by captureHandshakeFD,
@@ -75,7 +75,7 @@ var (
 	capturedHandshakeInvalid  bool
 )
 
-// captureHandshakeFD reads GMUX_HANDSHAKE_FD and the two companion fds,
+// captureHandshakeFD reads _GMXINTERNAL_HANDSHAKE_FD and the two companion fds,
 // validates all three and ALWAYS unsets the env vars so no child of this
 // process can inherit them. Must be called at the top of main(), before
 // anything can fork.
