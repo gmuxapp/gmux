@@ -24,7 +24,7 @@ const (
 	modeKill                   // gmux kill <id>
 	modeSend                   // gmux send <id> <text> [keys...]
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
-	modeWait                   // gmux wait <id>
+	modeWait                   // gmux wait <id>...
 	modeAgent                  // gmux agent prompt|cancel|output <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
@@ -50,7 +50,8 @@ type command struct {
 	initialRows int      // internal: pre-size PTY height
 
 	// session-addressing verbs (attach/tail/kill/send/send-keys/wait)
-	ref string // session reference; may carry an @peer suffix
+	ref      string   // session reference; may carry an @peer suffix
+	waitRefs []string // wait accepts one or more references, in argv order
 
 	// ls
 	all  bool
@@ -504,14 +505,17 @@ func parseWait(args []string) (*command, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(pos) != 1 {
-		return nil, errors.New("wait requires a session id")
+	if len(pos) == 0 {
+		return nil, errors.New("wait requires at least one session id")
 	}
 	if c.timeout < 0 {
 		return nil, errors.New("--timeout must be a non-negative number of seconds")
 	}
 	if c.forText != "" && c.forRegex != "" {
 		return nil, errors.New("--for-text and --for-regex are mutually exclusive")
+	}
+	if len(pos) > 1 && (c.forText != "" || c.forRegex != "") {
+		return nil, errors.New("--for-text and --for-regex require exactly one session id")
 	}
 	if c.forRegex != "" {
 		// Validate here so a typo fails as a usage error instead of a
@@ -521,6 +525,7 @@ func parseWait(args []string) (*command, error) {
 		}
 	}
 	c.ref = pos[0]
+	c.waitRefs = append([]string(nil), pos...)
 	return c, nil
 }
 

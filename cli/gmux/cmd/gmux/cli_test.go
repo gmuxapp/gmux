@@ -197,6 +197,12 @@ func TestParseCLI(t *testing.T) {
 			}},
 
 		{name: "wait idle default", args: []string{"wait", "abc"}, wantMode: modeWait},
+		{name: "wait multiple interspersed", args: []string{"wait", "abc", "--quiet", "def", "--timeout", "8", "ghi"}, wantMode: modeWait,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.waitRefs, ",") != "abc,def,ghi" || !c.quiet || c.timeout != 8 {
+					t.Errorf("refs=%v quiet=%v timeout=%d", c.waitRefs, c.quiet, c.timeout)
+				}
+			}},
 		{name: "wait --timeout", args: []string{"wait", "--timeout", "30", "abc"}, wantMode: modeWait,
 			check: func(t *testing.T, c *command) {
 				if c.timeout != 30 || c.ref != "abc" {
@@ -423,6 +429,8 @@ func TestParseCLIErrors(t *testing.T) {
 		{"tail", "-n", "0", "abc"}, // non-positive count
 		{"wait"},                   // missing id
 		{"wait", "abc", "--for-text", "a", "--for-regex", "b"}, // mutually exclusive
+		{"wait", "abc", "def", "--for-text", "a"},              // predicates require one id
+		{"wait", "abc", "def", "--for-regex", "a"},             // predicates require one id
 		{"wait", "abc", "--for-regex", "["},                    // invalid regex
 		{"send-keys", "C-c"},                                   // missing -t
 		{"send", "--timeout", "5", "abc", "x"},                 // --timeout without --wait

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,16 +40,33 @@ func statScrollback(dir string) scrollbackSig {
 // Render errors report no-match: the wait keeps polling and, worst
 // case, ends in timeout/died rather than a spurious success.
 
+func parseTimeoutDuration(raw, errorMessage string, unit time.Duration) (time.Duration, error) {
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 || value > math.MaxInt64/int64(unit) {
+		return 0, errors.New(errorMessage)
+	}
+	return time.Duration(value) * unit, nil
+}
+
 func timeoutChan(r *http.Request) (<-chan time.Time, error) {
-	ts := r.URL.Query().Get("timeout")
+	query := r.URL.Query()
+	if ms := query.Get("timeout_ms"); ms != "" {
+		duration, err := parseTimeoutDuration(ms, "timeout_ms must be a positive integer of milliseconds", time.Millisecond)
+		if err != nil {
+			return nil, err
+		}
+		return time.After(duration), nil
+	}
+
+	ts := query.Get("timeout")
 	if ts == "" {
 		return nil, nil
 	}
-	secs, err := strconv.Atoi(ts)
-	if err != nil || secs <= 0 {
-		return nil, errors.New("timeout must be a positive integer of seconds")
+	duration, err := parseTimeoutDuration(ts, "timeout must be a positive integer of seconds", time.Second)
+	if err != nil {
+		return nil, err
 	}
-	return time.After(time.Duration(secs) * time.Second), nil
+	return time.After(duration), nil
 }
 
 // handleInputWait implements POST /v1/sessions/{id}/input?wait=idle:

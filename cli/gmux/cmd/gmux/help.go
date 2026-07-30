@@ -31,7 +31,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux attach <id>                  reattach your terminal to a session
   gmux tail <id> [-n N]             print the last N lines of terminal output
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
-  gmux wait <id> [--timeout|-t N]   block until the turn ends; print the result
+  gmux wait <id>... [--timeout|-t N] block until turns end; print reports
   gmux kill <id>                    terminate a session
 
 Editing (usable as $EDITOR; blocks until the editor closes):
@@ -190,12 +190,17 @@ not a recognized key name is typed as literal text rather than refused.
 
 	"wait": `gmux wait: observe activity until it settles
 
-  gmux wait <id> [--timeout|-t N] [--quiet|-q]
+  gmux wait <id>... [--timeout|-t N] [--quiet|-q]
   gmux wait <id> --for-text <substring> [--timeout|-t N]
   gmux wait <id> --for-regex <pattern> [--timeout|-t N]
 
   --timeout/-t N  stop waiting after N seconds
   --quiet/-q      suppress the report; return only the verdict
+
+Waits for multiple ids run concurrently under one timeout and print reports in
+argument order, each headed by '=== <full-session-id> ==='. A single id keeps
+its headerless output. Duplicate resolved ids are refused. --for-text and
+--for-regex accept one id only.
 
 For renderer-capable agents, prints an exchange-structured report on stdout.
 Steers, follow-ups, and human instructions are additional user boundaries and

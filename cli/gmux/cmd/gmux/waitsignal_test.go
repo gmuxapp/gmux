@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+type blockingSignalWriter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w blockingSignalWriter) Write(p []byte) (int, error) {
+	close(w.started)
+	<-w.release
+	return len(p), nil
+}
+
 func TestWaitSignalWritesStdoutAndDiesWithShellStatus(t *testing.T) {
 	if os.Getenv("GMUX_TEST_WAIT_SIGNAL") == "child" {
 		defer noticeInterruptedWait(os.Stderr, "s", os.Stdout, false)()
@@ -34,6 +45,77 @@ func TestWaitSignalWritesStdoutAndDiesWithShellStatus(t *testing.T) {
 	if stdout.String() != "[Wait interrupted; agent remains active]\n" || stderr.Len() != 0 {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
+}
+
+func TestWaitSignalStopJoinsNoticeWriteBeforePublishing(t *testing.T) {
+	oldDie := dieFromSignal
+	dieFromSignal = func(os.Signal) {}
+	t.Cleanup(func() { dieFromSignal = oldDie })
+
+	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
+	stop, observed := observeInterruptedWait(os.Stderr, "s", writer, false)
+	p, _ := os.FindProcess(os.Getpid())
+	_ = p.Signal(syscall.SIGINT)
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("notice write did not start")
+	}
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while notice write was blocked")
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case <-observed:
+		t.Fatal("signal published before notice write completed")
+	default:
+	}
+	close(writer.release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not join observer")
+	}
+	select {
+	case sig := <-observed:
+		if sig != syscall.SIGINT {
+			t.Fatalf("observed %v", sig)
+		}
+	default:
+		t.Fatal("completed notice was not published")
+	}
+}
+
+func TestWaitSignalSecondSignalBypassesBlockedNotice(t *testing.T) {
+	oldDie, oldExit := dieFromSignal, exitImmediately
+	dieFromSignal = func(os.Signal) {}
+	exited := make(chan int, 1)
+	exitImmediately = func(code int) { exited <- code }
+	t.Cleanup(func() { dieFromSignal, exitImmediately = oldDie, oldExit })
+
+	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
+	stop, _ := observeInterruptedWait(os.Stderr, "s", writer, false)
+	p, _ := os.FindProcess(os.Getpid())
+	_ = p.Signal(syscall.SIGINT)
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("notice write did not block")
+	}
+	_ = p.Signal(syscall.SIGTERM)
+	select {
+	case code := <-exited:
+		if code != 143 {
+			t.Fatalf("second signal exit=%d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second signal waited for blocked stdout")
+	}
+	close(writer.release)
+	stop()
 }
 
 func TestWaitSignalQuietAndSecondSignalImmediate(t *testing.T) {
