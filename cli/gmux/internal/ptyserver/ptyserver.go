@@ -611,6 +611,7 @@ func New(cfg Config) (*Server, error) {
 	} else if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
 		// Argv injection (pi): splice the gmux extension into the launch argv.
 		if extPath, err := agentext.Path(); err != nil {
+			log.Printf("ptyserver: cannot materialize %s session hook: %v", cfg.Adapter.Name(), err)
 		} else if extended := ext.ExtendCommand(cmd.Args, extPath); len(extended) > len(cmd.Args) {
 			cmd.Args = extended
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
