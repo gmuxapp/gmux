@@ -194,12 +194,20 @@ func TestShortLaunchesLeaveNoSocketPathnames(t *testing.T) {
 	for i := range launches {
 		cmd := exec.Command(bin, "--", "true")
 		cmd.Env = env
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("launch %d: %v\n%s", i, err, out)
+		var stdout, stderr strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("launch %d: %v\nstdout: %s\nstderr: %s", i, err, stdout.String(), stderr.String())
 		}
-		if !strings.Contains(string(out), "exited:   0") {
-			t.Fatalf("launch %d did not report a clean exit:\n%s", i, out)
+		// The payload rule: stdout carries only the child's output (`true`
+		// prints nothing), the bare session id goes to stderr.
+		if stdout.String() != "" {
+			t.Fatalf("launch %d wrote non-payload bytes to stdout: %q", i, stdout.String())
+		}
+		id := strings.TrimSpace(stderr.String())
+		if len(id) != 8 {
+			t.Fatalf("launch %d did not report a bare 8-character session id on stderr: %q", i, stderr.String())
 		}
 		// The socket pathname must be gone the moment the process is: the
 		// runner owns it, and nothing else is going to clean it up.
@@ -240,15 +248,17 @@ func TestResumedSessionIDRebindsAfterExit(t *testing.T) {
 	for i := range 5 {
 		cmd := exec.Command(bin, "--", "true")
 		cmd.Env = env
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("launch %d: %v\n%s", i, err, out)
+		var stdout, stderr strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("launch %d: %v\nstdout: %s\nstderr: %s", i, err, stdout.String(), stderr.String())
 		}
 		// The resume id must be honoured every time. A leaked lease would
-		// push the runner onto a freshly minted id instead.
-		want := filepath.Join(socketDir, "10khtpym.sock")
-		if !strings.Contains(string(out), "socket:   "+want) {
-			t.Fatalf("launch %d did not bind the resumed id:\n%s", i, out)
+		// push the runner onto a freshly minted id instead. The runner reports
+		// its session id on stderr.
+		if strings.TrimSpace(stderr.String()) != "10khtpym" {
+			t.Fatalf("launch %d did not bind the resumed id:\nstderr: %s", i, stderr.String())
 		}
 		if left := leftoverSockets(t, socketDir); len(left) != 0 {
 			t.Fatalf("launch %d left %v behind", i, left)

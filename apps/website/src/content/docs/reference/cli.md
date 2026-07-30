@@ -51,11 +51,13 @@ inside a gmux session:
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------- |
 | TTY                | no               | Attach: wire your terminal to the child PTY, forward Ctrl-C and resize, detach when the terminal closes. |
 | TTY                | yes              | Auto-detach: spawn the session in the background and return immediately, so PTYs don't nest.            |
-| Pipe / file / null | either           | Block, stream bounded metadata to stdout, exit with the child's exit code. The session keeps running for the UI to attach to. |
+| Pipe / file / null | either           | Block, stream the child's output to stdout (ANSI stripped, CRLF normalised), print the session id on stderr, exit with the child's exit code. The session keeps running for the UI to attach to. |
 
 The pipe/file/null row is the canonical shape for scripts and agent harnesses:
-a blocking call, bounded stdout (no full PTY noise in your logs), and reliable
-exit-code propagation — so `if gmux -- pytest -q; then …` works.
+a blocking call, stdout that carries exactly what the child printed (so
+`gmux -- pnpm build | tail` reads the build's own tail), the session id on
+stderr for attaching or tailing mid-run, and reliable exit-code propagation —
+so `if gmux -- pytest -q; then …` works.
 
 See [Scripts and agents](/integrations/scripts-and-agents/) for the narrative
 version with a worked build-and-report example.
@@ -528,7 +530,7 @@ gmux agent prompt --new [--model M] [--name N] [--timeout N] [--no-wait] [prompt
 id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
 gmux wait "$id"
 
-# synchronous: the id, a blank line, then the report
+# synchronous: the id on stderr, the exchange report on stdout
 gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
 ```
 
@@ -551,10 +553,13 @@ its first work. Pass either a session id or `--new`, never both.
 - Other agents answer `unsupported_adapter`: launch those with `gmux -d -- <cmd>`
   and prompt the id it prints. That two-step route stays valid for pi too.
 
-**The session id is stdout line 1**, printed the moment the session exists and
-*before* the prompt is delivered — so a watcher can attach or tail while the
-agent is still coming up, and so you can always address the session you just
-paid for even when admission or the turn then fails.
+**The bare session id is printed the moment the session exists** and *before*
+the prompt is delivered — so a watcher can attach or tail while the agent is
+still coming up, and so you can always address the session you just paid for
+even when admission or the turn then fails. With `--no-wait` it is stdout's
+only content (the command-substitution shape: the id is the payload);
+synchronously it goes to **stderr**, keeping stdout for the exchange report
+alone.
 
 The line means exactly one thing: **the session exists and is addressable.** It
 is not an admission receipt, not a readiness signal, and not a claim that the
@@ -562,8 +567,9 @@ prompt was delivered — the exit code carries all of those. Two consequences
 worth pinning:
 
 - Under `--new`, **the completion signal is the exit code, not non-empty
-  stdout.** A successful synchronous run prints the id, a blank line, then the
-  exchange report; a failed one prints the id and exits non-zero.
+  stdout.** A successful synchronous run prints the exchange report on stdout;
+  a failed one may print nothing there at all — the id is already on stderr
+  and the exit code carries the verdict.
 - With `--no-wait`, the bare id is the only output and exit `0` means the work
   was **admitted**: the id prints immediately, but the process returns only once
   the agent has started it (or the admission window expires). On a sick
@@ -576,12 +582,13 @@ the session stays behind and it is **yours**: gmux does not tear it down, and it
 may still be running. Retry against the printed id, read it with `gmux agent
 logs`, or `gmux kill <id>` it.
 
-If the launch itself fails (nothing registered with gmuxd), **nothing** is
-printed on stdout and the command exits `1`: there is no session to address.
-The rule scripts can rely on is that stdout line 1 is a session id whenever a
-session exists, and stdout is empty whenever one does not. A prompt that is
-empty, oversized or not valid UTF-8 is refused before anything is spawned, so a
-usage error never leaves an orphan session behind.
+If the launch itself fails (nothing registered with gmuxd), **no id** is
+printed anywhere and the command exits `1`: there is no session to address.
+The rule scripts can rely on is that the bare id is emitted exactly once
+whenever a session exists (stdout under `--no-wait`, stderr line 1 otherwise),
+and no id is emitted whenever one does not. A prompt that is empty, oversized
+or not valid UTF-8 is refused before anything is spawned, so a usage error
+never leaves an orphan session behind.
 
 ### `gmux agent cancel <id>`
 

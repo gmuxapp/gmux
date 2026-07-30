@@ -470,9 +470,15 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	}
 
 	if !interactive {
-		fmt.Printf("session:  %s\n", sessionID)
-		fmt.Printf("adapter:  %s\n", a.Name())
-		fmt.Printf("command:  %s\n", strings.Join(args, " "))
+		// The payload rule (ADR 0028 amendment): stdout carries the child's
+		// output and nothing else, so `gmux -- pnpm build | tail` reads the
+		// build, not gmux metadata. The session id goes to stderr — printed
+		// before the child runs, so a watcher can still attach or tail while
+		// the command is starting. LocalOut relays the PTY stream to stdout
+		// with escapes stripped and CRLF normalised; the UI and scrollback
+		// keep the full escape stream.
+		fmt.Fprintln(os.Stderr, sessionID)
+		ptyCfg.LocalOut = newANSIStrippingWriter(os.Stdout)
 	}
 
 	// Start PTY server. The socket is already bound to `listener`
@@ -509,12 +515,6 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// Active, and a launch-time true would misreport an idle agent.
 	if !adapter.HookDriven(a) {
 		state.SetStatus(&adapter.Status{Active: true})
-	}
-
-	if !interactive {
-		fmt.Printf("pid:      %d\n", srv.Pid())
-		fmt.Printf("socket:   %s\n", srv.SocketPath())
-		fmt.Println("serving...")
 	}
 
 	var detachedSigCh chan os.Signal
@@ -604,8 +604,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		select {
 		case <-srv.Done():
 			// Child exited
-		case sig := <-sigCh:
-			fmt.Printf("\nreceived %v, shutting down...\n", sig)
+		case <-sigCh:
 			if handshakeOwned {
 				shutdownDetachedTarget(srv)
 			} else {
@@ -653,9 +652,6 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// (pathname unlinked, lease released) → os.Exit.
 	srv.Shutdown()
 
-	if !interactive {
-		fmt.Printf("exited:   %d\n", exitCode)
-	}
 	waitForHandshakeRelease()
 	os.Exit(exitCode)
 }

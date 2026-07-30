@@ -2,8 +2,9 @@
 
 **Status:** Accepted
 **Date:** 2026-07-29
+**Amended:** 2026-07-30 (the payload rule: session ids move to stderr where they are not the payload)
 **Related:** ADR 0009 (verb-first CLI), ADR 0027 (semantic agent CLI and result-bearing wait), ADR 0030 (exchange-oriented agent reads and observational wait)
-**Supersedes in part:** ADR 0027's 2026-07-28 amendment (the "Output routing" section, its `--json` envelope, and the interrupted-wait stderr notice)
+**Supersedes in part:** ADR 0027's 2026-07-28 amendment (the "Output routing" section, its `--json` envelope, and the interrupted-wait stderr notice); ADR 0027's "stdout line 1 is a session id" output contract (2026-07-30 amendment below)
 
 ## Context
 
@@ -37,7 +38,10 @@ not diagnostics. Exit codes keep ADR 0027 §8's global taxonomy (0 success,
 1 error/timeout, 2 intentional interruption), plus 128+N for waits killed by
 a local signal (below).
 
-### 2. stderr is only for inability to produce the report
+### 2. stderr is for inability to produce the report — and for session metadata
+
+*(Retitled by the 2026-07-30 amendment: stderr additionally carries session
+ids where they are not the payload; see below.)*
 
 stderr carries exactly one thing: the reason gmux could **not** produce the
 requested report. Usage errors, an unknown or ambiguous session reference, an
@@ -158,3 +162,65 @@ Rejected: two copies invite drift, and interactive users see it twice.
 
 Rejected. Freezing a per-verb, partially-thought envelope at first release is
 the most expensive possible way to get a machine contract.
+
+## Amendment (2026-07-30): the payload rule — session ids go to stderr unless they are the payload
+
+### Context
+
+The non-interactive `gmux -- <cmd>` flow printed a metadata block on stdout
+(`session:`, `adapter:`, `command:`, `pid:`, `socket:`, `serving...`,
+`exited:`) and none of the child's output — a leftover from the first
+`gmux-run` prototype, when printing a session's name and socket *was* the
+entire UX. Interactive attach later gated the block behind `!interactive`,
+and it silently became the piped-flow contract: an agent running
+`gmux -- pnpm build | tail` saw seven lines of metadata and could not read
+the failure it had just detected without a second `gmux tail` round trip.
+Similarly, synchronous `gmux agent prompt --new` prefixed its stdout report
+with an `=== <id> ===` header, mixing an address into the document.
+
+### Decision
+
+**stdout carries exactly the payload the command was asked to produce;
+stderr carries diagnostics and session metadata.** A session id is the
+payload only when producing it is the whole point of the command.
+
+| Command | payload on stdout | session id |
+| --- | --- | --- |
+| `gmux -- <cmd>` (non-interactive) | the child's output | **stderr** |
+| `gmux -d -- <cmd>` | the id | stdout (unchanged) |
+| `gmux agent prompt --new` (sync) | the exchange report | **stderr** |
+| `gmux agent prompt --new --no-wait` | the id | stdout (unchanged) |
+| `gmux wait <id>...` | the report(s) | n/a — `=== <id> ===` headers stay on stdout; they delimit multiple payloads |
+
+Consequences of the rule:
+
+- Rule 2 above is widened: stderr is no longer *only* the account of an
+  inability to report. It also carries session metadata — today, the bare
+  session id — printed the moment the session exists, so a watcher can
+  attach or tail while the command runs. Rule 2's discipline still applies
+  to diagnostics: one statement of the problem, one actionable hint.
+- The non-interactive `gmux -- <cmd>` flow relays the child's PTY output to
+  stdout with ANSI escape sequences stripped and CRLF normalised to LF. The
+  UI and scrollback keep the full escape stream; only the relay is cleaned.
+  The child's exit code keeps propagating unchanged.
+- `gmux -d -- <cmd>` and `gmux agent prompt --new --no-wait` keep the id on
+  stdout, because the id *is* their payload — the command-substitution shape
+  (`id=$(…)`) is their entire reason to exist.
+- Synchronous `gmux agent prompt --new` prints the bare id on stderr (still
+  the moment the session exists, before delivery) and its stdout is the
+  exchange report alone — the same document a plain sync prompt prints.
+- Multi-payload commands (`gmux wait a b c`) keep their `=== <id> ===`
+  headers on stdout: there they are not metadata but the delimiters that
+  make several payloads one readable document (rule 3).
+
+### What this amends in ADR 0027
+
+ADR 0027's "Output contract: the bare id is always stdout line 1" clause is
+superseded for the synchronous shape: under `--new`, stdout line 1 is a
+session id only with `--no-wait`. The invariant that survives, rephrased:
+**the id is emitted exactly once, the moment the session exists and before
+delivery — on stdout when it is the payload (`--no-wait`), on stderr
+otherwise — and nothing is emitted when no session exists.** Everything else
+in that clause stands: the id means only that the session is addressable,
+the exit code carries every verdict, and a post-spawn failure leaves the
+session owned by the caller.

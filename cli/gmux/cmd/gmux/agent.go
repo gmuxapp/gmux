@@ -431,12 +431,13 @@ var agentLaunchAdapter adapter.Adapter = adapters.NewPi()
 //
 // Ordering is the whole design. The prompt is read and the argv translated
 // BEFORE anything is spawned, so a usage error never leaves an orphan session
-// behind. Once the spawn succeeds the session id is written to stdout
-// immediately — before the prompt is even delivered — because from that
-// moment the caller owns a session they must be able to address no matter
-// what happens next. Everything after that point (admission failure, a turn
-// that errors, a --timeout) reports on stderr and exits per the taxonomy,
-// leaving stdout's first line exactly one bare session id.
+// behind. Once the spawn succeeds its id is emitted immediately — before the
+// prompt is delivered — because from that moment the caller owns a session it
+// must be able to address no matter what happens next. Which channel carries
+// it follows the payload rule (ADR 0028 amendment): --no-wait prints the bare
+// id on stdout because the id IS its payload; a synchronous run prints the
+// bare id on stderr, keeping stdout for the exchange report alone. Everything
+// after that point exits per the taxonomy without retracting that address.
 //
 // So the id line means one thing only: the session exists and is addressable.
 // It is not an admission receipt, not a readiness signal and not a claim that
@@ -468,20 +469,19 @@ func cmdAgentPromptNew(model, name string, noWait bool, timeoutSecs int, text *s
 		fmt.Fprintf(os.Stderr, "gmux: could not start %s: %s\n", strings.Join(argv, " "), err)
 		return waitExitError
 	}
-	// Line 1 of stdout, unconditionally and before delivery (ADR 0027, the
-	// 2026-07-27 --new amendment: "stdout line 1 means the session exists and
-	// is addressable"). It asserts NOTHING about admission, readiness or the
-	// turn — the exit code carries every one of those verdicts. Printing it
-	// here rather than at admission is what makes the guarantee
-	// unconditional: whatever fails next, the caller can address, retry
-	// against or kill the session it just paid for. os.Stdout is unbuffered,
-	// so a watcher reading the pipe can attach or tail during readiness.
-	if _, err := fmt.Fprintln(os.Stdout, id); err != nil {
+	// Print as soon as the session exists, before delivery. --no-wait keeps
+	// its command-substitution-friendly bare id on stdout; a synchronous run
+	// puts the bare id on stderr so stdout stays the report alone. Either form
+	// asserts only that the session is addressable — the exit code carries the
+	// delivery verdict.
+	if noWait {
+		_, err = fmt.Fprintln(os.Stdout, id)
+	} else {
+		_, err = fmt.Fprintln(os.Stderr, id)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
-	}
-	if !noWait {
-		fmt.Fprintln(os.Stdout)
 	}
 	return deliverPrompt(cliSession{ID: id}, agentModePrompt, noWait, timeoutSecs, prompt)
 }
@@ -857,9 +857,10 @@ instructions never end another observer's wait; all user boundaries admitted
 before the source settles appear in the report. Exit 0 means completed, 2 means
 intentionally interrupted, and 1 means failure or timeout.
 
-With --new, stdout is the bare id, a blank line, then the report. With
---new --no-wait, stdout is the id only. Semantic reads and delivery hide runner
-residency: an inactive conversation is resumed automatically when prompted.
+With synchronous --new, the bare session id is printed on stderr the moment the
+session exists and stdout is the report alone. With --new --no-wait, stdout is
+the bare id only. Semantic reads and delivery hide runner residency: an inactive
+conversation is resumed automatically when prompted.
 `)
 	case "agent cancel":
 		fmt.Fprint(w, `gmux agent cancel — interrupt active agent work

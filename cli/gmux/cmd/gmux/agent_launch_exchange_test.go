@@ -31,7 +31,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		}
 	})
 
-	t.Run("sync id precedes exchange report", func(t *testing.T) {
+	t.Run("sync stdout is the report alone, id on stderr", func(t *testing.T) {
 		d := startStubDaemon(t, localSession())
 		d.on(func(w http.ResponseWriter, _ *http.Request) {
 			writeEnvelope(w, http.StatusOK, map[string]any{"admission": "accepted", "outcome": "completed",
@@ -40,13 +40,19 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
-		stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
-		if code != 0 || !strings.HasPrefix(stdout, "1va8lvdv\n\n[USER]: go") || !strings.Contains(stdout, "[AGENT]: done") {
+		var stderr string
+		stdout := captureStdout(t, func() {
+			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+		})
+		if code != 0 || !strings.HasPrefix(stdout, "[USER]: go") || !strings.Contains(stdout, "[AGENT]: done") {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
+		}
+		if stderr != "1va8lvdv\n" {
+			t.Fatalf("stderr=%q, want bare id line", stderr)
 		}
 	})
 
-	t.Run("failure after spawn still prints id", func(t *testing.T) {
+	t.Run("failure after spawn still prints id on stderr", func(t *testing.T) {
 		d := startStubDaemon(t, localSession())
 		d.on(func(w http.ResponseWriter, _ *http.Request) {
 			writeErrEnvelope(w, http.StatusGatewayTimeout, "admission_timeout", "not ready")
@@ -54,9 +60,15 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
-		stdout := captureStdout(t, func() { captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) }) })
-		if code != waitExitError || stdout != "1va8lvdv\n\n" {
+		var stderr string
+		stdout := captureStdout(t, func() {
+			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+		})
+		if code != waitExitError || stdout != "" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
+		}
+		if !strings.HasPrefix(stderr, "1va8lvdv\n") {
+			t.Fatalf("stderr=%q, want the id as line 1", stderr)
 		}
 	})
 

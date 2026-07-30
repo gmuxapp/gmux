@@ -124,7 +124,10 @@ Rules:
   id on stdout line 1 (unchanged: printed as soon as the session exists), a
   blank line, then the report. `--new --no-wait`: the id only. The `--new`
   amendment's other rules (admission gate, pre-validation, failed sessions
-  are the caller's to keep) stand.
+  are the caller's to keep) stand. *(Amended 2026-07-30 by ADR 0028's
+  payload-rule amendment: the synchronous id line moves to stderr with no
+  separator; stdout is the report alone. `--no-wait` keeps the id on
+  stdout.)*
 - **`gmux agent status` is removed entirely.** Its "what matters now"
   question is answered by `logs` (defaults to the latest exchange, and shows
   `[Agent active, …]` when work is in flight).

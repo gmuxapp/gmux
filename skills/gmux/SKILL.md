@@ -13,10 +13,10 @@ the command begins.
 ## Primitives
 
 ```bash
-gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
+gmux -- <cmd> [args]         # run blocking; command output on stdout, session id on stderr
 gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux agent prompt <id> 'text'   # prompt an AGENT session; waits, prints the exchange report
-gmux agent prompt --new 'text'  # launch a new pi session AND prompt it (id, blank line, report)
+gmux agent prompt --new 'text'  # launch and prompt; id on stderr, report on stdout
 gmux agent logs <id> [-n N]     # the last N exchanges of the conversation (default 1)
 gmux agent cancel <id>          # interrupt the work in progress
 gmux send <id> 'text' Enter  # RAW: type text and submit (Enter is explicit)
@@ -41,8 +41,9 @@ fail with `unsupported_adapter`).
 `agent` / `send` / `wait` / `tail` / `kill`. Tip: `alias gm='gmux --'` makes
 `gm pytest` shorthand for `gmux -- pytest`.
 
-Because `gmux -- <cmd>` propagates the child's exit code, it composes:
-`if gmux -- pytest -q; then ...`.
+Because `gmux -- <cmd>` streams the command's ANSI-stripped output on stdout,
+prints its session id on stderr, and propagates the child's exit code, it
+composes: `gmux -- pytest -q | tail` or `if gmux -- pytest -q; then ...`.
 
 ## The exchange report
 
@@ -123,15 +124,15 @@ gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
 your env and cwd) and sends the prompt as its first work. Pass either an id or
 `--new`, never both.
 
-**The session id is stdout line 1**, printed the moment the session exists and
-before the prompt is delivered — so you can always address a session you just
-created, even if admission or the work then fails. It means only "this session
-exists and is addressable"; the exit code carries everything else. A
-synchronous run prints the id, a **blank line**, then the exchange report;
-`--no-wait` prints the bare id only and exits 0 once the work was **admitted**
+**The bare session id is printed the moment the session exists**, before the
+prompt is delivered — so you can always address a session you just created,
+even if admission or the work then fails. It means only "this session exists
+and is addressable"; the exit code carries everything else. A synchronous run
+prints the id on **stderr** and the exchange report alone on stdout; `--no-wait`
+prints the bare id on stdout only and exits 0 once the work was **admitted**
 (the agent started it) — on a sick session that line can block up to the 60 s
-admission window. A launch that never registers prints nothing on stdout and
-exits 1. A failure after the launch leaves the session behind and **you own
+admission window. A launch that never registers prints no id and exits 1. A
+failure after the launch leaves the session behind and **you own
 it** (it may still be running): retry against the id, read it, or
 `gmux kill $id`.
 
