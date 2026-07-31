@@ -197,9 +197,12 @@ Prompt and cancel failures name a stable code on stderr. Treat
 duplicate it; inspect with `gmux agent logs` first. A bare transport failure
 with no code (a dropped connection to gmuxd) is indeterminate for the same
 reason. `runner_outdated`, `precondition_failed`, `delivery_pending`,
-`not_ready`, `not_running` and `incarnation_mismatch` all guarantee nothing
-was delivered and are safe to retry. `unsupported_adapter` means the session's
-agent has no semantic support: use raw `send`/`tail`.
+`not_ready`, `not_running`, `incarnation_mismatch` and `runner_unreachable`
+all guarantee nothing was delivered and are safe to retry.
+`unsupported_adapter` means the session's agent has no semantic support: use
+raw `send`/`tail`. `unsupported_action` means the adapter cannot express this
+particular action (for example, cancel on an adapter without an interrupt key)
+and is equally safe to retry with a different approach.
 
 For pi, `agent cancel` also restores queued follow-ups into the composer, so
 after a cancel the composer may hold text nobody retyped — the next prompt

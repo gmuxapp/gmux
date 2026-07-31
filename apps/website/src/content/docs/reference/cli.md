@@ -224,8 +224,12 @@ use
 [`gmux agent prompt`](#gmux-agent-prompt-flags-id-prompt) or `gmux wait` for those. Bound it with
 `--timeout N`. Because gmuxd subscribes to the session's events *before*
 forwarding the bytes, it can't mistake the previous turn's idle state for the
-reply — unlike the racy `gmux send X Enter && gmux wait X` composition. The
-flags precede the id:
+reply — unlike the racy `gmux send X Enter && gmux wait X` composition.
+`send --wait` shares the 0/1/2 verdict with `gmux wait`, but **not** the
+first-signal 128+N report/re-arm behavior: a local SIGINT or SIGTERM triggers
+ordinary process signal handling, not the `[Wait interrupted; agent remains
+active]` handler that `gmux wait` and `gmux agent prompt` install. The flags
+precede the id:
 
 ```bash
 gmux send --wait a3f20187 'do the thing' Enter        # block until the reply lands
@@ -584,7 +588,7 @@ adapter, a transport failure — prints nothing on stdout and a concise account
 on stderr instead.
 
 Failures name a stable code, and the wording distinguishes what is known about
-delivery. `admission_timeout`, `delivery_timeout` and
+delivery. `admission_timeout`, `delivery_timeout`, and
 `transport_error` mean the prompt may already have reached the agent: inspect the
 session before resending, because a retry can duplicate it. A transport failure
 with no code at all — a dropped connection to gmuxd, a daemon restarted
@@ -592,11 +596,31 @@ mid-prompt — is indeterminate for the same reason: the request may have been
 delivered before the connection went away.
 
 The codes that guarantee **nothing** was delivered, and are therefore safe to
-retry as-is: `runner_outdated` (the session started before semantic actions
-existed — restart it, or drive it with `gmux send`), `precondition_failed`,
-`delivery_pending`, `not_ready`, `not_running`, and `incarnation_mismatch` (the
-session's runner was replaced while the prompt was on its way, and the
-replacement refused an action meant for its predecessor).
+retry as-is:
+
+- `runner_outdated` — the session started before semantic actions existed;
+  restart it, or drive it with `gmux send`
+- `precondition_failed` — the activity requirement was not met at commit time
+- `delivery_pending` — a previously delivered prompt has not produced an observed
+  turn yet
+- `not_ready` — the agent did not report readiness within the adapter's window
+- `not_running` — the session or its runner process was not running (child exited
+  before readiness, or the session was dead); zero bytes written
+- `incarnation_mismatch` — the session’s runner was replaced while the prompt was
+  on its way, and the replacement refused an action meant for its predecessor
+- `runner_unreachable` — the daemon could not reach the runner’s socket before
+  any bytes were sent; distinct from `delivery_timeout`, which is the indeterminate
+  deadline case
+- `unsupported_adapter` — this session’s adapter has no semantic action support;
+  use raw `gmux send` instead
+- `unsupported_action` — the adapter cannot express this particular action (e.g.
+  cancel on an adapter that has no interrupt key)
+
+`execution_timeout` is a distinct category that does not belong to the delivery
+taxonomy above: delivery and admission both succeeded, and the bounded
+execution wait expired while the activity was still running. The activity may
+continue — see the `[Wait timed out after Ns; agent active, …]` report on
+stdout. It is not a delivery failure and not a candidate for a prompt retry.
 
 #### `--new`: launch a session and prompt it in one command
 

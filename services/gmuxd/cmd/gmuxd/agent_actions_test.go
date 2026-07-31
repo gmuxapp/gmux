@@ -1287,17 +1287,34 @@ func TestOldRunnerBecomesRunnerOutdated(t *testing.T) {
 	}
 }
 
+// TestRunnerRefusalCodesArePreserved ensures every stable runner refusal code
+// reaches the caller intact. The runner owns whether bytes were delivered;
+// re-coding here would either lose that fact or claim something this daemon
+// cannot know.
+//
+// Delivery taxonomy:
+//
+//	not_running (409)        — zero bytes: child exited before readiness
+//	unsupported_adapter (422)— zero bytes: adapter has no semantic actions
+//	unsupported_action (422) — zero bytes: adapter cannot express this action
+//	not_ready (504)          — zero bytes: readiness deadline expired
+//	precondition_failed (409)— zero bytes: activity requirement not met
+//	delivery_pending (409)   — zero bytes: prior delivery not yet acknowledged
+//	transport_error (500→502)— INDETERMINATE: write failed mid-flight
 func TestRunnerRefusalCodesArePreserved(t *testing.T) {
 	for _, tc := range []struct {
 		status   int
 		code     string
 		wantHTTP int
 	}{
+		// Guaranteed non-delivery (safe to retry):
+		{http.StatusConflict, "not_running", http.StatusConflict},
 		{http.StatusConflict, "precondition_failed", http.StatusConflict},
 		{http.StatusConflict, "delivery_pending", http.StatusConflict},
 		{http.StatusGatewayTimeout, "not_ready", http.StatusGatewayTimeout},
 		{http.StatusUnprocessableEntity, "unsupported_adapter", http.StatusUnprocessableEntity},
-		{http.StatusServiceUnavailable, "transport_error", http.StatusServiceUnavailable},
+		{http.StatusUnprocessableEntity, "unsupported_action", http.StatusUnprocessableEntity},
+		// Indeterminate (inspect before retrying):
 		{http.StatusInternalServerError, "transport_error", http.StatusBadGateway},
 		// A runner rejecting gmuxd's own envelope is a gmux bug, not a
 		// caller error.
