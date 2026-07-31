@@ -108,9 +108,31 @@ gmux ls --json     # machine-readable, for parsing in scripts
 gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 ```
 
-`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` and `gmux agent` (including `agent logs`) do not (local only — run `gmux agent` in a session on the owning host instead).
+When parsing JSON, use `.ref` as the session argument — never `.id`. It is the
+authoritative address (`id` locally, `id@peer` remotely), so copying a peer row
+cannot accidentally target a same-named local session:
 
-Every verb accepts id prefixes, full session ids, or slugs, so the full eight-character ID `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
+```bash
+ref=$(gmux ls --all --json | jq -r 'map(select(.alive))[0].ref')
+gmux tail "$ref"
+```
+
+Rows are alive-first, newest-first. Even so, **`alive` is runner liveness only**:
+it says nothing about activity/idle state, success, health, resumability, or
+semantic support. Synchronize with `wait`, inspect a known `exit_code`, and
+trust each action's stable result/error instead. Optional keys are absent rather
+than `null` (an absent `exit_code` is unknown), peers may omit newer optional
+keys, and scripts must ignore unknown keys added during 2.x. `command` is argv,
+not shell text; timestamps are RFC 3339 and may contain fractional seconds.
+
+`send`, `tail`, and `kill` accept `<id>@<peer>` refs; `wait` and `gmux agent`
+(including `agent logs`) reject peer refs explicitly for now (run them on the
+owning host instead). Passing `.ref` is still the safe rule for every verb: it
+preserves owner scope instead of silently falling back to local.
+
+Every verb also accepts id prefixes, full session ids, or slugs. For human
+output, the full address printed in the ID column passes straight back to
+`kill`, `send`, `tail`, or `wait`.
 
 ## Nested gmux
 

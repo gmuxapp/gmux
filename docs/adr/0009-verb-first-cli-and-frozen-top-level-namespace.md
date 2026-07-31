@@ -181,12 +181,25 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
 >   so a copy-pasted cell stays addressable.
 > - **`--all` includes peers, not dead sessions.** Dead sessions are always
 >   listed (that is how `exit_code` is read); `--all` widens the *host* scope.
-> - **`--json` emits** `id, adapter, alive` always, plus `peer, cwd, pid,
->   title, slug, parent_session_id, socket_path, command, started_at,
->   exited_at, exit_code` when set. `parent_session_id` and `socket_path`
->   postdate this ADR; the stable-schema promise stands, and
->   `TestListJSONSchemaIsStable` now pins the key set so the next drift is a
->   test failure rather than a documentation bug.
+> - **`--json` emits** `ref, id, adapter, alive` always. `ref` is the
+>   authoritative directly reusable address: `id` locally and `id@peer`
+>   remotely. Peer names use lowercase alphanumeric hyphen-separated slug
+>   grammar and cannot contain `@`. Optional fields are `peer, cwd, pid, title,
+>   slug, runner_version, parent_session_id, socket_path, command, started_at,
+>   exited_at, exit_code`; unknown values are omitted, never `null`.
+>   `runner_version` is diagnostic, not capability negotiation, and binary
+>   hashes stay out of this CLI projection. `parent_session_id` and
+>   `socket_path` postdate this ADR.
+> - The top level is `[]`, never `null`, and both renderings are alive-first,
+>   newest-first with `ref` as the deterministic timestamp tie-breaker.
+>   Timestamps are RFC 3339 (fractional seconds allowed); `command` is argv;
+>   absent `exit_code` means unknown. Peer projections can omit newer optional
+>   fields. Consumers must ignore additive unknown keys. Existing key types,
+>   absence rules, owner scope, and meanings remain stable for 2.x.
+> - **`alive` is runner liveness only**, never activity/idleness, success,
+>   health, resumability, or semantic capability. Action results and stable
+>   errors remain authoritative. No derived UI `state` is mirrored into the
+>   list schema.
 
 13. **`gmux wait` waits for agent idle, bounded by `--timeout`.**
     `gmux wait <id>` blocks until the session goes **idle** (agent turn
