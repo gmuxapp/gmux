@@ -92,11 +92,51 @@ be14b052  alive   shell    bash          (/home/mg/dev/gmux)
   liveness filter.
 - `--json` — emit a JSON array instead of the table, for scripts and agents.
 
-The `--json` objects always carry `id`, `adapter` and `alive`, plus these when
-they are set: `peer`, `cwd`, `pid`, `title`, `slug`, `parent_session_id`,
-`socket_path`, `command`, `started_at`, `exited_at`, `exit_code`. Note there is
-no `idle` field — whether an agent is mid-turn is a question for `gmux wait`,
-not for a list snapshot.
+#### `ls --json` schema
+
+The top level is always an array (`[]` when empty, never `null`). JSON and table
+rows have the same deterministic order: alive first, then newest `started_at`,
+then `ref` lexicographically when timestamps are equal or unknown. A successful
+JSON invocation writes exactly one document plus a trailing newline to stdout
+and nothing to stderr.
+
+Every object has these required keys:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `ref` | string | Authoritative directly reusable session argument: `id` locally, `id@peer` for a peer. Pass this value, not a reconstructed or bare `id`, to `tail`, `send`, `wait`, `kill`, and `agent` verbs; verbs that do not support that owner fail explicitly. |
+| `id` | string | Owner-issued session ID. It is owner-local identity, retained separately from `ref`. |
+| `adapter` | string | Adapter name, such as `pi` or `shell`. |
+| `alive` | boolean | Runner/process liveness only. |
+
+These string, number, or array keys are optional and are omitted when unknown
+or unset — they are never JSON `null`:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `peer` | string | Owning peer; absent means local. Peer names are lowercase alphanumeric slug segments joined by `-`, so they cannot contain `@` and make `ref` ambiguous. |
+| `cwd` | string | Working directory on the owning host. |
+| `pid` | number | Process ID, only while known, in the owner's PID namespace. Do not use it to address a process on the consumer's host. |
+| `title` | string | Derived display title. |
+| `slug` | string | Human-readable owner-scoped session reference. |
+| `runner_version` | string | Diagnostic runner version. Do not compare it for capability negotiation; stable action errors are authoritative. |
+| `parent_session_id` | string | Raw parent ID. The parent belongs to the same owner (`peer`, or local) as this row. |
+| `socket_path` | string | Runner socket path on the owning host. |
+| `command` | array of strings | Exact command argv, not a shell command string. |
+| `started_at` | string | Session-start event time in RFC 3339 format. Fractional seconds are allowed. |
+| `exited_at` | string | Exit event time in RFC 3339 format, with optional fractional seconds. Absent means the event time is unknown or the session has not exited. |
+| `exit_code` | number | Process result when known. `0` is emitted; absence means **unknown**, not success. |
+
+**`alive` says only whether the runner is live.** It does **not** mean the
+session is active or idle, successful, healthy, resumable, or that any semantic
+action is supported. Use `wait` for activity completion, `exit_code` for a
+known process result, and the action's stable error/result for semantic
+support. There is deliberately no UI-derived `state` or `idle` field here.
+
+The schema evolves additively in 2.x: consumers must ignore unknown object
+keys. Existing keys keep their documented type, absence rules, and meaning.
+Peer rows are projections from their owner and may omit newer optional fields
+when the owner runs an older version.
 
 ### `gmux attach <id>`
 

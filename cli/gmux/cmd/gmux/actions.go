@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,14 +20,15 @@ import (
 // session is the subset of gmuxd's Session model that the CLI cares
 // about. Defined locally to avoid pulling in the gmuxd store package.
 type cliSession struct {
-	ID      string `json:"id"`
-	Peer    string `json:"peer,omitempty"`
-	Cwd     string `json:"cwd,omitempty"`
-	Adapter string `json:"adapter"`
-	Alive   bool   `json:"alive"`
-	Pid     int    `json:"pid,omitempty"`
-	Title   string `json:"title,omitempty"`
-	Slug    string `json:"slug,omitempty"`
+	ID            string `json:"id"`
+	Peer          string `json:"peer,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
+	Adapter       string `json:"adapter"`
+	Alive         bool   `json:"alive"`
+	Pid           int    `json:"pid,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Slug          string `json:"slug,omitempty"`
+	RunnerVersion string `json:"runner_version,omitempty"`
 	// ParentSessionID links a session to the one it was spawned from
 	// (e.g. `gmux edit` as $EDITOR inside a session). Must round-trip
 	// through `gmux ls --json` for scripts to see the relationship.
@@ -36,6 +38,20 @@ type cliSession struct {
 	StartedAt       string   `json:"started_at,omitempty"`
 	ExitedAt        string   `json:"exited_at,omitempty"`
 	ExitCode        *int     `json:"exit_code,omitempty"`
+}
+
+// MarshalJSON adds the authoritative, directly reusable session reference to
+// the daemon projection. ref is derived here rather than trusted from the API,
+// so it cannot disagree with the id/peer decomposition.
+func (s cliSession) MarshalJSON() ([]byte, error) {
+	type wireSession cliSession
+	return json.Marshal(struct {
+		Ref string `json:"ref"`
+		wireSession
+	}{
+		Ref:         displayID(s),
+		wireSession: wireSession(s),
+	})
 }
 
 // fetchSessions queries gmuxd for the full session list. Starts gmuxd
@@ -70,6 +86,11 @@ func fetchSessionsContext(ctx context.Context) ([]cliSession, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode sessions: %w", err)
+	}
+	for _, s := range envelope.Data {
+		if s.Peer != "" && !validPeerName.MatchString(s.Peer) {
+			return nil, fmt.Errorf("decode sessions: invalid peer name %q", s.Peer)
+		}
 	}
 	return envelope.Data, nil
 }
@@ -278,6 +299,11 @@ func lookupInPool(pool []cliSession, ref string) (*cliSession, []cliSession) {
 	}
 }
 
+// Peer names are normalized at creation by both manual-peer and devcontainer
+// discovery. Pin that grammar at the CLI boundary too: in particular, '@'
+// cannot occur and make the authoritative id@peer reference ambiguous.
+var validPeerName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
 // displayID returns the one canonical user-visible session address: the full
 // ID, qualified with @peer when the session is remote.
 func displayID(s cliSession) string {
@@ -311,6 +337,10 @@ func cmdList(all bool, asJSON bool) int {
 		sessions = filterByHost(sessions, "")
 	}
 
+	// Both renderings have the same deterministic order: alive first, then
+	// newest started_at, then canonical ref for equal/unknown timestamps.
+	sortSessions(sessions)
+
 	if asJSON {
 		return emitSessionsJSON(sessions)
 	}
@@ -319,14 +349,6 @@ func cmdList(all bool, asJSON bool) int {
 		fmt.Println("no sessions")
 		return 0
 	}
-
-	// Alive first; within each group, newest first.
-	sort.SliceStable(sessions, func(i, j int) bool {
-		if sessions[i].Alive != sessions[j].Alive {
-			return sessions[i].Alive
-		}
-		return sessions[i].StartedAt > sessions[j].StartedAt
-	})
 
 	// Measure columns.
 	idW, statusW, adapterW := len("ID"), len("STATUS"), len("ADAPTER")
@@ -369,6 +391,27 @@ func cmdList(all bool, asJSON bool) int {
 		fmt.Println(line)
 	}
 	return 0
+}
+
+func sortSessions(sessions []cliSession) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		a, b := sessions[i], sessions[j]
+		if a.Alive != b.Alive {
+			return a.Alive
+		}
+		aTime, aErr := time.Parse(time.RFC3339Nano, a.StartedAt)
+		bTime, bErr := time.Parse(time.RFC3339Nano, b.StartedAt)
+		switch {
+		case aErr == nil && bErr == nil && !aTime.Equal(bTime):
+			return aTime.After(bTime)
+		case (aErr == nil) != (bErr == nil):
+			return aErr == nil
+		case displayID(a) != displayID(b):
+			return displayID(a) < displayID(b)
+		default:
+			return a.Adapter < b.Adapter
+		}
+	})
 }
 
 // cmdKill implements `gmux kill <id>`.

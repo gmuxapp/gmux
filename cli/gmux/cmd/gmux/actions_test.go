@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"slices"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -338,58 +338,190 @@ func TestIsNoMatchError(t *testing.T) {
 	}
 }
 
-// TestListJSONSchemaIsStable pins the `gmux ls --json` key set. ADR 0009
-// decision 13b promised a "stable schema" and then described one the code never
-// emitted (`kind` for what is really `adapter`, plus an `idle` field that has
-// never existed, since idleness is a turn property read through `gmux wait`,
-// not a property of a list row). Scripts are written against this shape, so a
-// rename or a dropped field should fail here rather than in someone's pipeline.
+func TestListJSONCommandGolden(t *testing.T) {
+	exit := 0
+	tests := []struct {
+		name     string
+		sessions []cliSession
+		all      bool
+		want     string
+	}{
+		{
+			name: "empty is an array",
+			want: "[]\n",
+		},
+		{
+			name:     "minimal local",
+			sessions: []cliSession{{ID: "1va8lvdv", Adapter: "shell", Alive: true}},
+			want:     "[\n  {\n    \"ref\": \"1va8lvdv\",\n    \"id\": \"1va8lvdv\",\n    \"adapter\": \"shell\",\n    \"alive\": true\n  }\n]\n",
+		},
+		{
+			name: "full peer",
+			all:  true,
+			sessions: []cliSession{{
+				ID: "1va8lvdv", Peer: "work-laptop", Cwd: "/home/mg/dev/gmux",
+				Adapter: "pi", Alive: false, Pid: 4242, Title: "fix auth bug",
+				Slug: "fix-auth-bug", RunnerVersion: "2.0.0", ParentSessionID: "1u0xpj5g",
+				SocketPath: "/run/gmux/1va8lvdv.sock", Command: []string{"pi", "--model", "sonnet"},
+				StartedAt: "2026-07-27T10:00:00.123Z", ExitedAt: "2026-07-27T10:05:00Z", ExitCode: &exit,
+			}},
+			want: "[\n  {\n    \"ref\": \"1va8lvdv@work-laptop\",\n    \"id\": \"1va8lvdv\",\n    \"peer\": \"work-laptop\",\n    \"cwd\": \"/home/mg/dev/gmux\",\n    \"adapter\": \"pi\",\n    \"alive\": false,\n    \"pid\": 4242,\n    \"title\": \"fix auth bug\",\n    \"slug\": \"fix-auth-bug\",\n    \"runner_version\": \"2.0.0\",\n    \"parent_session_id\": \"1u0xpj5g\",\n    \"socket_path\": \"/run/gmux/1va8lvdv.sock\",\n    \"command\": [\n      \"pi\",\n      \"--model\",\n      \"sonnet\"\n    ],\n    \"started_at\": \"2026-07-27T10:00:00.123Z\",\n    \"exited_at\": \"2026-07-27T10:05:00Z\",\n    \"exit_code\": 0\n  }\n]\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			startStubDaemon(t, tc.sessions)
+			var stdout string
+			stderr := captureStderr(t, func() {
+				stdout = captureStdout(t, func() {
+					if code := cmdList(tc.all, true); code != 0 {
+						t.Errorf("cmdList exit = %d, want 0", code)
+					}
+				})
+			})
+			if stdout != tc.want {
+				t.Errorf("stdout mismatch\ngot:\n%s\nwant:\n%s", stdout, tc.want)
+			}
+			if stderr != "" {
+				t.Errorf("stderr = %q, want empty", stderr)
+			}
+		})
+	}
+}
+
+func TestListTableUsesContractOrdering(t *testing.T) {
+	startStubDaemon(t, []cliSession{
+		{ID: "dead-new", Adapter: "shell", StartedAt: "2026-07-31T12:00:00Z"},
+		{ID: "live-old", Adapter: "pi", Alive: true, StartedAt: "2026-07-30T12:00:00Z"},
+		{ID: "live-new", Adapter: "pi", Alive: true, StartedAt: "2026-07-31T12:00:00Z"},
+	})
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			if code := cmdList(false, false); code != 0 {
+				t.Errorf("cmdList exit = %d, want 0", code)
+			}
+		})
+	})
+	want := "ID        STATUS  ADAPTER  TITLE\n" +
+		"live-new  alive   pi       \n" +
+		"live-old  alive   pi       \n" +
+		"dead-new  dead    shell    \n"
+	if stdout != want {
+		t.Errorf("stdout mismatch\ngot:\n%q\nwant:\n%q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestListJSONOrderingResultsNullNormalizationAndRefs(t *testing.T) {
+	startStubDaemon(t, nil).onSessions(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"data":[
+			{"id":"dead-zero","adapter":"shell","alive":false,"started_at":"2026-07-30T10:00:00Z","exited_at":"2026-07-30T10:01:00Z","exit_code":0},
+			{"id":"live-b","peer":"tower","adapter":"pi","alive":true,"started_at":"2026-07-31T10:00:00Z","pid":null,"exited_at":null,"exit_code":null,"binary_hash":"private"},
+			{"id":"dead-unknown","adapter":"shell","alive":false,"started_at":"2026-07-31T11:00:00Z"},
+			{"id":"live-a","adapter":"pi","alive":true,"started_at":"2026-07-31T12:00:00+02:00"}
+		]}`)
+	})
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			if code := cmdList(true, true); code != 0 {
+				t.Fatalf("cmdList exit = %d", code)
+			}
+		})
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("stdout is not one JSON array: %v\n%s", err, stdout)
+	}
+	wantRefs := []string{"live-a", "live-b@tower", "dead-unknown", "dead-zero"}
+	if len(rows) != len(wantRefs) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(wantRefs))
+	}
+	for i, wantRef := range wantRefs {
+		var ref string
+		if err := json.Unmarshal(rows[i]["ref"], &ref); err != nil || ref != wantRef {
+			t.Errorf("row %d ref = %q (%v), want %q", i, ref, err, wantRef)
+		}
+		for _, key := range []string{"pid", "exited_at", "exit_code"} {
+			if string(rows[i][key]) == "null" {
+				t.Errorf("row %d emits %s:null; optional fields must be omitted", i, key)
+			}
+		}
+		if _, ok := rows[i]["binary_hash"]; ok {
+			t.Errorf("row %d exposes binary_hash", i)
+		}
+	}
+	if _, ok := rows[3]["exit_code"]; !ok {
+		t.Error("known zero exit_code was omitted")
+	}
+	if _, ok := rows[2]["exit_code"]; ok {
+		t.Error("unknown exit_code was emitted")
+	}
+
+	// Every emitted ref must round-trip through the same resolver used by
+	// tail/send/wait/kill/agent verbs.
+	sessions, err := fetchSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range wantRefs {
+		if _, err := matchSession(sessions, ref); err != nil {
+			t.Errorf("emitted ref %q is not reusable: %v", ref, err)
+		}
+	}
+}
+
+func TestFetchSessionsRejectsAmbiguousPeerName(t *testing.T) {
+	startStubDaemon(t, nil).onSessions(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"data":[{"id":"abc12345","peer":"bad@peer","adapter":"pi","alive":true}]}`)
+	})
+	if _, err := fetchSessions(); err == nil || !strings.Contains(err.Error(), "invalid peer name") {
+		t.Fatalf("fetchSessions error = %v, want invalid peer name", err)
+	}
+}
+
+// This test pins existing fields and their types while deliberately allowing
+// additive keys in future 2.x releases.
 func TestListJSONSchemaIsStable(t *testing.T) {
 	exit := 0
 	full := cliSession{
-		ID: "1va8lvdv", Peer: "laptop", Cwd: "/home/mg/dev/gmux",
-		Adapter: "pi", Alive: true, Pid: 4242, Title: "fix auth bug",
-		Slug: "fix-auth-bug", ParentSessionID: "1u0xpj5g",
-		SocketPath: "/run/gmux/1va8lvdv.sock",
-		Command:    []string{"pi", "--model", "sonnet"},
-		StartedAt:  "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z",
-		ExitCode: &exit,
-	}
-	wantAll := []string{
-		"id", "peer", "cwd", "adapter", "alive", "pid", "title", "slug",
-		"parent_session_id", "socket_path", "command", "started_at",
-		"exited_at", "exit_code",
+		ID: "1va8lvdv", Peer: "laptop", Cwd: "/work", Adapter: "pi", Alive: true,
+		Pid: 42, Title: "title", Slug: "slug", RunnerVersion: "2.0.0",
+		ParentSessionID: "parent", SocketPath: "/run/socket", Command: []string{"pi"},
+		StartedAt: "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z", ExitCode: &exit,
 	}
 	got := jsonKeys(t, full)
-	for _, k := range wantAll {
-		if _, ok := got[k]; !ok {
-			t.Errorf("populated session omits documented key %q; keys: %v", k, sortedKeys(got))
-		}
+	wantTypes := map[string]byte{
+		"ref": '"', "id": '"', "peer": '"', "cwd": '"', "adapter": '"', "alive": 't',
+		"pid": '4', "title": '"', "slug": '"', "runner_version": '"', "parent_session_id": '"',
+		"socket_path": '"', "command": '[', "started_at": '"', "exited_at": '"', "exit_code": '0',
 	}
-	for k := range got {
-		if !slices.Contains(wantAll, k) {
-			t.Errorf("undocumented key %q in ls --json; document it in ADR 0009 13b and reference/cli.md", k)
+	for key, firstByte := range wantTypes {
+		value, ok := got[key]
+		if !ok {
+			t.Errorf("populated session omits documented key %q; keys: %v", key, sortedKeys(got))
+		} else if len(value) == 0 || value[0] != firstByte {
+			t.Errorf("key %q has value %s, want JSON type beginning %q", key, value, firstByte)
 		}
 	}
 
-	// A minimal session must still answer the three questions every script
-	// asks: which session, what is running, is it still running.
 	bare := jsonKeys(t, cliSession{ID: "1va8lvdv"})
-	for _, k := range []string{"id", "adapter", "alive"} {
-		if _, ok := bare[k]; !ok {
-			t.Errorf("zero-value session omits always-present key %q; keys: %v", k, sortedKeys(bare))
+	for _, key := range []string{"ref", "id", "adapter", "alive"} {
+		if _, ok := bare[key]; !ok {
+			t.Errorf("minimal session omits required key %q", key)
 		}
 	}
-	for _, k := range []string{"peer", "cwd", "pid", "title", "slug", "parent_session_id", "socket_path", "command", "started_at", "exited_at", "exit_code"} {
-		if _, ok := bare[k]; ok {
-			t.Errorf("key %q should be omitempty but appears on a zero-value session", k)
+	for _, key := range []string{"peer", "cwd", "pid", "title", "slug", "runner_version", "parent_session_id", "socket_path", "command", "started_at", "exited_at", "exit_code"} {
+		if _, ok := bare[key]; ok {
+			t.Errorf("optional key %q appears on a minimal session", key)
 		}
-	}
-	if _, ok := got["kind"]; ok {
-		t.Error("`kind` is the pre-adapter wire name and must not come back (UBIQUITOUS_LANGUAGE.md)")
-	}
-	if _, ok := got["idle"]; ok {
-		t.Error("`idle` must not be a list field: idleness is a turn property, read via `gmux wait`")
 	}
 }
 
