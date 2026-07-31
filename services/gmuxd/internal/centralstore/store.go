@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore/internal/db"
 	"github.com/pressly/goose/v3"
@@ -67,6 +68,13 @@ type Store struct {
 
 // Open creates (when absent), configures, and migrates the database in dir.
 func Open(ctx context.Context, dir string) (*Store, error) {
+	return openWithMigrationFS(ctx, dir, migrationFiles)
+}
+
+// openWithMigrationFS is the package test seam for exercising the complete
+// production startup path with synthetic migrations. Open always supplies the
+// embedded migration filesystem.
+func openWithMigrationFS(ctx context.Context, dir string, files fs.FS) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("centralstore: empty state directory")
 	}
@@ -81,6 +89,29 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 	}
 
 	path := DatabasePath(dir)
+	existingNonEmpty := false
+	var currentVersion int64
+	if info, statErr := os.Stat(path); statErr == nil {
+		existingNonEmpty = info.Size() > 0
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("centralstore: stat database: %w", statErr)
+	}
+	head, err := migrationHead(files, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	// Refuse a newer database through a read-only connection before opening
+	// the writer, migrating, or serving any domain data. Tightening an existing
+	// state directory from 0755 to 0700 above is an intentional security repair.
+	if existingNonEmpty {
+		currentVersion, err = databaseVersionReadOnly(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		if err := ensureSchemaCompatible(currentVersion, head); err != nil {
+			return nil, err
+		}
+	}
 	// Pre-create the database file with owner-only permissions so the driver
 	// never creates it with a umask-derived mode (removing the
 	// created-then-chmod TOCTOU window), then tighten unconditionally so a
@@ -135,16 +166,20 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 	if err := readDB.PingContext(ctx); err != nil {
 		return closeOnError(fmt.Errorf("centralstore: connect read pool: %w", err))
 	}
-	migrations, err := fs.Sub(migrationFiles, "migrations")
+	migrations, err := fs.Sub(files, "migrations")
 	if err != nil {
 		return closeOnError(fmt.Errorf("centralstore: load migrations: %w", err))
 	}
-	if err := migrate(ctx, database, migrations); err != nil {
+	backupPath, err := migrateWithSafety(ctx, database, migrations, migrationSafety{
+		existingNonEmpty: existingNonEmpty,
+		currentVersion:   currentVersion,
+		headVersion:      head,
+		stateDir:         dir,
+	})
+	if err != nil {
 		return closeOnError(err)
 	}
-	// Post-migration integrity gate (ADR 0026 §10): a corrupt page that
-	// migration didn't touch must still stop startup fail-closed.
-	if err := quickCheck(ctx, database); err != nil {
+	if err := postMigrationChecks(ctx, database, backupPath); err != nil {
 		return closeOnError(err)
 	}
 	return &Store{database: database, readDB: readDB, queries: db.New(database), readQ: db.New(readDB)}, nil
@@ -156,15 +191,92 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 // configured with a custom table name, change both here.
 const gooseVersionTable = "goose_db_version"
 
+type migrationSafety struct {
+	existingNonEmpty bool
+	currentVersion   int64
+	headVersion      int64
+	stateDir         string
+}
+
+// migrate is retained as the small migration test seam. Production uses
+// migrateWithSafety so every existing database upgrade has a recovery point.
 func migrate(ctx context.Context, database *sql.DB, files fs.FS) error {
+	_, err := migrateWithSafety(ctx, database, files, migrationSafety{})
+	return err
+}
+
+// migrateWithSafety returns the retained pre-migration backup path whenever an
+// upgrade was attempted, including after a successful provider.Up. The caller
+// carries that recovery context through the mandatory post-migration checks.
+func migrateWithSafety(ctx context.Context, database *sql.DB, files fs.FS, safety migrationSafety) (string, error) {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, database, files)
 	if err != nil {
-		return fmt.Errorf("centralstore: configure migrations: %w", err)
+		return "", fmt.Errorf("centralstore: configure migrations: %w", err)
+	}
+	var backupPath string
+	if safety.existingNonEmpty && safety.currentVersion < safety.headVersion {
+		if err := prepareAutomaticBackupDir(safety.stateDir); err != nil {
+			return "", fmt.Errorf("centralstore: pre-migration backup: %w", err)
+		}
+		backupPath = preMigrationBackupPath(safety.stateDir, safety.currentVersion, safety.headVersion, time.Now().UTC())
+		// Use the same consistent VACUUM INTO mechanism as operator backups,
+		// directly on this pool: opening another Store would recurse through
+		// migration and could back up a moving database.
+		if err := (&Store{database: database}).BackupInto(ctx, backupPath); err != nil {
+			return "", fmt.Errorf("centralstore: pre-migration backup %s: %w", backupPath, err)
+		}
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("centralstore: migrate: %w", err)
+		if backupPath != "" {
+			return backupPath, fmt.Errorf("centralstore: migrate (pre-migration backup retained at %s): %w", backupPath, err)
+		}
+		return "", fmt.Errorf("centralstore: migrate: %w", err)
+	}
+	return backupPath, nil
+}
+
+func prepareAutomaticBackupDir(stateDir string) error {
+	dir := filepath.Join(stateDir, "backups")
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return fmt.Errorf("centralstore: create automatic backup directory: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("centralstore: inspect automatic backup directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("centralstore: automatic backup path must be a real directory, not a symlink or file: %s", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("centralstore: secure automatic backup directory: %w", err)
 	}
 	return nil
+}
+
+func postMigrationChecks(ctx context.Context, database *sql.DB, backupPath string) error {
+	wrap := func(err error) error {
+		if backupPath != "" {
+			return fmt.Errorf("centralstore: post-migration check failed (pre-migration backup retained at %s): %w", backupPath, err)
+		}
+		return err
+	}
+	// ADR 0026 §10: corruption or a migration-introduced FK violation must
+	// stop startup fail-closed.
+	if err := quickCheck(ctx, database); err != nil {
+		return wrap(err)
+	}
+	if err := foreignKeyCheck(ctx, database); err != nil {
+		return wrap(err)
+	}
+	return nil
+}
+
+func preMigrationBackupPath(stateDir string, from, to int64, stamp time.Time) string {
+	name := fmt.Sprintf("state-pre-migration-v%d-to-v%d-%s.db", from, to, stamp.Format("20060102T150405.000000000Z"))
+	return filepath.Join(stateDir, "backups", name)
 }
 
 // Close releases both connection pools. When the read pool is the same

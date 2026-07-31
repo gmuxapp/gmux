@@ -21,6 +21,26 @@ var ErrDatabaseMissing = errors.New("centralstore: database file missing")
 // (and tests) can pin quick_check as the detection mechanism.
 var ErrIntegrity = errors.New("centralstore: integrity check failed")
 
+// ErrSchemaTooNew marks a database created by a newer gmux binary. There is
+// deliberately no downgrade path: install a binary that supports the recorded
+// version or restore a compatible pre-migration backup.
+var ErrSchemaTooNew = errors.New("centralstore: database schema is newer than this binary")
+
+// SchemaTooNewError carries both sides of an incompatible schema comparison.
+type SchemaTooNewError struct {
+	DatabaseVersion int64
+	EmbeddedVersion int64
+}
+
+func (e *SchemaTooNewError) Error() string {
+	return fmt.Sprintf("%v: database version %d, embedded head %d; install a newer gmux binary or restore a compatible pre-migration backup", ErrSchemaTooNew, e.DatabaseVersion, e.EmbeddedVersion)
+}
+
+func (e *SchemaTooNewError) Unwrap() error { return ErrSchemaTooNew }
+
+// ErrForeignKeyIntegrity marks rows that violate declared foreign keys.
+var ErrForeignKeyIntegrity = errors.New("centralstore: foreign key check failed")
+
 // Verify opens the database read-only and checks its integrity without
 // touching the writer's world: `PRAGMA quick_check` plus a schema-version
 // sanity read. It is the bootstrap phase-1a gate — it must be safe to run
@@ -65,13 +85,70 @@ func Verify(ctx context.Context, dir string) error {
 	// Schema-version sanity read: the migration bookkeeping must be present
 	// and readable. A DB without it was never migrated by this daemon and is
 	// not ours to serve.
-	var version int64
-	if err := database.QueryRowContext(ctx,
-		"SELECT COALESCE(MAX(version_id), 0) FROM "+gooseVersionTable).Scan(&version); err != nil {
-		return fmt.Errorf("centralstore: schema version read: %w", err)
+	version, err := databaseVersion(ctx, database)
+	if err != nil {
+		return err
 	}
 	if version < 1 {
 		return errors.New("centralstore: database carries no applied migrations")
+	}
+	head, err := EmbeddedSchemaVersion()
+	if err != nil {
+		return err
+	}
+	return ensureSchemaCompatible(version, head)
+}
+
+func databaseVersionReadOnly(ctx context.Context, path string) (int64, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return 0, fmt.Errorf("centralstore: absolute database path: %w", err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String() +
+		"?mode=ro&_pragma=busy_timeout(5000)"
+	database, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return 0, fmt.Errorf("centralstore: open database schema preflight: %w", err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	return databaseVersion(ctx, database)
+}
+
+func databaseVersion(ctx context.Context, database *sql.DB) (int64, error) {
+	var exists int
+	if err := database.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", gooseVersionTable).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("centralstore: schema version preflight: %w", err)
+	}
+	if exists == 0 {
+		return 0, nil
+	}
+	// Goose's current-version semantics inspect history newest-first: only the
+	// newest row for each version counts, and a latest is_applied=0 row marks
+	// that version rolled back. Return the first still-applied version in that
+	// history, rather than MAX(version_id), which includes rolled-back mentions.
+	var version int64
+	query := `SELECT COALESCE((
+		SELECT history.version_id
+		FROM ` + gooseVersionTable + ` AS history
+		WHERE history.is_applied = 1
+		  AND NOT EXISTS (
+			SELECT 1 FROM ` + gooseVersionTable + ` AS newer
+			WHERE newer.version_id = history.version_id AND newer.id > history.id
+		  )
+		ORDER BY history.id DESC
+		LIMIT 1
+	), 0)`
+	if err := database.QueryRowContext(ctx, query).Scan(&version); err != nil {
+		return 0, fmt.Errorf("centralstore: schema version read: %w", err)
+	}
+	return version, nil
+}
+
+func ensureSchemaCompatible(version, head int64) error {
+	if version > head {
+		return &SchemaTooNewError{DatabaseVersion: version, EmbeddedVersion: head}
 	}
 	return nil
 }
@@ -99,4 +176,28 @@ func quickCheck(ctx context.Context, database *sql.DB) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s", ErrIntegrity, strings.Join(findings, "; "))
+}
+
+func foreignKeyCheck(ctx context.Context, database *sql.DB) error {
+	rows, err := database.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("centralstore: foreign_key_check: %w", err)
+	}
+	defer rows.Close()
+	var findings []string
+	for rows.Next() {
+		var table, parent string
+		var rowID, fkID sql.NullInt64
+		if err := rows.Scan(&table, &rowID, &parent, &fkID); err != nil {
+			return fmt.Errorf("centralstore: foreign_key_check scan: %w", err)
+		}
+		findings = append(findings, fmt.Sprintf("table %q row %d references missing parent %q (fk %d)", table, rowID.Int64, parent, fkID.Int64))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("centralstore: foreign_key_check: %w", err)
+	}
+	if len(findings) != 0 {
+		return fmt.Errorf("%w: %s", ErrForeignKeyIntegrity, strings.Join(findings, "; "))
+	}
+	return nil
 }

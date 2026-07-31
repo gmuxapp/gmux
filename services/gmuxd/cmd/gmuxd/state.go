@@ -276,16 +276,16 @@ func runStateReset(stdout, stderr io.Writer) int {
 	}
 
 	if err := stateResetTerminate(); err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: terminate local sessions: %v\nreset aborted; backup: %s\n", err, backup)
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: terminate local sessions: %v\nreset stopped; some sessions may already have been terminated; backup retained at: %s\n", err, backup)
 		return 3
 	}
 	if err := stateResetStop(); err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: stop daemon: %v\nreset aborted; backup: %s\n", err, backup)
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: stop daemon: %v\nreset stopped after terminating sessions; backup retained at: %s\n", err, backup)
 		return 3
 	}
 	socketDirs := append([]string{paths.SessionSocketDir()}, paths.LegacySessionSocketDirs()...)
 	if err := stateResetRemove(stateDir, socketDirs...); err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: %v\nreset aborted; backup: %s\n", err, backup)
+		_, _ = fmt.Fprintf(stderr, "gmuxd state reset: %v\nreset failed; side effects or partial deletion may have occurred; backup retained at: %s\n", err, backup)
 		return 3
 	}
 	if err := stateResetStart(); err != nil {
