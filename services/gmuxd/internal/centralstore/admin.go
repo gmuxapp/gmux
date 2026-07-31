@@ -73,7 +73,11 @@ func OpenReadOnly(ctx context.Context, dir string) (*Store, error) {
 // EmbeddedSchemaVersion returns the highest migration version compiled into
 // this binary — the version CheckState expects the database to carry.
 func EmbeddedSchemaVersion() (int64, error) {
-	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	return migrationHead(migrationFiles, "migrations")
+}
+
+func migrationHead(files fs.FS, dir string) (int64, error) {
+	entries, err := fs.ReadDir(files, dir)
 	if err != nil {
 		return 0, fmt.Errorf("centralstore: read embedded migrations: %w", err)
 	}

@@ -58,7 +58,19 @@ The `check-centralstore-generated` and `check-centralstore-cross-build` tasks
 are not yet reachable from the CI task graph; wiring them into CI belongs to
 the operational integration slice.
 
-Migrations under `migrations/` are immutable schema source. Stable query SQL and
-checked-in generated files live under `internal/db`; transaction orchestration
-uses generated `Queries.WithTx`, and Go structurally prevents imports of those
-primitives from outside `centralstore`.
+Migrations under `migrations/` are immutable schema source. The released v1
+baseline checksum is pinned by `TestReleasedV1MigrationChecksum`; change the
+schema only by adding a new numbered migration. Upgrade tests build a
+representative v1 database, retain sessions/projects/placements/manual-peer
+secrets through v2, verify integrity and foreign keys, and pin idempotent
+reopen behavior.
+
+Goose atomicity is **per migration**, not across the whole pending set. If v2
+commits and v3 fails, the database remains at v2; the failing migration rolls
+back its own transaction. Before applying any pending migration to an existing
+non-empty database, startup retains a timestamped owner-only `VACUUM INTO`
+backup under `backups/`, and migration diagnostics include that path. Fresh
+creation does not need a backup. Stable query SQL and checked-in generated
+files live under `internal/db`; transaction orchestration uses generated
+`Queries.WithTx`, and Go structurally prevents imports of those primitives
+from outside `centralstore`.

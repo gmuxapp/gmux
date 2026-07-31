@@ -35,7 +35,34 @@ This runs the daemon in the foreground so you can see errors directly. Use `gmux
 gmux daemon state check
 ```
 
-Verifies migration status, SQLite integrity, and foreign keys. If the daemon won’t start due to a database problem, the error log will say so — `state check` can run offline for diagnosis. Use `gmux daemon state backup <path>` to take a consistent backup before attempting recovery.
+Verifies migration status, SQLite integrity, and foreign keys. If the daemon won’t start due to a database problem, the error log will say so — `state check` can run offline for diagnosis. Use `gmux daemon state backup <path>` to take a consistent backup before attempting recovery. Backups are consistent SQLite copies made with `VACUUM INTO`, not raw copies of a live `state.db`, and contain peer tokens.
+
+Before gmux migrates an existing non-empty database, it creates an owner-only timestamped backup under the state directory's `backups/` folder. A failed migration leaves that backup in place and prints its path. gmux refuses to open a database newer than the schema embedded in the installed binary; install a compatible newer gmux or restore a pre-migration backup rather than downgrading the database.
+
+### Restore a database backup
+
+Use this exact offline drill on Linux/macOS. It stops the daemon, preserves the failed database and its WAL files for diagnosis, installs the backup as `state.db` with owner-only modes, restarts, and checks the restored state:
+
+```bash
+set -eu
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gmux"
+BACKUP="/absolute/path/to/backup.db"
+
+gmux daemon stop
+install -d -m 700 "$STATE_DIR"
+FAILED="$(mktemp -d "$STATE_DIR/failed-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+for name in state.db state.db-wal state.db-shm; do
+  if [ -e "$STATE_DIR/$name" ]; then
+    mv "$STATE_DIR/$name" "$FAILED/$name"
+  fi
+done
+install -m 600 "$BACKUP" "$STATE_DIR/state.db"
+chmod 700 "$STATE_DIR"
+gmux daemon start
+gmux daemon state check
+```
+
+Do not move or copy a live `state.db` directly. If startup or `state check` fails, stop the daemon and retain both `$FAILED` and the backup.
 
 ## Sessions don't appear in the sidebar
 

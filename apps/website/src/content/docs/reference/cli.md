@@ -754,6 +754,10 @@ gmux daemon state export         # redacted JSON dump for bug reports
 gmux daemon state reset --yes    # back up automatically, terminate sessions, and start clean
 ```
 
+State backups use SQLite `VACUUM INTO` and contain peer tokens. Before schema upgrades, gmux also writes an owner-only timestamped backup under the state directory's `backups/` folder. See the [offline restore drill](/troubleshooting/#restore-a-database-backup).
+
+`state reset` preserves its completed backup when a later step fails, but reset is not transactional: runner termination is an intentional side effect, and a late filesystem error can occur after some database, session, or socket artifacts have already been deleted. Follow the reported backup path rather than assuming “reset failed” means nothing changed.
+
 `gmux daemon status` example:
 
 ```
