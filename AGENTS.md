@@ -58,6 +58,29 @@ messages directly. Rules that follow from this:
   Discord announcement falls back to the auto-generated bullet list
   so subscribers can still see what changed without clicking through.
 
+## Killing processes
+
+Tests, probes and cleanup scripts run on real developer desktops, not in
+throwaway containers. A stray signal takes down the user's session.
+
+- **Never derive a signal target from a process-name pattern.** `pgrep -f
+  'sleep 30'` matches other people's processes, including ones owned by the
+  graphical session. Signal only PIDs that the test or script recorded when it
+  spawned them.
+- **Never signal a negative PID unless we created that process group.** Verify
+  `getpgid(pid) == pid` first: gmux detaches runners with `setsid`, so a leader
+  we own is its own group. A group id read out of `ps` may be the compositor's,
+  and `kill -- -$pgid` then takes the whole desktop with it.
+- **Escalate inside our own tree only**: TERM the recorded PID or a verified
+  group, poll for disappearance, then KILL. Never `kill -1`, never `kill 0`.
+- **Isolate destructive process work** in a container or a separate login
+  session. Isolated `XDG_*` directories scope files, not signals.
+
+Precedent: a review agent reaped a leaked `sleep 30` by pattern, matched the
+unrelated `sleep 30` polling inside `pi-sleep-guard`, and TERM+KILLed its
+process group — which was the compositor's. The desktop died and the user was
+returned to the login screen.
+
 ## Other rules
 
 - Push changes and create pull requests. Don't commit directly to
