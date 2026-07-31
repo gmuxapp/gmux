@@ -88,7 +88,7 @@ The extension reports each turn with a normalized, agent-agnostic outcome; gmux 
 
 If a pi release ever breaks the extension, set `GMUX_NO_AGENT_HOOK=1` to launch pi without it. Pi runs normally; gmux just won't show hook-driven title/status/attribution until you unset it (or a fix ships). For sessions launched from the web UI or resumed by the daemon, set the variable in the daemon's environment (it's read by the runner, which the daemon spawns).
 
-One-shot pi commands are never extended or wrapped in a session — gmux execs them directly: the subcommands `install`, `remove`, `uninstall`, `update`, `list`, `config` (immediately after the binary) and the info flags `--help`/`-h`/`--version`.
+One-shot pi commands are never extended or wrapped in a session — gmux execs them directly: the subcommands `auth`, `install`, `remove`, `uninstall`, `update`, `list`, `config` (immediately after the binary) and the info flags `--help`/`-h`/`--version`.
 
 ## Limitations
 

@@ -24,7 +24,5 @@ Both ship as platform-specific binaries with checksums. The web UI is compiled i
 
 ## Open items
 
-- Release tooling for Go binaries (goreleaser or equivalent)
 - Provenance/signing approach for binary downloads
-- CLI UX for first run (`gmux doctor`, `gmux open`)
-- Homebrew / AUR / Nix packaging
+- AUR / Nix packaging

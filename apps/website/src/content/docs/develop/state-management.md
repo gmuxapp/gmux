@@ -11,19 +11,20 @@ Session state flows one way: runners (and their agent hooks) produce it, `gmuxd`
 
 After a domain transaction commits, it signals a coalesced invalidation. gmuxd queries a complete snapshot from SQLite and sends `snapshot.sessions` and/or `snapshot.world` to connected browsers (protocol 2, ADR 0001). REST GET endpoints read from the store directly at request time (read-your-writes); SSE snapshots come from a coalesced composer cache.
 
-### Schema changes before 2.0
+### Schema changes
 
-The SQLite schema is still pre-release: unreleased migrations are edited **in
-place** rather than superseded by a new migration. goose only records the
-migration *version*, so an already-migrated development database at that
-version is not upgraded and cannot be detected as stale — a renamed or added
-column surfaces as a query error at runtime.
+Released migrations are immutable. A schema change ships as a **new** migration
+file; never edit a migration that has shipped. goose only records the migration
+*version*, so editing one in place leaves an already-migrated database at that
+version silently un-upgraded — the renamed or added column surfaces as a query
+error at runtime instead.
 
-If gmuxd fails against an existing `state.db` after pulling a schema change,
-reset the local database (stop gmuxd, remove `~/.local/state/gmux/state.db`) or
-repair the columns by hand. Live sessions are runner-owned and re-register; the
-loss is dead-session history. Once 2.0 ships, schema changes become additive
-migrations and this note goes away.
+gmuxd refuses to start against a `state.db` whose schema version is newer than
+the embedded head, takes a backup before applying a pending migration, and runs
+integrity and foreign-key checks afterwards. If you hit a broken development
+database anyway (from editing a migration in place before it shipped), reset it
+(stop gmuxd, remove `~/.local/state/gmux/state.db`). Live sessions are
+runner-owned and re-register; the loss is dead-session history.
 
 A byte-identical snapshot is detected in the composition path and never broadcast — this no-op dedup is load-bearing for the snapshot protocol. Cross-entity operations (registration + project assignment, dismissal + recursive placement removal, etc.) execute in one transaction.
 

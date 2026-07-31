@@ -46,6 +46,6 @@ resumability, health, or capability support.
 
 ## Explicitly not covenanted
 
-- Environment variables prefixed `_GMXINTERNAL_`. They are private process plumbing and must not be read, set, or passed to session children.
+- Internal environment variables gmux uses as private process plumbing. They are undocumented on purpose and must not be read, set, or passed to session children.
 - Runtime state files, including `state.db`, sockets, and logs. Connected hosts are runtime state in `state.db`, not a public storage interface.
 - Incidental prose and layout in human-oriented exchange reports, help-text wording, and diagnostic wording, unless a specific element is explicitly documented as stable or as machine-parseable output.
