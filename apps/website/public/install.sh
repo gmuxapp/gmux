@@ -73,7 +73,7 @@ ICON
 Name=gmux
 Comment=Terminal session manager
 GenericName=Terminal Manager
-Exec=${INSTALL_DIR}/gmux
+Exec=${INSTALL_DIR}/gmux open
 Icon=gmux
 Terminal=false
 Type=Application
@@ -146,7 +146,7 @@ main() {
       echo "Warning: gmuxd restart did not complete successfully; check logs."
     fi
   else
-    echo "To start gmux, run: gmux"
+    echo "To open the web UI, run: gmux open"
   fi
 
   case ":${PATH}:" in
