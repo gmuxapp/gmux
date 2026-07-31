@@ -138,9 +138,17 @@ const (
 	// agent reacts (or a human intervenes via raw input), and a retry loop
 	// on "agent is busy" would spin forever.
 	CodeDeliveryPending = "delivery_pending"
-	// CodeTransportError — the PTY write failed or was truncated, or the
-	// child exited before delivery. For a failed/short write, delivery is
-	// INDETERMINATE: some bytes may have reached the agent.
+	// CodeNotRunning — the child process exited before the action could be
+	// delivered: the runner had not yet reported readiness and no bytes were
+	// written. Guarantee: ZERO bytes delivered; the caller may retry safely.
+	// Distinct from CodeTransportError, which is reserved for post-write /
+	// indeterminate transport failures where some bytes may have reached the
+	// agent.
+	CodeNotRunning = "not_running"
+	// CodeTransportError — the PTY write failed or was truncated. Delivery
+	// is INDETERMINATE: some bytes may have reached the agent. Used ONLY
+	// for failures that occur after the write has started; never for a
+	// pre-write / pre-readiness child exit (CodeNotRunning owns that).
 	CodeTransportError = "transport_error"
 	// CodeIncarnationMismatch — the request named a different runner
 	// process than the one that owns this endpoint, i.e. the caller's
@@ -387,7 +395,10 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt string, 
 			"agent did not report readiness within %s; nothing was delivered", enc.ActionReadyTimeout()))
 		return
 	case errors.Is(err, errChildExited):
-		writeActionError(w, http.StatusServiceUnavailable, CodeTransportError, errChildExited.Error())
+		// The child exited before reporting readiness: no bytes were written.
+		// CodeNotRunning is the guaranteed-non-delivery code for this path;
+		// CodeTransportError is reserved for post-write/indeterminate failures.
+		writeActionError(w, http.StatusConflict, CodeNotRunning, errChildExited.Error())
 		return
 	default:
 		return // caller hung up while waiting for readiness; no bytes delivered

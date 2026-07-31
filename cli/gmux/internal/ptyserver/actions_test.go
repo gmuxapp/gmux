@@ -1493,8 +1493,10 @@ func TestRawInputIgnoresReadinessAndConditions(t *testing.T) {
 
 // --- child death ------------------------------------------------------------
 
-// TestSemanticActionOnDeadChild: a runner whose child is gone must say so
-// explicitly rather than block for the readiness deadline or report success.
+// TestSemanticActionOnDeadChild: a child that exits before reporting readiness
+// is a guaranteed non-delivery: the runner never wrote a byte. The code must be
+// CodeNotRunning (zero bytes, safe to retry), not CodeTransportError (which is
+// reserved for post-write / indeterminate failures).
 func TestSemanticActionOnDeadChild(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
@@ -1520,13 +1522,18 @@ func TestSemanticActionOnDeadChild(t *testing.T) {
 		t.Fatalf("post: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (child exited before readiness)", resp.StatusCode)
+	// 409 Conflict: the child is gone and zero bytes were delivered — a
+	// resource-state conflict, not a transport failure.
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (child exited before readiness = guaranteed non-delivery)", resp.StatusCode)
 	}
 	var payload struct{ Code string }
 	_ = json.NewDecoder(resp.Body).Decode(&payload)
-	if payload.Code != CodeTransportError {
-		t.Fatalf("code = %q, want %q", payload.Code, CodeTransportError)
+	// CodeNotRunning is the stable non-delivery code for the pre-readiness
+	// child-exit path. Mutating this to CodeTransportError would assign the
+	// wrong delivery class (indeterminate) to a case that is provably zero.
+	if payload.Code != CodeNotRunning {
+		t.Fatalf("code = %q, want %q (must not be %q)", payload.Code, CodeNotRunning, CodeTransportError)
 	}
 }
 
