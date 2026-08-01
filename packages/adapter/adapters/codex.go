@@ -30,6 +30,8 @@ var (
 	_ adapter.ConversationOpener    = (*Codex)(nil)
 	_ adapter.SessionHookCommand    = (*Codex)(nil)
 	_ adapter.Resumer               = (*Codex)(nil)
+	_ adapter.AgentActionEncoder    = (*Codex)(nil)
+	_ adapter.AgentLauncher         = (*Codex)(nil)
 )
 
 func init() {
@@ -84,6 +86,39 @@ func (c *Codex) Launchers() []adapter.Launcher {
 		Command:     []string{"codex"},
 		Description: "Coding Agent",
 	}}
+}
+
+// Codex's default TUI bindings provide all three semantic input routes:
+// Enter submits immediately (and steers an active turn), Tab queues a
+// follow-up, and Escape interrupts. Use self-delimiting CSI-u for Escape so it
+// cannot combine with prompt bytes in the same PTY read.
+func (c *Codex) EncodeAction(action adapter.AgentAction) (string, bool) {
+	switch action {
+	case adapter.ActionSend:
+		return "\r", true
+	case adapter.ActionSendAfterTurn:
+		return "\t", true
+	case adapter.ActionInterrupt:
+		return "\x1b[27u", true
+	default:
+		return "", false
+	}
+}
+
+func (c *Codex) ActionReadyTimeout() time.Duration { return 10 * time.Second }
+
+// LaunchCommand starts a bare interactive Codex session. Codex supports a
+// model selector but has no local-session naming flag; refusing a requested
+// name is preferable to silently claiming it was applied.
+func (c *Codex) LaunchCommand(opts adapter.LaunchOptions) ([]string, bool) {
+	if opts.Name != "" {
+		return nil, false
+	}
+	argv := []string{"codex"}
+	if opts.Model != "" {
+		argv = append(argv, "--model", opts.Model)
+	}
+	return argv, true
 }
 
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---

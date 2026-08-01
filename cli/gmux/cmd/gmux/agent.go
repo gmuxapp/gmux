@@ -155,7 +155,7 @@ func parseAgentPrompt(args []string) (*command, error) {
 	c := &command{mode: modeAgent, agentSub: "prompt", agentMode: agentModePrompt}
 	modeSet := ""
 	noWaitSet, timeoutSet := false, false
-	newSet, modelSet, nameSet := false, false, false
+	newSet, adapterSet, modelSet, nameSet := false, false, false, false
 	// A leading help token asks about the verb. Only the leading position:
 	// after the ref, every token is verbatim prompt text, so
 	// `agent prompt s1 ?` prompts with a literal `?`.
@@ -196,6 +196,19 @@ func parseAgentPrompt(args []string) (*command, error) {
 			}
 			newSet = true
 			c.agentNew = true
+		case a == "--adapter" || strings.HasPrefix(a, "--adapter="):
+			if adapterSet {
+				return nil, agentRepeatedFlag("--adapter")
+			}
+			adapterSet = true
+			v, next, err := agentFlagValue(args, i, "--adapter")
+			if err != nil {
+				return nil, err
+			}
+			if v != "pi" && v != "codex" {
+				return nil, fmt.Errorf("agent prompt: unknown launch adapter %q (expected pi or codex)", v)
+			}
+			c.agentAdapter, i = v, next
 		case a == "--model" || strings.HasPrefix(a, "--model="):
 			if modelSet {
 				return nil, agentRepeatedFlag("--model")
@@ -265,6 +278,9 @@ func parseAgentPrompt(args []string) (*command, error) {
 			return nil, fmt.Errorf("agent prompt: %s needs a turn to act on, so it cannot be combined with --new", modeSet)
 		}
 	} else {
+		if adapterSet {
+			return nil, errors.New("agent prompt: --adapter only applies to a session gmux is launching; pass it with --new")
+		}
 		if modelSet {
 			return nil, errors.New("agent prompt: --model only applies to a session gmux is launching; pass it with --new")
 		}
@@ -372,7 +388,7 @@ func cmdAgent(c *command) int {
 	switch c.agentSub {
 	case "prompt":
 		if c.agentNew {
-			return cmdAgentPromptNew(c.agentModel, c.agentName, c.agentNoWait, c.timeout, c.promptText)
+			return cmdAgentPromptNew(c.agentAdapter, c.agentModel, c.agentName, c.agentNoWait, c.timeout, c.promptText)
 		}
 		return cmdAgentPrompt(c.ref, c.agentMode, c.agentNoWait, c.timeout, c.promptText)
 	case "cancel":
@@ -449,16 +465,20 @@ var agentLaunchAdapter adapter.Adapter = adapters.NewPi()
 // a session that never becomes ready fails its first prompt exactly as it
 // would fail its tenth: admission is the single health event, and there is no
 // launch-shaped special case to keep in sync.
-func cmdAgentPromptNew(model, name string, noWait bool, timeoutSecs int, text *string) int {
+func cmdAgentPromptNew(adapterName, model, name string, noWait bool, timeoutSecs int, text *string) int {
 	prompt, err := readPromptText(text, os.Stdin, localterm.IsInteractive())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
 	}
-	argv, ok := agentLaunchArgv(agentLaunchAdapter, adapter.LaunchOptions{Model: model, Name: name})
+	launchAdapter := agentLaunchAdapter
+	if adapterName == "codex" {
+		launchAdapter = adapters.NewCodex()
+	}
+	argv, ok := agentLaunchArgv(launchAdapter, adapter.LaunchOptions{Model: model, Name: name})
 	if !ok {
-		fmt.Fprintf(os.Stderr, "gmux: %s: %s cannot be launched by gmux agent prompt --new\n",
-			codeUnsupportedAdapter, agentLaunchAdapter.Name())
+		fmt.Fprintf(os.Stderr, "gmux: %s: %s cannot apply the requested gmux agent prompt --new options\n",
+			codeUnsupportedAdapter, launchAdapter.Name())
 		fmt.Fprintln(os.Stderr, "gmux: start it yourself with 'gmux -d -- <command>' and prompt the id it prints")
 		return waitExitError
 	}
@@ -842,11 +862,12 @@ func printAgentUsage(w io.Writer, topic string) {
 		fmt.Fprint(w, `gmux agent prompt — send instructions and report the observed activity
 
   gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <id> [prompt]
-  gmux agent prompt --new [--model M] [--name N] [--no-wait] [--timeout N] [prompt]
+  gmux agent prompt --new [--adapter pi|codex] [--model M] [--name N] [--no-wait] [--timeout N] [prompt]
 
-  --new             launch a new pi conversation
-  --model M         --new only: model passed to pi
-  --name N          --new only: conversation name passed to pi
+  --new             launch a new agent conversation
+  --adapter A       --new only: adapter to launch (pi default; codex supported)
+  --model M         --new only: model passed to the selected agent
+  --name N          --new only: conversation name (pi only; Codex refuses it)
   --no-wait         return after admission; print no activity report
   --follow-up       submit after the current model response
   --steer           redirect activity that is currently in progress

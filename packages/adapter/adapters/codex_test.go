@@ -80,13 +80,14 @@ func TestCodexImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
-	// Deliberately NOT an AgentActionEncoder: gmux's semantic agent
-	// actions (ADR 0027) ship for pi only. codex's turn-control
-	// keystrokes are unverified, and guessing them would send
-	// wrong-meaning bytes under a semantic label. Raw `gmux send`
-	// remains available.
-	if _, ok := a.(adapter.AgentActionEncoder); ok {
-		t.Fatal("should NOT implement AgentActionEncoder yet")
+	if _, ok := a.(adapter.AgentActionEncoder); !ok {
+		t.Fatal("should implement AgentActionEncoder")
+	}
+	if _, ok := a.(adapter.AgentLauncher); !ok {
+		t.Fatal("should implement AgentLauncher")
+	}
+	if _, ok := a.(adapter.ConversationExchangeRenderer); !ok {
+		t.Fatal("should implement ConversationExchangeRenderer")
 	}
 }
 
@@ -103,6 +104,33 @@ func TestCodexLaunchers(t *testing.T) {
 	}
 	if l.Label != "Codex" {
 		t.Errorf("expected label 'Codex', got %q", l.Label)
+	}
+}
+
+func TestCodexSemanticActions(t *testing.T) {
+	c := NewCodex()
+	cases := []struct {
+		action adapter.AgentAction
+		want   string
+	}{{adapter.ActionSend, "\r"}, {adapter.ActionSendAfterTurn, "\t"}, {adapter.ActionInterrupt, "\x1b[27u"}}
+	for _, tc := range cases {
+		got, ok := c.EncodeAction(tc.action)
+		if !ok || got != tc.want {
+			t.Fatalf("action %v = %q, %v; want %q, true", tc.action, got, ok, tc.want)
+		}
+	}
+	if _, ok := c.EncodeAction(adapter.AgentAction(99)); ok {
+		t.Fatal("unknown action should be unsupported")
+	}
+}
+
+func TestCodexLaunchCommand(t *testing.T) {
+	c := NewCodex()
+	if got, ok := c.LaunchCommand(adapter.LaunchOptions{Model: "o3"}); !ok || len(got) != 3 || got[1] != "--model" || got[2] != "o3" {
+		t.Fatalf("model launch = %v, %v", got, ok)
+	}
+	if got, ok := c.LaunchCommand(adapter.LaunchOptions{Name: "reviewer"}); ok || got != nil {
+		t.Fatalf("name must be refused, got %v, %v", got, ok)
 	}
 }
 

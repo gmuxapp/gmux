@@ -59,6 +59,8 @@ func TestAgentPromptGrammarMatrix(t *testing.T) {
 		{"agent", "prompt", "--timeout", "1", "--no-wait", "s", "x"},
 		{"agent", "prompt", "--model", "m", "s", "x"},
 		{"agent", "prompt", "--name", "n", "s", "x"},
+		{"agent", "prompt", "--adapter", "codex", "s", "x"},
+		{"agent", "prompt", "--new", "--adapter", "unknown", "x"},
 		{"agent", "cancel", "a", "b"},
 	}
 	for _, args := range invalid {
@@ -73,6 +75,10 @@ func TestAgentPromptGrammarMatrix(t *testing.T) {
 	c, err = parseCLI([]string{"agent", "prompt", "--new", "-"})
 	if err != nil || !c.agentNew || c.promptText != nil {
 		t.Fatalf("--new stdin form: c=%+v err=%v", c, err)
+	}
+	c, err = parseCLI([]string{"agent", "prompt", "--new", "--adapter", "codex", "--model", "o3", "hello"})
+	if err != nil || c.agentAdapter != "codex" || c.agentModel != "o3" {
+		t.Fatalf("codex launch form: c=%+v err=%v", c, err)
 	}
 }
 

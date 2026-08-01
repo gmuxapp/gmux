@@ -76,6 +76,7 @@ type command struct {
 	agentNoWait bool    // --no-wait: return at the admission boundary
 	promptText  *string // inline prompt text (nil = read stdin)
 	agentNew    bool    // --new: launch the session this prompt starts
+	agentAdapter string // --new only: semantic adapter to launch
 	agentModel  string  // --new only: model selector for the launch
 	agentName   string  // --new only: session display name for the launch
 

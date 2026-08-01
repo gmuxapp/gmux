@@ -573,7 +573,7 @@ func TestCancelRejectsABody(t *testing.T) {
 
 func TestUnsupportedAdaptersAndActions(t *testing.T) {
 	t.Run("adapter without semantic actions", func(t *testing.T) {
-		for _, ad := range []adapter.Adapter{adapters.NewClaude(), adapters.NewCodex(), adapters.NewShell()} {
+		for _, ad := range []adapter.Adapter{adapters.NewClaude(), adapters.NewShell()} {
 			f := newActionFixture(t, ad)
 			f.ready(t) // ready, so the refusal is about capability and nothing else
 			code, ec := f.post(t, "/prompt", `{"prompt":"go","delivery":"now","require":"any"}`)
