@@ -40,8 +40,8 @@ func TestClaudeHookBodies_SessionStartBindsWithTitleSlug(t *testing.T) {
 		"source":          "resume",
 	})
 	got := decodeBodies(t, ClaudeHookBodies(in))
-	if len(got) != 1 {
-		t.Fatalf("want 1 body, got %d", len(got))
+	if len(got) != 2 || got[1]["op"] != "ready" {
+		t.Fatalf("want bind then ready, got %v", got)
 	}
 	b := got[0]
 	if b["op"] != "session" || b["path"] != tr || b["id"] != "uuid-1" || b["reason"] != "resume" {
@@ -139,10 +139,12 @@ func TestClaudeHookBodies_UnknownEventNil(t *testing.T) {
 	}
 }
 
-func TestClaudeHookBodies_NoTranscriptNoBind(t *testing.T) {
-	// SessionStart without a transcript path has nothing authoritative to bind.
-	if got := ClaudeHookBodies([]byte(`{"hook_event_name":"SessionStart"}`)); got != nil {
-		t.Fatalf("no transcript → no bind, got %v", got)
+func TestClaudeHookBodies_NoTranscriptStillReady(t *testing.T) {
+	// Fresh sessions have no transcript before the first prompt. They must still
+	// admit semantic input or prompt --new would deadlock.
+	got := decodeBodies(t, ClaudeHookBodies([]byte(`{"hook_event_name":"SessionStart"}`)))
+	if len(got) != 1 || got[0]["op"] != "ready" {
+		t.Fatalf("no transcript → ready only, got %v", got)
 	}
 }
 

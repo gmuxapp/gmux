@@ -24,6 +24,8 @@ var (
 	_ adapter.ConversationDescriber = (*Claude)(nil)
 	_ adapter.ConversationOpener    = (*Claude)(nil)
 	_ adapter.Resumer               = (*Claude)(nil)
+	_ adapter.AgentActionEncoder    = (*Claude)(nil)
+	_ adapter.AgentLauncher         = (*Claude)(nil)
 )
 
 func init() {
@@ -67,6 +69,42 @@ func (c *Claude) Launchers() []adapter.Launcher {
 		Command:     []string{"claude"},
 		Description: "Coding Agent",
 	}}
+}
+
+// Claude's input loop accepts prompts as soon as SessionStart runs. Ten
+// seconds accommodates a cold Node.js start without turning a missing hook
+// into an indefinite semantic delivery.
+const claudeActionReadyTimeout = 10 * time.Second
+
+// EncodeAction maps gmux's semantic operations to Claude Code's reserved
+// interactive bindings. Enter submits both an in-flight steering instruction
+// and a queued follow-up; gmux's delivery requirement distinguishes those
+// intents. Ctrl+C is Claude's non-rebindable interrupt (Escape is unsuitable:
+// it cancels editor input, closes dialogs, and is affected by vim mode).
+func (c *Claude) EncodeAction(action adapter.AgentAction) (string, bool) {
+	switch action {
+	case adapter.ActionSend, adapter.ActionSendAfterTurn:
+		return "\r", true
+	case adapter.ActionInterrupt:
+		return "\x03", true
+	default:
+		return "", false
+	}
+}
+
+func (c *Claude) ActionReadyTimeout() time.Duration { return claudeActionReadyTimeout }
+
+// LaunchCommand starts a bare interactive Claude session. The initial prompt
+// is deliberately delivered through the readiness-gated semantic path.
+func (c *Claude) LaunchCommand(opts adapter.LaunchOptions) ([]string, bool) {
+	argv := []string{"claude"}
+	if opts.Model != "" {
+		argv = append(argv, "--model", opts.Model)
+	}
+	if opts.Name != "" {
+		argv = append(argv, "--name", opts.Name)
+	}
+	return argv, true
 }
 
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---

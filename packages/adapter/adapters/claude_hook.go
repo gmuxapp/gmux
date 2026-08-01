@@ -212,9 +212,15 @@ func ClaudeHookBodies(input []byte) [][]byte {
 
 	switch in.HookEventName {
 	case "SessionStart":
+		// SessionStart runs after Claude's interactive input handlers are
+		// installed. Readiness must not depend on a transcript: a fresh session
+		// has no file until its first prompt, and doing so would deadlock
+		// semantic prompt delivery.
+		ready := []byte(`{"op":"ready"}`)
 		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, in.Source, in.SessionTitle); ok {
-			return [][]byte{b}
+			return [][]byte{b, ready}
 		}
+		return [][]byte{ready}
 	case "UserPromptSubmit":
 		// /rename fires no hook of its own — it only appends a custom-title
 		// line to the transcript. Refresh the title here (custom-title wins in

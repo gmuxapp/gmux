@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -84,13 +85,27 @@ func TestClaudeImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
-	// Deliberately NOT an AgentActionEncoder: gmux's semantic agent
-	// actions (ADR 0027) ship for pi only. claude's turn-control
-	// keystrokes are unverified, and guessing them would send
-	// wrong-meaning bytes under a semantic label. Raw `gmux send`
-	// remains available.
-	if _, ok := a.(adapter.AgentActionEncoder); ok {
-		t.Fatal("should NOT implement AgentActionEncoder yet")
+	if _, ok := a.(adapter.AgentActionEncoder); !ok {
+		t.Fatal("should implement AgentActionEncoder")
+	}
+	if _, ok := a.(adapter.AgentLauncher); !ok {
+		t.Fatal("should implement AgentLauncher")
+	}
+}
+
+func TestClaudeAgentActionsAndLaunch(t *testing.T) {
+	c := NewClaude()
+	for _, action := range []adapter.AgentAction{adapter.ActionSend, adapter.ActionSendAfterTurn} {
+		if got, ok := c.EncodeAction(action); !ok || got != "\r" {
+			t.Fatalf("action %v = %q, %v; want CR, true", action, got, ok)
+		}
+	}
+	if got, ok := c.EncodeAction(adapter.ActionInterrupt); !ok || got != "\x03" {
+		t.Fatalf("interrupt = %q, %v; want Ctrl+C, true", got, ok)
+	}
+	argv, ok := c.LaunchCommand(adapter.LaunchOptions{Model: "sonnet", Name: "review"})
+	if !ok || strings.Join(argv, " ") != "claude --model sonnet --name review" {
+		t.Fatalf("launch = %v, %v", argv, ok)
 	}
 }
 
