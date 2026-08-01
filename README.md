@@ -18,7 +18,7 @@ Or download from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
 
 ```bash
 gmux -- pi                 # launch a coding agent
-gmux -- pytest --watch     # launch a test watcher
+gmux -- npm run dev       # launch any long-running command
 gmux -d -- make build      # detached; prints the session id
 gmux open                  # open the UI
 ```
@@ -49,7 +49,7 @@ graph LR
 
 **`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. For agent tools (pi, Claude Code, Codex), gmux installs a small hook into the agent so the agent itself reports its state — active, idle, which conversation it holds — authoritatively, with no output scraping. A generic command gets alive/dead/activity tracking out of the box.
 
-**`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. Session state lives with each runner, so gmuxd's session cache rebuilds on restart; projects, peers, and the auth token persist in `~/.local/state/gmux`.
+**`gmuxd`** runs once per machine (auto-started by `gmux`). SQLite is authoritative for durable session rows, project placement, ordering, and manual peers. Live runners remain authoritative for runtime facts such as liveness and current status; gmuxd merges that runtime overlay into SQLite-backed snapshots, proxies WebSocket connections, and pushes updates via SSE. Authentication and bootstrap files also live under gmux's state/config directories.
 
 **`gmux-web`** is the browser UI. The sidebar groups sessions into projects, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and ~1 MiB of persisted scrollback that replays instantly on reconnect.
 
@@ -65,7 +65,7 @@ graph LR
 │     working · pi                    │
 │                                     │
 │   ● test watcher             2m ago │
-│     pytest --watch                  │
+│     npm run dev                     │
 │                                     │
 │ ▼ gmux                         ● 1  │
 │                                     │
@@ -85,7 +85,7 @@ Sessions are grouped into **projects** by working directory — manage the proje
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
 - **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
-- **Session lifecycle** — live status, exit codes, kill from the UI; dead sessions stay resumable
+- **Session lifecycle** — live status, exit codes, kill from the UI; supported adapter conversations remain resumable
 - **Reconnecting** — tab away, come back, the terminal is right where you left it
 - **Editor tabs** — `gmux edit <file>` opens a managed editor session; works as `$EDITOR` (blocks and propagates the exit code, so `git commit` just works)
 
@@ -109,10 +109,10 @@ gmux tail "$id" -n 50                   # read the plain-text terminal tail
 `gmux ls --json` gives agents a machine-readable session list; `gmux send-keys -t` is tmux-compatible. See the [scripting guide](apps/website/src/content/docs/integrations/scripts-and-agents.md).
 
 ### Multi-machine
-Run gmux on each machine, then connect them: `gmux auth` on the remote host prints a connect URL you paste into **Settings → Hosts → Connect to host**. Peers authenticate with bearer tokens; sessions on other hosts are addressable as `<id>@<peer>`. Devcontainers running the gmux feature are discovered automatically. See [Multi-machine](apps/website/src/content/docs/multi-machine.md).
+Run gmux on each machine, then connect them: `gmux auth` on the remote host prints a connect URL you paste into **Settings → Hosts → Connect to host**. Next add wanted projects under **Settings → Projects → From other hosts**; connecting a network host alone does not add its sessions to the sidebar. Peers authenticate with bearer tokens, and remote sessions are addressed as `<id>@<peer>`. Devcontainers running the gmux feature are discovered automatically. See [Multi-machine](apps/website/src/content/docs/multi-machine.md).
 
 ### UI
-- **Triage-first** — the home screen surfaces waiting and active sessions first, then recency buckets
+- **Activity by recency** — the home screen orders live sessions by recent output and groups them by calendar day
 - **Project grouping** — sessions group into projects by working directory; manage the list in Settings
 - **Find in terminal** — Cmd/Ctrl+F searches the terminal buffer
 - **Mobile responsive** — same URL on your phone; a dedicated toolbar, keyboard handling, and long-press link actions
@@ -120,7 +120,7 @@ Run gmux on each machine, then connect them: `gmux auth` on the remote host prin
 - **Customizable theme** — dark theme with a Windows Terminal–compatible terminal palette (`theme.jsonc`)
 
 ### Architecture
-- **Runner-authoritative** — each session's runner is the source of truth for its state; gmuxd's session cache is rebuilt from running sessions
+- **Split authority** — SQLite owns durable daemon state; live runners own runtime facts that gmuxd overlays onto stored rows
 - **No external dependencies** — no tmux, no screen, no abduco. Two Go binaries and a web app.
 - **Web-first** — works on desktop, tablet, phone. Same URL everywhere.
 - **Zero config** — run `gmux -- <command>`, open a browser

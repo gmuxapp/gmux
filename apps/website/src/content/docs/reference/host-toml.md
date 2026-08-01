@@ -26,10 +26,8 @@ allow = []               # additional login names or device tags (owner is auto-
 [discovery]
 devcontainers = true     # subscribe to Docker events, register gmux containers
 
-# Dead-session retention and scrollback cache limits.
+# Dead-session scrollback cache target.
 [sessions]
-retention_days = 30
-retention_max = 200
 scrollback_cache_mb = 256
 ```
 
@@ -57,11 +55,9 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `retention_days` | `number` | `30` | Remove dead sessions without conversations after this many days. `0` disables age-based retention. |
-| `retention_max` | `number` | `200` | Keep at most this many dead sessions without conversations. `0` disables count-based retention. |
-| `scrollback_cache_mb` | `number` | `256` | Aggregate cache limit for dead-session scrollback, evicted oldest-first while metadata survives. `0` disables the limit. |
+| `scrollback_cache_mb` | `number` | `256` | Aggregate cache target for dead-session scrollback. `0` disables the limit. |
 
-All session values must be non-negative.
+Session values must be non-negative.
 
 ### `[tailscale]`
 

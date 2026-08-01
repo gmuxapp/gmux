@@ -17,7 +17,7 @@ Click the **gmux** logo at the top of the sidebar to return to the home screen. 
 
 The arrange button next to the gear opens a compact menu controlling how the sidebar presents your sessions:
 
-- **View** — **Projects** (the default: grouped by project, your manual order) or **Activity** (a flat list partitioned like the home dashboard: Waiting, Active, then recency buckets). The choice is stored in the URL (`?sidebar=activity`), so each tab keeps its own view.
+- **View** — **Projects** (the default: grouped by project, your manual order) or **Activity** (a flat list ordered by output recency and grouped by calendar day). The choice is stored in the URL (`?sidebar=activity`), so each tab keeps its own view.
 - **Host** — narrow the tab to a single host. Picking a host adds a filter chip above the list; **All hosts** clears it.
 - **Alive only** — hide dead-but-resumable sessions. This one is per-tab and intentionally forgotten when the tab closes (after a reboot every session is resumable, so a remembered toggle would greet you with an empty sidebar).
 
@@ -39,11 +39,7 @@ Because the filter lives in the URL, a narrowed tab is bookmarkable: keep one br
 
 ## Home: the Activity dashboard
 
-The home screen is a pure overview of your sessions across all hosts, newest-first:
-
-- **Waiting** — sessions with unread output that need your attention.
-- **Active** — sessions where the agent or command is currently working.
-- **Recency buckets** — everything else, grouped by last activity (last hour, earlier today, yesterday, earlier this week…).
+The home screen is a recent overview of live sessions across all hosts. Sessions are ordered by `last_output_at` (falling back to creation time) and grouped into Today, Yesterday, recent weekdays, and dates. Working, unread, and error state changes the row indicator; it does not move the row into a separate status section. Home omits the older dated tail, while the sidebar's Activity view keeps the full alive/resumable feed.
 
 An **Enable notifications** pill in the Activity header opts into browser notifications. Project and host management live in **Settings** (gear button in the sidebar header).
 
@@ -62,7 +58,7 @@ In **Settings → Hosts**, each host shows an explicit status:
 
 Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
 
-**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmux auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. 2.0 uses a clean SQLite database (`state.db`); old JSON state files are ignored. See the [migration guide](/migrating-to-2/) for the full 2.0 upgrade story.
+**Upgrading to 2.0:** the daemon starts with a clean SQLite database (`state.db`) and does not import old hosts, projects, references, or JSON state. Re-add wanted hosts with **Connect to host**, then add their projects under **Settings → Projects → From other hosts**. See the [migration guide](/migrating-to-2/) for the full upgrade story.
 
 ## Projects
 
@@ -70,12 +66,13 @@ Sessions don't appear in the sidebar until you add a project. The first time you
 
 In the sidebar, sessions are grouped into a **folder** per project. Click a **project name** to collapse or expand its folder (a chevron shows the state); the header stays pinned to the top of the list while you scroll through its sessions. Collapsed state is remembered per browser tab.
 
-Each project has **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or by git remote URL (grouping clones across machines). See the [project model reference](/reference/projects-json/) for the full reference on rules, precedence, and advanced options like exact matching.
+Each project has host-local **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or git remote URL. To show a network host's project, configure it on that host and add it under **Settings → Projects → From other hosts**; rules do not group sessions across network hosts automatically.
 
 You can manage projects at any time in **Settings → Projects** (gear button in the sidebar header, or the `?settings` URL parameter):
 
 - **Your projects**: configured projects with their match rules. Drag to reorder, click **×** to remove.
-- **Discovered**: directories gmux noticed sessions in that don't match any project — including directories advertised by peer hosts. Type to filter, click **Add**, or enter a local path manually.
+- **Discovered**: local directories gmux noticed from active sessions that don't match any project. Type to filter, click **Add**, or enter a local path manually.
+- **From other hosts**: projects advertised by connected network hosts. Add a reference here before that project's sessions appear in this dashboard.
 
 ## Sessions
 
@@ -91,15 +88,15 @@ Each session has a dot on the left edge:
 
 Agent sessions (pi, Claude, Codex) only trigger the unread dot when the assistant completes a turn, not on every line of output.
 
-Hover over a session to reveal the **×** button. This dismisses the session: live runners are killed, the sidebar/project membership is removed, and persisted runtime metadata is dropped so the session does not come back as resumable. Use **Resume** from a dead session view only when you want to continue it.
+Hover over a session to reveal the **×** button. Dismissing a session stops every live runner in its launch subtree and recursively dismisses its descendants. The rows disappear and lose project placement, but SQLite retains their hidden session rows, conversation identity, provenance, and timestamps until adapter reconciliation removes them. Treat dismissing a parent as an action on the whole descendant tree.
 
 ## The activity dashboard
 
-Home (`/`) is an activity-first overview of every session, grouped into **Waiting**, **Active**, and recency sections (Last hour / Earlier today / Yesterday / Earlier this week), newest-first. It's a triage surface: it shows what you can act on right now, so dead and week-old sessions drop off (the sidebar still lists them).
+Home (`/`) is an output-recency view of live sessions. It shows Today, Yesterday, and recent weekday buckets and omits the older dated tail.
 
-A session row surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. Sessions on another host carry an `@host` suffix (devcontainer sessions get a container icon).
+A session row surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. Remote rows use host/project phrases and conditional icons; `@peer` is CLI reference syntax, not a literal suffix shown on every row.
 
-The sidebar's **Activity** view (via the list-options menu) shows the same sections in the sidebar's compact density, plus an **Older** section so nothing is hidden.
+The sidebar's **Activity** view uses the same day grouping at compact density and retains the complete alive/resumable feed, including older dated buckets.
 
 ## The terminal
 
@@ -121,7 +118,7 @@ Backend or action failures surface as error toasts.
 
 ```bash
 gmux -- pi              # coding agent
-gmux -- pytest --watch  # any command
+gmux -- sh -c 'while true; do date; sleep 5; done'  # any long-running command
 ```
 
 ```bash

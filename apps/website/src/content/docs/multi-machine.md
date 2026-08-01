@@ -3,7 +3,7 @@ title: Multi-Machine Sessions
 description: See sessions from every machine, container, and VM in one dashboard.
 ---
 
-gmux uses a hub-and-spoke model to aggregate sessions across machines. You pick one gmuxd as your dashboard (the hub). It connects outward to other gmuxd instances (the spokes) and merges their sessions into a single UI. The browser only talks to the hub.
+gmux uses a hub-and-spoke model to aggregate sessions across machines. You pick one gmuxd as your dashboard (the hub). It connects outward to other gmuxd instances (the spokes). The browser only talks to the hub. After connecting a network host, explicitly add each of its projects that you want the hub to show.
 
 ```
 browser --> gmux-laptop (hub)
@@ -29,7 +29,7 @@ To add this host from another gmux machine, paste this into "Connect to host":
   https://gmux-server.your-tailnet.ts.net/auth/login?token=…
 ```
 
-Then paste it into **Settings → Hosts → Connect to host** (see below). The token rides in the URL, so it's one paste.
+Then paste it into **Settings → Hosts → Connect to host** (see below). The token rides in the URL, so it's one paste. After the host is online, open **Settings → Projects → From other hosts**, select that host, and click **Add** for each project you want in this dashboard. Connecting the host alone does not add its sessions to the sidebar.
 
 ## Devcontainer auto-discovery
 
@@ -63,10 +63,6 @@ If gmux can't match a reference to any current host — it's not in the roster b
 
 Removing a host clears the references that pointed at it, so a deliberate removal leaves nothing behind here.
 
-## Upgrading from a version with tailnet autodiscovery
-
-Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmux auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. 2.0 uses a clean SQLite database; there is no migration from 1.x JSON files.
-
 ## Session namespacing
 
 Remote sessions carry their origin in the session ID using `@` separators:
@@ -77,7 +73,7 @@ Remote sessions carry their origin in the session ID using `@` separators:
 16y0lfv7@dev@server    # from "dev", a devcontainer attached to spoke "server"
 ```
 
-The UI parses these to attribute each session to its host (the `@host` suffix and devcontainer marker). Actions are routed by splitting on the last `@` and forwarding one hop; only devcontainer (local-peer) sessions forward through their parent host — sessions of one network peer are never relayed through another.
+The CLI uses this syntax for addressing and routing sessions. The UI renders host/project labels and icons rather than a literal `@host` suffix on every row. Actions are routed by splitting on the last `@` and forwarding one hop; only devcontainer (local-peer) sessions forward through their parent host — sessions of one network peer are never relayed through another.
 
 ## Fault tolerance
 
@@ -85,10 +81,10 @@ Each spoke connection is independent. A slow or dead spoke never blocks the hub 
 
 When a spoke goes offline:
 
-- Its sessions remain visible but marked as disconnected.
+- Its ephemeral session projection is removed, so its sessions disappear until it reconnects. Configured host and project-reference rows remain.
 - The host shows as **Offline** in Settings → Hosts (with the connection error as detail); a host whose token is missing or wrong shows **Auth needed** instead.
 - The hub reconnects with exponential backoff (1s initial, 30s max, reset on success).
-- When the spoke comes back, sessions go live again. No user action needed.
+- When the spoke comes back, its referenced projects and sessions reappear. No user action is needed.
 
 ### Connection health detection
 

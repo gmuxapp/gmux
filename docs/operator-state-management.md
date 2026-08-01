@@ -8,8 +8,8 @@ gmux 2.0 starts with a clean SQLite database. **No JSON migration is performed.*
 
 - The migration floor is the first 2.0 SQLite schema.
 - Existing `meta.json`, `projects.json`, `peers.json` are **not imported**.
-- On first run, gmuxd creates the database and seeds a default "home" project.
-- If you have existing 1.x state, manually re-add peers via "Connect to host" and reconfigure projects via the UI.
+- On first run, gmuxd creates the database with an empty project catalog. The UI's empty-state first-launch flow creates an exact-match `home` project.
+- If you have existing 1.x state, manually re-add peers via "Connect to host", reconfigure local projects, and add wanted peer projects under "From other hosts".
 
 ## Fail-closed recovery
 

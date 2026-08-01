@@ -37,23 +37,23 @@ appears in the web UI.
 gmux -- bash
 gmux -- python3 main.py
 gmux -- pi "build the feature"
-gmux -- pytest --watch        # --watch belongs to pytest, not gmux
+gmux -- npm run dev           # any long-running command
 ```
 
 There's no bare shorthand: `gmux pytest` is an "unknown command" error (gmux
 suggests the `gmux -- pytest` form). If you run commands constantly,
 `alias gm='gmux --'` gives you `gm pytest` back.
 
-Behavior depends on whether stdin is a terminal and whether you're already
-inside a gmux session:
+Behavior depends on both stdin and stdout terminal state and on whether you're
+already inside a gmux session:
 
-| Stdin              | Inside `GMUX=1`? | Behavior                                                                                                |
-| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------- |
-| TTY                | no               | Attach: wire your terminal to the child PTY, forward Ctrl-C and resize, detach when the terminal closes. |
-| TTY                | yes              | Auto-detach: spawn the session in the background and return immediately, so PTYs don't nest.            |
-| Pipe / file / null | either           | Block, stream the child's output to stdout (ANSI stripped, CRLF normalised), print the session id on stderr, exit with the child's exit code. The session keeps running for the UI to attach to. |
+| stdin | stdout | Inside `GMUX=1`? | Behavior |
+| ----- | ------ | ---------------- | -------- |
+| TTY | TTY | no | Attach interactively: forward terminal input, Ctrl-C, and resize; print no session ID. |
+| TTY | TTY | yes | Auto-detach to avoid nested PTYs; print the session ID on stdout. |
+| any other combination | any other combination | either | Headless foreground: block, stream merged PTY output to stdout, print the session ID on stderr, and propagate the child exit code. Launcher stdin is not forwarded; use `gmux send` for input. |
 
-The pipe/file/null row is the canonical shape for scripts and agent harnesses:
+The headless row is the canonical shape for scripts and agent harnesses:
 a blocking call, stdout that carries exactly what the child printed (so
 `gmux -- pnpm build | tail` reads the build's own tail), the session id on
 stderr for attaching or tailing mid-run, and reliable exit-code propagation —
@@ -755,8 +755,9 @@ view, available exactly when the activity is observed.
 
 ### `gmux kill <id>`
 
-Terminate a running session: `SIGTERM` to the child, normal exit lifecycle,
-session marked dead — the same path as the UI's kill button.
+Terminate a running session: send SIGHUP to the child process group, wait up
+to two seconds, then escalate to SIGKILL. The normal exit lifecycle marks the
+session dead — the same path as the UI's kill button.
 
 ```bash
 gmux kill a3f20187

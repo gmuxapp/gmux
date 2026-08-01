@@ -30,4 +30,4 @@ See [Multi-machine](/multi-machine/) and [File paths](/reference/file-paths/) fo
 - [File paths](/reference/file-paths/) — config files, sockets, runtime state, logs
 - [CLI commands](/reference/cli/) — `gmux` and `gmuxd` usage
 - [Environment variables](/reference/environment/) — variables that affect gmux and variables set inside sessions
-- [Projects](/reference/projects-json/) — project model and match rules
+- [Using the UI: Projects](/using-the-ui/#projects) — project matching and peer-project setup

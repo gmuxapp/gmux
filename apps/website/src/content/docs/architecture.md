@@ -96,7 +96,7 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `GET /v1/frontend-config` | User settings + theme (from JSONC files) |
 | `POST /v1/launch` | Launch a new session |
 | `POST /v1/sessions/{id}/kill` | Kill a session |
-| `POST /v1/sessions/{id}/dismiss` | Kill + remove |
+| `POST /v1/sessions/{id}/dismiss` | Stop and dismiss the session and every session it launched |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
 | `POST /v1/sessions/{id}/{input,read,scrollback,wait,...}` | Other session actions (input injection, tail, wait-for-idle, …) |
 | `POST /v1/sessions/{id}/prompt` | Semantic agent prompt: mode `prompt`/`follow_up`/`steer`, transparent resume, admission + fused wait (ADR 0027; local sessions only) |
