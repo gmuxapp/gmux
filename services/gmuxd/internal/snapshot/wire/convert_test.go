@@ -36,6 +36,18 @@ func place(row *central.SessionRow, slug, scope string, pos int) {
 	row.SessionView.Placement = &centralstore.SessionPlacement{ProjectSlug: slug, SiblingScope: scope, Position: pos}
 }
 
+func TestSessionConversionPreservesFamilyFacts(t *testing.T) {
+	parent := centralstore.SessionID("parent")
+	got := (&Converter{SemanticAgents: map[string]bool{"pi": true}}).session(central.SessionRow{
+		SessionView: centralstore.SessionView{Session: centralstore.Session{
+			ID: "child", Adapter: "pi", CreatedAt: 1, LaunchParentID: &parent, PromotedToRoot: true,
+		}},
+	})
+	if got.ParentSessionID != "parent" || !got.SemanticAgent || !got.PromotedToRoot {
+		t.Fatalf("family facts dropped: %#v", got)
+	}
+}
+
 // TestTitlePrecedence pins the resolveTitle chain against the production
 // precedence (store.resolveTitle): adapter title > shell title >
 // CommandTitler(command) > adapter name.

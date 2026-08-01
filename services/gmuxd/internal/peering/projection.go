@@ -15,6 +15,8 @@ type SessionProjection struct {
 	WorkspaceRoot   string            `json:"workspace_root,omitempty"`
 	Remotes         map[string]string `json:"remotes,omitempty"`
 	ParentSessionID string            `json:"parent_session_id,omitempty"`
+	SemanticAgent   bool              `json:"semantic_agent,omitempty"`
+	PromotedToRoot  bool              `json:"promoted_to_root,omitempty"`
 	Alive           bool              `json:"alive"`
 	Pid             int               `json:"pid,omitempty"`
 	ExitCode        *int              `json:"exit_code,omitempty"`

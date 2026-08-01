@@ -255,6 +255,10 @@ func (productionRunnerClient) Meta(ctx context.Context, endpoint string) (sessio
 		return sessioncoord.RunnerMeta{}, fmt.Errorf("runner /meta: missing id or adapter")
 	}
 	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
+	if s.ParentSessionID != "" {
+		parent := centralstore.SessionID(s.ParentSessionID)
+		reg.LaunchParentID = &parent
+	}
 	reg.Facts = runnerMetaFacts(s)
 	// Prefer the header: it is stamped by the same middleware that stamps the
 	// subscription response, so the two comparisons cannot disagree because
@@ -291,6 +295,7 @@ type runnerMetaWire struct {
 	Subtitle        string            `json:"subtitle"`
 	Command         []string          `json:"command"`
 	Remotes         map[string]string `json:"remotes"`
+	ParentSessionID string            `json:"parent_session_id"`
 	Status          *struct {
 		Active      bool `json:"active"`
 		Error       bool `json:"error"`

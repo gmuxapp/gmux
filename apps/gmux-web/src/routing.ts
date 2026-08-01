@@ -3,8 +3,9 @@
 // Maps between URL paths and the app's view model. Pure functions with
 // no side effects or signal dependencies.
 
-import type { Session, ProjectItem } from './types'
+import { familyRoot } from './family'
 import { matchSession } from './projects'
+import type { ProjectItem, Session } from './types'
 
 // --- URL parsing ---
 
@@ -104,15 +105,19 @@ export function resolveSessionFromPath(
   // (used when a local folder contains adopted peer sessions).
   const filterHost = parsed.host
   const projectSessions = sessions.filter(s => {
+    // Unpromoted children are presented in their root's project. Promotion
+    // makes familyRoot return the session itself, so normal matching applies
+    // with no provenance fallback.
+    const presentation = familyRoot(s, sessions)
     if (parsed.projectPeer) {
-      // Peer-owned project: trust the stamp.
-      if (s.peer !== parsed.projectPeer) return false
-      if (s.project_slug !== parsed.project) return false
+      // Peer-owned project: trust the presentation root's stamp.
+      if (presentation.peer !== parsed.projectPeer) return false
+      if (presentation.project_slug !== parsed.project) return false
     } else {
       // Local project: claimed-local OR disclaimed-adopted.
-      const claimedHere = !s.peer && s.project_slug === parsed.project
-      const adoptedHere = !s.project_slug
-        && matchSession(s, projects)?.slug === parsed.project
+      const claimedHere = !presentation.peer && presentation.project_slug === parsed.project
+      const adoptedHere = !presentation.project_slug
+        && matchSession(presentation, projects)?.slug === parsed.project
       if (!claimedHere && !adoptedHere) return false
     }
     if (filterHost !== undefined && s.peer !== filterHost) return false
@@ -220,16 +225,30 @@ export function resolveViewFromPath(
  */
 export function hasSessionSlugCollision(session: Session, sessions: Session[], projects: ProjectItem[]): boolean {
   if (!session.slug) return false
-  const namespace = session.peer && session.project_slug
-    ? `peer:${session.peer}:${session.project_slug}`
-    : `local:${session.project_slug ?? matchSession(session, projects)?.slug ?? ''}`
-  return sessions.some(s => {
-    if (s.id === session.id || s.peer !== session.peer || s.adapter !== session.adapter || s.slug !== session.slug) return false
-    const otherNamespace = s.peer && s.project_slug
-      ? `peer:${s.peer}:${s.project_slug}`
-      : `local:${s.project_slug ?? matchSession(s, projects)?.slug ?? ''}`
-    return namespace === otherNamespace
-  })
+  // A family child routes through its presentation root's project while
+  // retaining its own host/adapter/slug. Collision detection must use that
+  // same namespace or two children can serialize to one ambiguous URL.
+  const namespace = (candidate: Session): string => {
+    const presentation = familyRoot(candidate, sessions)
+    if (presentation.peer && presentation.project_slug) {
+      // Match sessionPath's actual mid-path host segment. Both an owner-hosted
+      // child (peer === project owner) and a local child (peer absent) omit it,
+      // so they share one URL namespace and must collide on equal slugs.
+      const serializedHost = candidate.peer && candidate.peer !== presentation.peer
+        ? candidate.peer
+        : ''
+      return `peer:${presentation.peer}:${presentation.project_slug}:host:${serializedHost}`
+    }
+    const projectSlug = presentation.project_slug ?? matchSession(presentation, projects)?.slug ?? ''
+    return `local:${projectSlug}:host:${candidate.peer ?? ''}`
+  }
+  const targetNamespace = namespace(session)
+  return sessions.some(candidate =>
+    candidate.id !== session.id
+    && candidate.adapter === session.adapter
+    && candidate.slug === session.slug
+    && namespace(candidate) === targetNamespace,
+  )
 }
 
 export function viewToPath(
@@ -243,17 +262,18 @@ export function viewToPath(
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null
-      // Peer-owned project (ADR 0002): URL is peer-prefixed; session
-      // lives on the project's owner.
-      if (sess.project_slug && sess.peer) {
-        return sessionPath(sess.project_slug, sess, sess.peer, hasSessionSlugCollision(sess, sessions, projects))
+      const presentation = familyRoot(sess, sessions)
+      // Peer-owned project (ADR 0002): URL is peer-prefixed; a nested
+      // session keeps its own adapter/slug but uses the root's project.
+      if (presentation.project_slug && presentation.peer) {
+        return sessionPath(presentation.project_slug, sess, presentation.peer, hasSessionSlugCollision(sess, sessions, projects))
       }
       // Local-claimed: project owner is the viewer.
-      if (sess.project_slug && !sess.peer) {
-        return sessionPath(sess.project_slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+      if (presentation.project_slug && !presentation.peer) {
+        return sessionPath(presentation.project_slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
       }
       // Disclaimed: viewer's match rules decide the local folder.
-      const project = matchSession(sess, projects)
+      const project = matchSession(presentation, projects)
       if (!project) return null
       return sessionPath(project.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
     }

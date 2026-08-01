@@ -273,6 +273,46 @@ describe('resolveSessionFromPath', () => {
   })
 })
 
+describe('task-family project routing', () => {
+  const projects: ProjectItem[] = [{ slug: 'root-project', match: [{ path: '/root' }] }, { slug: 'child-project', match: [{ path: '/child' }] }]
+  const root = makeSession({ id: 'root', cwd: '/root', adapter: 'pi', slug: 'root', project_slug: 'root-project', semantic_agent: true })
+  const child = makeSession({ id: 'child', cwd: '/child', adapter: 'pi', slug: 'child', parent_session_id: 'root', semantic_agent: true, project_slug: 'child-project' })
+
+  it('serializes and resolves an unpromoted child in its root project', () => {
+    expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, child])).toBe('/root-project/pi/child')
+    expect(resolveViewFromPath('/root-project/pi/child', projects, [root, child])).toEqual({ kind: 'session', sessionId: 'child' })
+  })
+
+  it('uses normal matching without root fallback after promotion', () => {
+    const promoted = { ...child, promoted_to_root: true }
+    expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, promoted])).toBe('/child-project/pi/child')
+    expect(resolveViewFromPath('/root-project/pi/child', projects, [root, promoted])).toEqual({ kind: 'home' })
+  })
+
+  it('detects slug collisions in the root project namespace', () => {
+    const sibling = { ...child, id: 'sibling', project_slug: 'elsewhere' }
+    expect(hasSessionSlugCollision(child, [root, child, sibling], projects)).toBe(true)
+    expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, child, sibling])).toBe('/root-project/pi/~child')
+  })
+
+  it('round-trips peer-owner and local children that serialize without a host segment', () => {
+    const peerProjects: ProjectItem[] = [{ slug: 'peer-project', peer: 'tower' }]
+    const peerRoot = makeSession({ id: 'root@tower', peer: 'tower', cwd: '/root', adapter: 'pi', slug: 'root', project_slug: 'peer-project', semantic_agent: true })
+    const ownerChild = makeSession({ id: 'owner@tower', peer: 'tower', cwd: '/owner', adapter: 'pi', slug: 'same', parent_session_id: peerRoot.id, semantic_agent: true })
+    const localChild = makeSession({ id: 'local', cwd: '/local', adapter: 'pi', slug: 'same', parent_session_id: peerRoot.id, semantic_agent: true })
+    const snapshot = [peerRoot, ownerChild, localChild]
+
+    for (const [session, path] of [
+      [ownerChild, '/@tower/peer-project/pi/~owner@tower'],
+      [localChild, '/@tower/peer-project/pi/~local'],
+    ] as const) {
+      expect(hasSessionSlugCollision(session, snapshot, peerProjects)).toBe(true)
+      expect(viewToPath({ kind: 'session', sessionId: session.id }, peerProjects, snapshot)).toBe(path)
+      expect(resolveViewFromPath(path, peerProjects, snapshot)).toEqual({ kind: 'session', sessionId: session.id })
+    }
+  })
+})
+
 describe('resolveViewFromPath', () => {
   const projects: ProjectItem[] = [
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },

@@ -13,7 +13,7 @@ import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
-  folders, selectedId, sessions,
+  folders, familySelectedId, sessions,
   activityMap, projects, connState, health, peers,
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
@@ -551,7 +551,7 @@ export function Sidebar({
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
   const projectsVal = projects.value
-  const selId = selectedId.value
+  const selId = familySelectedId.value
   const am = activityMap.value
   const peerStatus = peerStatusByName.value
   const mode = sidebarMode.value

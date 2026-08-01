@@ -18,7 +18,8 @@ import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, La
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
-import { buildProjectFolders, discoverProjects } from './projects'
+import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
+import { familyRootId, isFamilyChild } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
 import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
 import { pushError } from './toasts'
@@ -602,12 +603,44 @@ export const unresolvedHosts = computed<UnresolvedHost[]>(
  *  set behind `unreadCount` (a global signal that must ignore the
  *  ?project=/?cwd= view filter). */
 function foldersFrom(ss: Session[]): Folder[] {
+  const forceVisible = new Set<string>()
+  const temporaryPlacements = new Map<string, TemporaryPresentationPlacement>()
+  const selectedRoot = familyRootId(selectedId.value, sessions.value)
+  if (selectedRoot) forceVisible.add(selectedRoot)
+  for (const candidate of ss) {
+    if (isFamilyChild(candidate, sessions.value)) {
+      const rootId = familyRootId(candidate.id, sessions.value)
+      if (!rootId) continue
+      forceVisible.add(rootId)
+      const root = sessions.value.find(session => session.id === rootId)
+      if (root?.project_slug || !candidate.project_slug) continue
+      const sessionPeer = candidate.peer ?? ''
+      const ownerPeer = sessionPeer && !localPeerNames.value.has(sessionPeer) ? sessionPeer : ''
+      const resolves = projects.value.some(project =>
+        project.slug === candidate.project_slug && (project.peer ?? '') === ownerPeer,
+      )
+      if (!resolves) continue
+      const placement = { ownerPeer, slug: candidate.project_slug }
+      const previous = temporaryPlacements.get(rootId)
+      // A malformed/transitional family can briefly report children in more
+      // than one folder. Pick a stable projection until the root stamp lands.
+      if (!previous || `${placement.ownerPeer}::${placement.slug}` < `${previous.ownerPeer}::${previous.slug}`) {
+        temporaryPlacements.set(rootId, placement)
+      }
+    }
+  }
   return buildProjectFolders(
     projects.value,
-    ss,
+    // Sidebar rows are family roots. Unpromoted semantic-agent children are
+    // navigable in the family drawer but have no independent project row.
+    // Resolve edges against the complete snapshot, not this tab-filtered
+    // subset. A filtered-out parent must not turn its child into a fake root.
+    ss.filter(s => !isFamilyChild(s, sessions.value)),
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
     referencePresence(peers.value),
+    forceVisible,
+    temporaryPlacements,
   )
 }
 
@@ -633,16 +666,31 @@ export const sidebarSessions = computed(() => {
   const base = filteredSessions.value.filter(s =>
     s.id === sel || (onlyAlive ? s.alive : s.alive || s.resumable),
   )
-  // The selected session may be absent from `filteredSessions` entirely
-  // (the `?filter=` excluded it); add it back from the full list.
-  if (sel && !base.some(s => s.id === sel)) {
-    const s = sessions.value.find(x => x.id === sel)
-    if (s) return [...base, s]
+  // Every relevant child keeps its presentation root locatable, even when the
+  // root is dead or outside the tab filter. The child itself is later removed
+  // from folders; this turns an active subtree into its single root-led row.
+  const out = [...base]
+  for (const candidate of base) {
+    const rootId = familyRootId(candidate.id, sessions.value)
+    const root = sessions.value.find(s => s.id === rootId)
+    if (root && !out.some(s => s.id === root.id)) out.push(root)
   }
-  return base
+  // The selected session may be absent from `filteredSessions` entirely.
+  // Add both it and its family root for stable selected-row highlighting.
+  if (sel) {
+    const selectedSession = sessions.value.find(x => x.id === sel)
+    if (selectedSession && !out.some(s => s.id === selectedSession.id)) out.push(selectedSession)
+    const rootId = familyRootId(sel, sessions.value)
+    const root = sessions.value.find(s => s.id === rootId)
+    if (root && !out.some(s => s.id === root.id)) out.push(root)
+  }
+  return out
 })
 
 export const folders = computed(() => foldersFrom(sidebarSessions.value))
+
+/** Sidebar selection follows a nested session to its presentation root row. */
+export const familySelectedId = computed(() => familyRootId(selectedId.value, sessions.value))
 
 /** Activity-grouped arrangement of the sessions that Projects can
  *  actually place in folders. In particular, recovered sessions may be
@@ -975,7 +1023,7 @@ export const homePartition = computed(() =>
   // Alive only — dead/resumable corpses live in the sidebar's Activity
   // view, not the dashboard. Home renders only the non-`dated` buckets
   // (see home.tsx), keeping it a recent-activity view.
-  partitionByDay(filteredSessions.value.filter(s => s.alive), Date.now()),
+  partitionByDay(filteredSessions.value.filter(s => s.alive && !isFamilyChild(s, sessions.value)), Date.now()),
 )
 
 // ── Mutators ────────────────────────────────────────────────────────────────
@@ -989,6 +1037,11 @@ export function toUISession(s: ProtocolSession): Session {
     workspace_root: s.workspace_root ?? undefined,
     remotes: s.remotes ?? undefined,
     adapter: s.adapter ?? 'shell',
+    // Preserve launch provenance and server-owned family semantics. These were
+    // previously dropped by this protocol → UI mapper.
+    parent_session_id: s.parent_session_id,
+    semantic_agent: s.semantic_agent,
+    promoted_to_root: s.promoted_to_root,
     alive: s.alive,
     pid: s.pid ?? null,
     exit_code: s.exit_code ?? null,

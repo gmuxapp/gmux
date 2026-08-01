@@ -16,9 +16,14 @@ import (
 // fdExcluded reports whether a JSON path is one of the accepted FD-* diffs
 // excluded from the structural comparison (design §8): project_index
 // (FD-1), the timestamp fields (FD-4 — asserted separately by
-// parse-and-compare), and the world health session counts (FD-6).
+// parse-and-compare), the world health session counts (FD-6), and task-family
+// facts added after the legacy production composer was retired. Those family
+// fields are covered directly by wire converter tests; the legacy store has no
+// promoted bit or adapter capability map with which to produce them.
 func fdExcluded(path string) bool {
 	switch {
+	case strings.HasSuffix(path, ".semantic_agent"), strings.HasSuffix(path, ".promoted_to_root"):
+		return true
 	case strings.HasSuffix(path, ".project_index"):
 		return true
 	case strings.HasSuffix(path, ".created_at"), strings.HasSuffix(path, ".started_at"),

@@ -28,6 +28,10 @@ type Converter struct {
 	// IsLocalPeer reports whether a peer name is a Local peer (an
 	// extension of this host whose project stamps the parent owns).
 	IsLocalPeer func(name string) bool
+	// SemanticAgents is keyed by adapter name and is populated from the
+	// existing adapter.ConversationSource capability, matching notification
+	// semantics. The web UI must not guess from an adapter-name allowlist.
+	SemanticAgents map[string]bool
 }
 
 // resolveTitle reproduces store.resolveTitle's precedence exactly:
@@ -73,6 +77,8 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Command:         v.Command,
 		Cwd:             v.CWD,
 		Adapter:         v.Adapter,
+		SemanticAgent:   c.SemanticAgents[v.Adapter],
+		PromotedToRoot:  v.PromotedToRoot,
 		WorkspaceRoot:   v.WorkspaceRoot,
 		Remotes:         v.Remotes,
 		Alive:           row.Alive,

@@ -178,7 +178,19 @@ func processGroupExists(pgid int) bool {
 // attach is false, the session is spawned detached from the tty and
 // this call returns immediately once the session is running, leaving
 // the session visible in the gmux UI.
+func inheritLaunchParent(dir runDirectives, getenv func(string) string) runDirectives {
+	// A fresh nested launch inherits immutable provenance from the runner
+	// environment. Explicit callers such as `gmux edit` may already provide the
+	// same fact; resume/restart must never acquire a new parent.
+	if dir.ParentSessionID == "" && dir.ResumeID == "" {
+		dir.ParentSessionID = getenv("GMUX_SESSION_ID")
+	}
+	return dir
+}
+
 func runSession(args []string, attach bool, dir runDirectives) {
+	dir = inheritLaunchParent(dir, os.Getenv)
+
 	// Resolve the adapter up front so we can short-circuit one-shot, non-session
 	// invocations (e.g. `pi update`, `pi list`) before any session machinery.
 	// These are not interactive sessions: exec them directly so they behave

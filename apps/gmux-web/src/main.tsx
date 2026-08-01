@@ -13,6 +13,8 @@ import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
+import { FamilyDrawer } from './family-drawer'
+import { familyNavigation, hasFamily } from './family'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -176,6 +178,14 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   onResume?: (id: string) => void
   resuming?: boolean
 }) {
+  const [familyOpen, setFamilyOpen] = useState(false)
+  const familyTriggerRef = useRef<HTMLButtonElement>(null)
+  const closeFamily = useCallback(() => setFamilyOpen(false), [])
+  const showFamily = session ? hasFamily(session, sessions.value) : false
+  useEffect(() => {
+    if (!showFamily) setFamilyOpen(false)
+  }, [showFamily])
+
   if (!session) {
     return (
       <div class="main-header">
@@ -187,10 +197,41 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   }
 
   const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
+  const familyNav = familyNavigation(session, sessions.value)
 
   return (
     <div class={`main-header ${keyboardOpen.value ? 'keyboard-collapsed' : ''}`}>
       <div class="main-header-left">
+        {showFamily && (
+          <button
+            ref={familyTriggerRef}
+            class="family-pill"
+            type="button"
+            aria-expanded={familyOpen}
+            aria-controls="agent-family-drawer"
+            onClick={() => setFamilyOpen(open => !open)}
+          >
+            Agents / Family
+          </button>
+        )}
+        {familyNav.parent && (
+          <button
+            class="family-header-nav"
+            type="button"
+            aria-label={`Go to parent agent: ${familyNav.parent.title}`}
+            title={`Parent: ${familyNav.parent.title}`}
+            onClick={() => navigateToSession(familyNav.parent!.id)}
+          >↑</button>
+        )}
+        {familyNav.root && (
+          <button
+            class="family-header-nav"
+            type="button"
+            aria-label={`Go to root agent: ${familyNav.root.title}`}
+            title={`Root: ${familyNav.root.title}`}
+            onClick={() => navigateToSession(familyNav.root!.id)}
+          >⌂</button>
+        )}
         <div class="main-header-title">
           {session.title}
         </div>
@@ -202,6 +243,9 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
         <HeaderStatusChip session={session} resuming={resuming} />
         <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
+      {showFamily && familyOpen && (
+        <FamilyDrawer selected={session} onClose={closeFamily} triggerRef={familyTriggerRef} />
+      )}
     </div>
   )
 }

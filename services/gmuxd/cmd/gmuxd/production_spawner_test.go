@@ -27,7 +27,7 @@ func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 		{"WorkspaceRoot", "workspace_root"}, {"Slug", "slug"},
 		{"ShellTitle", "shell_title"}, {"AdapterTitle", "adapter_title"},
 		{"Subtitle", "subtitle"}, {"Command", "command"}, {"Remotes", "remotes"},
-		{"Status", "status"}, {"Unread", "unread"},
+		{"ParentSessionID", "parent_session_id"}, {"Status", "status"}, {"Unread", "unread"},
 		{"TerminalCols", "terminal_cols"}, {"TerminalRows", "terminal_rows"},
 	}
 	typeOf := reflect.TypeOf(runnerMetaWire{})
@@ -40,7 +40,7 @@ func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 			t.Errorf("field[%d]=%s json:%q, want %s json:%q", i, field.Name, field.Tag.Get("json"), entry.field, entry.tag)
 		}
 	}
-	status := typeOf.Field(19).Type.Elem()
+	status := typeOf.Field(20).Type.Elem()
 	if status.NumField() != 3 ||
 		status.Field(0).Name != "Active" || status.Field(0).Tag.Get("json") != "active" ||
 		status.Field(1).Name != "Error" || status.Field(1).Tag.Get("json") != "error" ||

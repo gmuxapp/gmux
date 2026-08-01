@@ -73,6 +73,20 @@ func waitForRunnerConns(t *testing.T, tracker *runnerConnTracker, want int64) {
 	}
 }
 
+func TestProductionRunnerMetaPreservesLaunchParent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":"child","adapter":"pi","alive":true,"created_at":"2026-01-01T00:00:00Z","parent_session_id":"parent"}`)
+	})
+	meta, err := (productionRunnerClient{}).Meta(context.Background(), unixRunner(t, mux))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Registration.LaunchParentID == nil || *meta.Registration.LaunchParentID != "parent" {
+		t.Fatalf("launch parent lost at runner boundary: %#v", meta.Registration.LaunchParentID)
+	}
+}
+
 func TestProductionRunnerMetaClosesConnections(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, _ *http.Request) {
