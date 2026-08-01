@@ -7,6 +7,7 @@
  */
 ---
 
+<div class="topo-wrap">
 <div class="topo">
   <!-- SVG overlay for connectors (spans full component) -->
   <svg class="topo-lines">
@@ -129,6 +130,7 @@
     </div>
   </div>
 </div>
+</div>
 
 <script>
   function layoutPaths() {
@@ -199,15 +201,21 @@
 </script>
 
 <style>
+  .topo-wrap {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+  }
+
   .topo {
     position: relative;
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: auto auto auto;
     grid-template-rows: auto 1fr;
     column-gap: 80px;
     align-items: center;
-    max-width: 960px;
-    margin: 0 auto;
+    width: fit-content;
+    max-width: 100%;
     padding: 2rem 0;
   }
 
@@ -244,14 +252,26 @@
     align-self: end;
   }
 
-  .topo-col-label-left  { grid-column: 1; justify-self: end; width: 280px; }
-  .topo-col-label-right { grid-column: 3; justify-self: start; }
+  .topo-col-label-left {
+    grid-column: 1;
+    justify-self: end;
+    width: 280px;
+    text-align: left;
+  }
+
+  .topo-col-label-right {
+    grid-column: 3;
+    justify-self: end;
+    width: auto;
+    text-align: right;
+    white-space: nowrap;
+  }
   .topo-col-spacer { grid-row: 1; grid-column: 2; }
 
   /* ── Left: machines ── */
   .topo-machines {
     position: relative;
-    z-index: 1;
+    z-index: 2;
     display: flex;
     flex-direction: column;
     gap: 0.85rem;
@@ -306,11 +326,6 @@
 
   .topo-dot.unread {
     background: oklch(72% 0.1 195);
-  }
-
-  .topo-dot.error {
-    background: oklch(65% 0.18 25);
-    animation: subtle-pulse 2.5s ease-in-out infinite;
   }
 
   .topo-dot.none {
@@ -376,7 +391,28 @@
     padding-top: 1.5rem;
   }
 
+  .topo-center::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    left: 50%;
+    top: 50%;
+    width: min(620px, 100vw);
+    height: min(470px, 90vw);
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: radial-gradient(
+      ellipse at center,
+      oklch(45% 0.085 195 / 0.19) 0%,
+      oklch(33% 0.06 205 / 0.11) 42%,
+      transparent 74%
+    );
+    filter: blur(12px);
+    pointer-events: none;
+  }
+
   .topo-hub {
+    position: relative;
     width: 80px;
     height: 80px;
     border-radius: 50%;
@@ -403,13 +439,10 @@
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
-    align-items: flex-start;
+    align-items: flex-end;
+    justify-self: end;
+    width: 122px;
   }
-
-  /* Stagger: phone + tablet fan out, local device closest to hub */
-  .topo-device[data-device="phone"]   { margin-left: 80px; }
-  .topo-device[data-device="desktop"] { margin-left: 20px; }
-  .topo-device[data-device="tablet"]  { margin-left: 80px; }
 
   .topo-device {
     display: flex;
@@ -501,10 +534,11 @@
   }
 
   /* ── Responsive ── */
-  @media (max-width: 700px) {
+  @media (max-width: 740px) {
     .topo {
       grid-template-columns: 1fr;
       grid-template-rows: repeat(5, auto);
+      width: 100%;
       gap: 0;
       row-gap: 0.75rem;
       column-gap: 0;
@@ -519,7 +553,7 @@
       margin-top: 0.5rem;
     }
     .topo-col-label-left  { grid-row: 1; width: auto; justify-self: stretch; }
-    .topo-col-label-right { grid-row: 4; grid-column: 1; justify-self: stretch; }
+    .topo-col-label-right { grid-row: 4; grid-column: 1; width: auto; justify-self: stretch; }
     .topo-machines { grid-row: 2; grid-column: 1; }
     .topo-center   { grid-row: 3; grid-column: 1; }
     .topo-devices  { grid-row: 5; grid-column: 1; }
@@ -534,12 +568,21 @@
       flex-direction: row;
       justify-content: center;
       align-items: flex-end;
-      gap: 1.5rem;
+      justify-self: stretch;
+      width: auto;
+      gap: 0.75rem;
     }
-    .topo-device[data-device="phone"],
-    .topo-device[data-device="desktop"],
-    .topo-device[data-device="tablet"] {
-      margin-left: 0;
+    .topo-frame-phone {
+      width: 42px;
+      height: 72px;
+    }
+    .topo-frame-desktop {
+      width: 105px;
+      height: 68px;
+    }
+    .topo-frame-tablet {
+      width: 88px;
+      height: 60px;
     }
     .topo-center {
       padding: 0;
