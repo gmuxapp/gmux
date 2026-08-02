@@ -11,17 +11,24 @@ exchange reports out.
 :::note
 Semantic agent orchestration works with **pi** today. Other agents (Claude
 Code, Codex) run fine as gmux sessions, but answer `unsupported_adapter` on
-`gmux agent` verbs — drive those with raw [`send`/`tail`](/integrations/scripts-and-agents/)
+`gmux agent` verbs — drive those with raw [`send`/`tail`](/reference/cli/#gmux-send---wait---timeout-n-id-text-key)
 or their one-shot modes (`claude -p`, `codex exec`).
 :::
 
 :::tip[Driving gmux from an agent?]
-Install the [gmux-agent skill](https://github.com/gmuxapp/gmux/blob/main/skills/gmux-agent/SKILL.md)
-so your agent picks up these patterns automatically:
+Install the gmux skills — [gmux](https://github.com/gmuxapp/gmux/blob/main/skills/gmux/SKILL.md)
+for running commands through sessions and
+[gmux-agent](https://github.com/gmuxapp/gmux/blob/main/skills/gmux-agent/SKILL.md)
+for orchestrating agents — so your agent picks up these patterns automatically:
 
 ```sh
 npx skills add gmuxapp/gmux
 ```
+
+The skills follow the [agentskills.io](https://agentskills.io/) standard and
+work with Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, and 50+
+other agents. Or drop the `SKILL.md` files into your agent's skills directory
+by hand.
 :::
 
 ## The core loop
@@ -213,6 +220,5 @@ loses both silently.
 
 ## See also
 
-- [CLI reference](/reference/cli/) — the full grammar of `gmux agent` and `gmux wait`
-- [Scripts and agents](/integrations/scripts-and-agents/) — raw sessions: running commands, `send`, shell waits
+- [CLI reference](/reference/cli/) — the full grammar of `gmux agent` and `gmux wait`, plus raw-session scripting: the piped `gmux -- <cmd>` flow, [`send`](/reference/cli/#gmux-send---wait---timeout-n-id-text-key), shell [waits](/reference/cli/#gmux-wait-id), and the [`ls --json`](/reference/cli/#ls---json-schema) contract
 - [pi integration](/integrations/pi/) — how pi reports status and resumes conversations

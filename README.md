@@ -53,7 +53,7 @@ gmux wait "$id"        # block until the turn ends, print the exchange report
 gmux tail -n 50 "$id"  # read the plain-text terminal tail
 ```
 
-See the [scripting guide](https://gmux.app/integrations/scripts-and-agents/) and the [CLI reference](https://gmux.app/reference/cli/).
+See [Orchestrating agents](https://gmux.app/orchestrating-agents/) and the [CLI reference](https://gmux.app/reference/cli/).
 
 ## Docs
 

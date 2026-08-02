@@ -57,10 +57,8 @@ The headless row is the canonical shape for scripts and agent harnesses:
 a blocking call, stdout that carries exactly what the child printed (so
 `gmux -- pnpm build | tail` reads the build's own tail), the session id on
 stderr for attaching or tailing mid-run, and reliable exit-code propagation —
-so `if gmux -- pytest -q; then …` works.
-
-See [Scripts and agents](/integrations/scripts-and-agents/) for the narrative
-version with a worked build-and-report example.
+so `if gmux -- pytest -q; then …` works. For launching and driving AI agents
+semantically, see [Orchestrating agents](/orchestrating-agents/).
 
 ### `gmux -d -- <command> [args...]`
 
