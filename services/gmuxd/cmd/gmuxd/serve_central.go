@@ -1320,11 +1320,19 @@ func reconcileActiveExchanges(native []adapter.Exchange, current *sessioncoord.T
 		return append([]adapter.Exchange(nil), native...)
 	}
 	if current.PreviousExchanges == nil {
-		// A version-skewed frame cannot be reconciled safely. Prefer the source's
-		// current span over attaching it to an arbitrary persisted equal string.
+		// A version-skewed frame cannot be reconciled positionally. Anonymous
+		// hook-driven adapters (currently Codex) also report an empty user because
+		// raw PTY input has no semantic source bytes. Never append that empty frame
+		// as a duplicate exchange once native storage has the real boundary.
 		out := append([]adapter.Exchange(nil), native...)
 		for _, ex := range current.Exchanges {
+			if ex.User == "" {
+				continue
+			}
 			out = append(out, adapter.Exchange{Ordinal: ex.Ordinal, User: ex.User, Iterations: ex.Iterations})
+		}
+		if len(out) > 0 {
+			out[len(out)-1].Terminal = ""
 		}
 		return out
 	}

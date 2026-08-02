@@ -610,14 +610,101 @@ func extractCodexUserText(raw json.RawMessage) string {
 	return ""
 }
 
-// isCodexSystemContext returns true if the text looks like Codex's
-// injected system context rather than the user's actual prompt.
+// codexContextualUserMatchers mirrors Codex's contextual-user-message registry
+// rather than guessing from XML-looking text. Keep this list synchronized with
+// codex-rs/core/src/context/contextual_user_message.rs. The matcher source for
+// each registered form is named beside it so additions upstream are auditable.
+var codexContextualUserMatchers = []func(string) bool{
+	isCodexAgentsInstructions,             // context/user_instructions.rs
+	codexWrapped("environment_context"),   // context/world_state/environment.rs
+	isCodexPermissionsContext,             // context/world_state/permissions.rs
+	codexWrapped("skill"),                 // core-skills/src/skill_instructions.rs
+	codexWrapped("skills_instructions"),   // protocol/src/protocol.rs (legacy)
+	codexWrapped("user_shell_command"),    // context/user_shell_command.rs
+	codexWrapped("turn_aborted"),          // context/turn_aborted.rs
+	codexWrapped("subagent_notification"), // context/subagent_notification.rs
+	isCodexHookPrompt,                     // protocol/src/items.rs
+	isCodexInternalModelContext,           // context/internal_model_context.rs
+	codexWrapped("recommended_plugins"),   // context/recommended_plugins_instructions.rs
+	isCodexLegacyUnifiedExecWarning,       // context/legacy_unified_exec_process_limit_warning.rs
+	isCodexLegacyApplyPatchWarning,        // context/legacy_apply_patch_exec_command_warning.rs
+	isCodexLegacyModelMismatchWarning,     // context/legacy_model_mismatch_warning.rs
+}
+
+// isCodexSystemContext recognizes only complete upstream-generated forms. It
+// deliberately retains unknown XML and broad prefix lookalikes as user prompts.
 func isCodexSystemContext(s string) bool {
-	// Codex injects several system blocks before the user's actual prompt.
-	return strings.HasPrefix(s, "<permissions") ||
-		strings.HasPrefix(s, "<environment_context>") ||
-		strings.HasPrefix(s, "# AGENTS.md") ||
-		strings.HasPrefix(s, "<turn_aborted>")
+	s = strings.TrimSpace(s)
+	for _, matcher := range codexContextualUserMatchers {
+		if matcher(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexWrapped(tag string) func(string) bool {
+	return func(s string) bool {
+		return strings.HasPrefix(s, "<"+tag+">") && strings.HasSuffix(s, "</"+tag+">")
+	}
+}
+
+func isCodexAgentsInstructions(s string) bool {
+	return strings.HasPrefix(s, "# AGENTS.md instructions") &&
+		strings.Contains(s, "\n<INSTRUCTIONS>") && strings.HasSuffix(s, "</INSTRUCTIONS>")
+}
+
+func isCodexPermissionsContext(s string) bool {
+	return codexWrapped("permissions")(s) ||
+		(strings.HasPrefix(s, "<permissions instructions>") && strings.HasSuffix(s, "</permissions instructions>"))
+}
+
+func isCodexHookPrompt(s string) bool {
+	const prefix = `<hook_prompt hook_run_id="`
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	rest := s[len(prefix):]
+	end := strings.Index(rest, `">`)
+	return end > 0 && strings.HasSuffix(rest[end+2:], "</hook_prompt>")
+}
+
+func isCodexInternalModelContext(s string) bool {
+	if codexWrapped("goal_context")(s) { // legacy accepted by current Codex
+		return true
+	}
+	const prefix = `<codex_internal_context source="`
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	rest := s[len(prefix):]
+	end := strings.Index(rest, `">`)
+	if end <= 0 || !validCodexContextSource(rest[:end]) {
+		return false
+	}
+	return strings.HasSuffix(rest[end+2:], "</codex_internal_context>")
+}
+
+func validCodexContextSource(source string) bool {
+	for i, r := range source {
+		if (r < 'a' || r > 'z') && (i == 0 || (r < '0' || r > '9') && r != '_') {
+			return false
+		}
+	}
+	return source != ""
+}
+
+func isCodexLegacyUnifiedExecWarning(s string) bool {
+	return strings.HasPrefix(s, "Warning: The maximum number of unified exec processes you can keep open is")
+}
+
+func isCodexLegacyApplyPatchWarning(s string) bool {
+	return strings.HasPrefix(s, "Warning: apply_patch was requested via ") &&
+		strings.HasSuffix(s, "Use the apply_patch tool instead of exec_command.")
+}
+
+func isCodexLegacyModelMismatchWarning(s string) bool {
+	return strings.HasPrefix(s, "Warning: Your account was flagged for potentially high-risk cyber activity")
 }
 
 // --- ConversationSource ---
