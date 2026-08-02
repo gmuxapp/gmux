@@ -170,7 +170,7 @@ func renderPiExchangeContent(content json.RawMessage) (text, prose string) {
 				proseParts = append(proseParts, b.Text)
 			}
 		case "toolCall":
-			parts = append(parts, formatPiToolCall(b.Name, b.Arguments))
+			parts = append(parts, formatToolCall(b.Name, b.Arguments))
 		case "image":
 			parts = append(parts, "[image]")
 		}
@@ -218,7 +218,7 @@ func renderPiContent(content json.RawMessage) (text, prose string) {
 				proseParts = append(proseParts, t)
 			}
 		case "toolCall":
-			parts = append(parts, formatPiToolCall(b.Name, b.Arguments))
+			parts = append(parts, formatToolCall(b.Name, b.Arguments))
 		case "image":
 			parts = append(parts, "[image]")
 		}
@@ -233,11 +233,11 @@ func renderPiContent(content json.RawMessage) (text, prose string) {
 // the conversation the transcript exists to surface.
 const maxToolArgChars = 120
 
-// formatPiToolCall renders a tool call as a compact single line:
+// formatToolCall renders a tool call as a compact single line:
 // "[tool] <name> <compact-json-args>". Plain text, no markdown
 // emphasis or inline code — arguments are arbitrary bytes (shell
 // commands full of backticks), so any markdown wrapping would break.
-func formatPiToolCall(name string, args json.RawMessage) string {
+func formatToolCall(name string, args json.RawMessage) string {
 	if name == "" {
 		name = "?"
 	}

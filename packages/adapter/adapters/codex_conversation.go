@@ -26,7 +26,7 @@ func (c *Codex) RenderConversation(ref string) ([]adapter.ConversationMessage, e
 		if item.Text == "" {
 			continue
 		}
-		out = append(out, adapter.ConversationMessage{Role: item.Role, Text: item.Text, Prose: item.Text})
+		out = append(out, adapter.ConversationMessage{Role: item.Role, Text: item.Text, Prose: item.Prose})
 	}
 	return out, nil
 }
@@ -63,8 +63,9 @@ func (c *Codex) RenderConversationExchanges(ref string) ([]adapter.Exchange, err
 }
 
 type codexMessage struct {
-	Role string
-	Text string
+	Role  string
+	Text  string
+	Prose string
 }
 
 type codexRollout struct {
@@ -75,11 +76,13 @@ type codexRollout struct {
 type codexRecord struct {
 	Type    string `json:"type"`
 	Payload struct {
-		Type    string          `json:"type"`
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-		Delta   string          `json:"delta"`
-		Info    json.RawMessage `json:"info"`
+		Type      string          `json:"type"`
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		Delta     string          `json:"delta"`
+		Info      json.RawMessage `json:"info"`
 	} `json:"payload"`
 }
 
@@ -122,25 +125,35 @@ func readCodexRollout(ref string) (codexRollout, error) {
 			pendingDelta.Reset()
 			continue
 		}
-		if entry.Type != "response_item" || entry.Payload.Type != "message" ||
+		if entry.Type != "response_item" {
+			continue
+		}
+		if entry.Payload.Type == "function_call" {
+			out.messages = append(out.messages, codexMessage{
+				Role: "assistant",
+				Text: formatToolCall(entry.Payload.Name, codexToolArguments(entry.Payload.Arguments)),
+			})
+			continue
+		}
+		if entry.Payload.Type != "message" ||
 			(entry.Payload.Role != "user" && entry.Payload.Role != "assistant") {
 			continue
 		}
-		text := codexMessageText(entry.Payload.Role, entry.Payload.Content)
+		text, prose := codexMessageText(entry.Payload.Role, entry.Payload.Content)
 		if entry.Payload.Role == "user" {
 			// Never carry unfinished response prose across a new user boundary.
 			responseProse = nil
 			pendingDelta.Reset()
-			out.messages = append(out.messages, codexMessage{Role: "user", Text: text})
+			out.messages = append(out.messages, codexMessage{Role: "user", Text: text, Prose: prose})
 			out.exchanges = append(out.exchanges, codexMessage{Role: "user", Text: text})
 			continue
 		}
 
 		pendingDelta.Reset() // canonical completed text supersedes legacy deltas
-		out.messages = append(out.messages, codexMessage{Role: "assistant", Text: text})
+		out.messages = append(out.messages, codexMessage{Role: "assistant", Text: text, Prose: prose})
 		if hasResponseMarkers {
-			if text != "" {
-				responseProse = append(responseProse, text)
+			if prose != "" {
+				responseProse = append(responseProse, prose)
 			}
 		} else {
 			// Compatibility for older rollouts without response markers: their
@@ -150,7 +163,7 @@ func readCodexRollout(ref string) (codexRollout, error) {
 	}
 	if pendingDelta.Len() != 0 {
 		text := pendingDelta.String()
-		out.messages = append(out.messages, codexMessage{Role: "assistant", Text: text})
+		out.messages = append(out.messages, codexMessage{Role: "assistant", Text: text, Prose: text})
 		if !hasResponseMarkers {
 			out.exchanges = append(out.exchanges, codexMessage{Role: "response", Text: text})
 		}
@@ -166,16 +179,30 @@ func isCodexResponseMarker(entry codexRecord) bool {
 	return info != "" && info != "null"
 }
 
-func codexMessageText(role string, raw json.RawMessage) string {
+func codexToolArguments(raw json.RawMessage) json.RawMessage {
+	// Codex persists function-call arguments as a JSON string containing the
+	// original JSON object, unlike pi and Claude which persist the object.
+	var decoded string
+	if json.Unmarshal(raw, &decoded) == nil {
+		return json.RawMessage(decoded)
+	}
+	return raw
+}
+
+func codexMessageText(role string, raw json.RawMessage) (text, prose string) {
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
 	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
+		return "", ""
 	}
-	var parts []string
+	var parts, proseParts []string
 	for _, block := range blocks {
+		if role == "user" && block.Type == "input_image" {
+			parts = append(parts, "[image]")
+			continue
+		}
 		want := "output_text"
 		if role == "user" {
 			want = "input_text"
@@ -184,6 +211,7 @@ func codexMessageText(role string, raw json.RawMessage) string {
 			continue
 		}
 		parts = append(parts, block.Text)
+		proseParts = append(proseParts, block.Text)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), strings.Join(proseParts, "\n\n")
 }

@@ -157,6 +157,59 @@ func TestCodexContextLookalikesRemainPublicUserPrompts(t *testing.T) {
 	}
 }
 
+func TestCodexImageInputsEstablishUserBoundaries(t *testing.T) {
+	t.Run("image only", func(t *testing.T) {
+		path := writeCodexJSONL(t,
+			`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,secret"}]}}`,
+			codexAssistant("seen"), codexCompletedResponse,
+		)
+		ex, err := NewCodex().RenderConversationExchanges(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ex) != 1 || ex[0].User != "[image]" || ex[0].Terminal != "seen" {
+			t.Fatalf("image exchange = %#v", ex)
+		}
+		messages, err := NewCodex().RenderConversation(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 2 || messages[0].Text != "[image]" || messages[0].Prose != "" {
+			t.Fatalf("image conversation = %#v", messages)
+		}
+	})
+
+	t.Run("mixed text and image", func(t *testing.T) {
+		path := writeCodexJSONL(t,
+			`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"https://example.invalid/secret"}]}}`,
+			codexAssistant("seen"), codexCompletedResponse,
+		)
+		ex, err := NewCodex().RenderConversationExchanges(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ex) != 1 || ex[0].User != "inspect\n\n[image]" {
+			t.Fatalf("mixed image exchange = %#v", ex)
+		}
+	})
+}
+
+func TestCodexConversationRendersToolCallsWithoutResults(t *testing.T) {
+	path := writeCodexJSONL(t,
+		codexUser("go"),
+		`{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"go test ./...\"}"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","output":"private payload"}}`,
+		codexCompletedResponse,
+	)
+	messages, err := NewCodex().RenderConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[1].Text != `[tool] shell {"command":"go test ./..."}` || messages[1].Prose != "" {
+		t.Fatalf("tool conversation = %#v", messages)
+	}
+}
+
 func TestCodexExchangeMalformedPartialAndLegacyFallback(t *testing.T) {
 	path := writeCodexJSONL(t,
 		codexUser("go"),
