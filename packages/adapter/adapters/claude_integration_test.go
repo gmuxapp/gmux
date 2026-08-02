@@ -30,13 +30,13 @@ func claudeSendAndWait(t *testing.T, g *testutil.Gmuxd, send func(string), sessI
 	t.Helper()
 	// Claude shows a trust prompt for new workspaces — dismiss it.
 	s, _ := g.GetSession(sessID)
-	g.WaitForScrollback(s.SocketPath, "trust", 15*time.Second)
+	g.WaitForScrollback(s.ID, "trust", 15*time.Second)
 	send("\r") // accept "Yes, I trust this folder"
 	time.Sleep(3 * time.Second)
 	send("say hi\r")
 
 	sess, _ := g.GetSession(sessID)
-	g.WaitForScrollback(sess.SocketPath, "say hi", 10*time.Second)
+	g.WaitForScrollback(sess.ID, "say hi", 10*time.Second)
 
 	// Wait for file attribution.
 	g.WaitForSession(sessID, func(s testutil.Session) bool {
@@ -92,7 +92,7 @@ func TestClaudeSecondTurnKeepsTitle(t *testing.T) {
 	send("say goodbye\r")
 
 	gSess, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(gSess.SocketPath, "goodbye", 60*time.Second)
+	g.WaitForScrollback(gSess.ID, "goodbye", 60*time.Second)
 	time.Sleep(3 * time.Second)
 
 	second, _ := g.GetSession(sess.ID)

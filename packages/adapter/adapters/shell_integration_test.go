@@ -29,15 +29,37 @@ func TestShellWSInput(t *testing.T) {
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		text := testutil.ReadScrollback(t, sess.SocketPath)
+		text := g.ReadScrollback(sess.ID)
 		if strings.Contains(text, "GMUX_TEST_MARKER_42") {
 			t.Log("WS input verified — marker found in scrollback")
 			return
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	text := testutil.ReadScrollback(t, sess.SocketPath)
+	text := g.ReadScrollback(sess.ID)
 	t.Fatalf("marker not found in scrollback:\n%s", text)
+}
+
+// TestHarnessScrollbackBroker guards the harness's dependency on gmuxd's
+// public text-rendering scrollback contract. The runner deliberately has no
+// scrollback HTTP route; this must cross the real isolated daemon and read its
+// persisted PTY byte stream through ?tail=N.
+func TestHarnessScrollbackBroker(t *testing.T) {
+	g := testutil.StartGmuxd(t)
+	sess := g.Launch([]string{"bash"}, t.TempDir())
+	send, _ := g.ConnectSession(sess.ID)
+
+	const marker = "GMUX_BROKER_SCROLLBACK_MARKER"
+	send("printf '\\033[32m" + marker + "\\033[0m\\n'\r")
+	g.WaitForScrollback(sess.ID, marker, 10*time.Second)
+
+	text := g.ReadScrollback(sess.ID)
+	if !strings.Contains(text, marker) {
+		t.Fatalf("daemon scrollback text missing marker: %q", text)
+	}
+	if strings.Contains(text, "\x1b[32m") {
+		t.Fatalf("daemon tail returned raw PTY bytes instead of rendered text: %q", text)
+	}
 }
 
 // TestShellKill verifies /kill terminates an interactive shell session.
@@ -115,7 +137,7 @@ func TestShellRestart(t *testing.T) {
 	send("echo GMUX_RESTART_MARKER\r")
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		text := testutil.ReadScrollback(t, after.SocketPath)
+		text := g.ReadScrollback(after.ID)
 		if strings.Contains(text, "GMUX_RESTART_MARKER") {
 			return
 		}

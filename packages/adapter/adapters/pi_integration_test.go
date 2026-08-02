@@ -36,11 +36,11 @@ func sendAndWaitForTurn(t *testing.T, g *testutil.Gmuxd, send func(string), sess
 
 	// Verify pi received the input by checking scrollback.
 	sess, _ := g.GetSession(sessID)
-	g.WaitForScrollback(sess.SocketPath, "say hi", 10*time.Second)
+	g.WaitForScrollback(sess.ID, "say hi", 10*time.Second)
 
 	// Wait for the turn to produce output (scrollback will change when
 	// the assistant responds). Pi's scrollback grows as the response streams.
-	g.WaitForScrollback(sess.SocketPath, "Hi", 60*time.Second)
+	g.WaitForScrollback(sess.ID, "Hi", 60*time.Second)
 
 	// Wait for file attribution (pi writes the full turn to JSONL after completion).
 	g.WaitForSession(sessID, func(s testutil.Session) bool {
@@ -121,7 +121,7 @@ func TestPiSecondTurnKeepsTitle(t *testing.T) {
 
 	// Wait for second response.
 	gSess, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(gSess.SocketPath, "goodbye", 60*time.Second)
+	g.WaitForScrollback(gSess.ID, "goodbye", 60*time.Second)
 
 	// Brief wait for file to be written and parsed.
 	time.Sleep(3 * time.Second)

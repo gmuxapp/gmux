@@ -28,12 +28,12 @@ func codexSendAndWait(t *testing.T, g *testutil.Gmuxd, send func(string), sessID
 	t.Helper()
 	// Codex shows a trust prompt for new workspaces — dismiss it.
 	s, _ := g.GetSession(sessID)
-	g.WaitForScrollback(s.SocketPath, "trust", 15*time.Second)
+	g.WaitForScrollback(s.ID, "trust", 15*time.Second)
 	time.Sleep(1 * time.Second)
 	send("\r") // accept "Yes, continue"
 
 	// Wait for Codex prompt to appear (post-trust).
-	g.WaitForScrollback(s.SocketPath, "Codex", 15*time.Second)
+	g.WaitForScrollback(s.ID, "Codex", 15*time.Second)
 	time.Sleep(2 * time.Second)
 
 	// Type message and submit.
@@ -95,7 +95,7 @@ func TestCodexSecondTurnKeepsTitle(t *testing.T) {
 	send("say goodbye\r")
 
 	gSess, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(gSess.SocketPath, "goodbye", 60*time.Second)
+	g.WaitForScrollback(gSess.ID, "goodbye", 60*time.Second)
 	time.Sleep(3 * time.Second)
 
 	second, _ := g.GetSession(sess.ID)

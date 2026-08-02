@@ -38,12 +38,12 @@ func TestScrollbackPiConversation(t *testing.T) {
 
 	// Wait for pi to process and respond.
 	s, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(s.SocketPath, "pineapple", 60*time.Second)
+	g.WaitForScrollback(s.ID, "pineapple", 60*time.Second)
 
 	// Give time for the full response to render.
 	time.Sleep(5 * time.Second)
 
-	text := testutil.ReadScrollback(t, sess.SocketPath)
+	text := g.ReadScrollback(sess.ID)
 	t.Logf("scrollback (%d chars):\n%s", len(text), text)
 
 	// The scrollback must contain the user's prompt text.
@@ -73,15 +73,15 @@ func TestScrollbackPiMultiTurn(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	send("say the word strawberry exactly once\r")
 	s, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(s.SocketPath, "strawberry", 60*time.Second)
+	g.WaitForScrollback(s.ID, "strawberry", 60*time.Second)
 	time.Sleep(5 * time.Second)
 
 	// Second turn.
 	send("now say the word watermelon exactly once\r")
-	g.WaitForScrollback(s.SocketPath, "watermelon", 60*time.Second)
+	g.WaitForScrollback(s.ID, "watermelon", 60*time.Second)
 	time.Sleep(5 * time.Second)
 
-	text := testutil.ReadScrollback(t, s.SocketPath)
+	text := g.ReadScrollback(s.ID)
 	t.Logf("scrollback (%d chars):\n%s", len(text), text)
 
 	// Both turn contents should be present.
@@ -109,10 +109,10 @@ func TestScrollbackPiNoSpinnerFrames(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	send("say hello in one sentence\r")
 	s, _ := g.GetSession(sess.ID)
-	g.WaitForScrollback(s.SocketPath, "hello", 60*time.Second)
+	g.WaitForScrollback(s.ID, "hello", 60*time.Second)
 	time.Sleep(5 * time.Second)
 
-	text := testutil.ReadScrollback(t, s.SocketPath)
+	text := g.ReadScrollback(s.ID)
 
 	// Spinner characters should not appear in the normalized scrollback.
 	// These are the Braille spinner frames pi uses.
@@ -156,7 +156,7 @@ func TestScrollbackShellPreservesOutput(t *testing.T) {
 	send("echo MARKER_GAMMA_789\r")
 	time.Sleep(2 * time.Second)
 
-	text := testutil.ReadScrollback(t, sess.SocketPath)
+	text := g.ReadScrollback(sess.ID)
 	t.Logf("scrollback: %s", text)
 
 	for _, marker := range []string{"MARKER_ALPHA_123", "MARKER_BETA_456", "MARKER_GAMMA_789"} {
@@ -185,7 +185,7 @@ func TestScrollbackShellClearDiscardsOldContent(t *testing.T) {
 	send("echo AFTER_CLEAR_MARKER\r")
 	time.Sleep(2 * time.Second)
 
-	text := testutil.ReadScrollback(t, sess.SocketPath)
+	text := g.ReadScrollback(sess.ID)
 	t.Logf("scrollback: %s", text)
 
 	// Post-clear content must be present.
