@@ -1,0 +1,7 @@
+[USER]: Reply with exactly: GMUX_CLAUDE_RESULT4_OK
+
+[Agent worked for 1 iteration]
+
+[AGENT, partial]: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access
+
+[Agent failed: activity could not be completed]

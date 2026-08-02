@@ -10,6 +10,7 @@ package main
 // and wait share one stdout exchange report; logs reads adapter storage only.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -503,7 +504,7 @@ func cmdAgentPromptNew(adapterName, model, name string, noWait bool, timeoutSecs
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
 	}
-	return deliverPrompt(cliSession{ID: id}, agentModePrompt, noWait, timeoutSecs, prompt)
+	return deliverPrompt(cliSession{ID: id, Adapter: launchAdapter.Name()}, agentModePrompt, noWait, timeoutSecs, prompt)
 }
 
 // agentLaunchArgv translates launch options into an argv, or reports that this
@@ -648,6 +649,13 @@ func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait b
 	}
 	switch res.Outcome {
 	case waitOutcomeCompleted, waitOutcomeInterrupted, waitOutcomeError, outcomeTimeout:
+		// Claude's terminal hook and gmuxd's outcome projection travel on
+		// independent streams. If the fused prompt response won that race before
+		// carrying any exchange data, the already-settled observational wait is
+		// the authoritative read and completes immediately.
+		if sess.Adapter == "claude" && len(res.Exchanges) == 0 && res.Output == "" {
+			return waitSession(context.Background(), sess, 0, 0, "", "", false, os.Stdout)
+		}
 		text := ""
 		if len(submitted) > 0 {
 			text = submitted[0]

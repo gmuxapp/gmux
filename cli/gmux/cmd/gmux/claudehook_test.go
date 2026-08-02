@@ -73,6 +73,29 @@ func TestRunClaudeHookPosts(t *testing.T) {
 	}
 }
 
+func TestAwaitClaudeTerminalExchangeWaitsForFinalAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if f != nil {
+			_, _ = f.WriteString(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}` + "\n")
+			_ = f.Close()
+		}
+		close(done)
+	}()
+	awaitClaudeTerminalExchange(path, time.Second)
+	select {
+	case <-done:
+	default:
+		t.Fatal("returned before final transcript append")
+	}
+}
+
 func TestClaudeHookExitsZero(t *testing.T) {
 	// Redirect stdin to empty so claudeHook doesn't block; it must exit 0 and
 	// (implicitly) write nothing to stdout.

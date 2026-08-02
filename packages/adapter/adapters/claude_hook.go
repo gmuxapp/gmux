@@ -203,11 +203,13 @@ func mergeClaudeSettings(base, over any) any {
 // for the title, so it is unit-testable. Returns nil for events we don't map.
 func ClaudeHookBodies(input []byte) [][]byte {
 	var in struct {
-		HookEventName  string `json:"hook_event_name"`
-		SessionID      string `json:"session_id"`
-		TranscriptPath string `json:"transcript_path"`
-		Source         string `json:"source"`
-		SessionTitle   string `json:"session_title"`
+		HookEventName        string `json:"hook_event_name"`
+		SessionID            string `json:"session_id"`
+		TranscriptPath       string `json:"transcript_path"`
+		Source               string `json:"source"`
+		SessionTitle         string `json:"session_title"`
+		ErrorDetails         string `json:"error_details"`
+		LastAssistantMessage string `json:"last_assistant_message"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil
@@ -249,10 +251,28 @@ func ClaudeHookBodies(input []byte) [][]byte {
 		if in.HookEventName == "StopFailure" {
 			outcome = "error"
 		}
-		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
-			return [][]byte{b, turn("end", outcome)} // refresh title/slug, then end the turn
+		end := turn("end", outcome)
+		var terminal map[string]any
+		if json.Unmarshal(end, &terminal) == nil {
+			output, truncated := capClaudeTerminal(in.LastAssistantMessage)
+			if output == "" {
+				output, truncated = claudeLatestTerminal(in.TranscriptPath)
+			}
+			if output != "" {
+				terminal["output"] = output
+				if truncated {
+					terminal["truncated"] = true
+				}
+			}
+			if in.ErrorDetails != "" {
+				terminal["diagnostic"] = in.ErrorDetails
+			}
+			end, _ = json.Marshal(terminal)
 		}
-		return [][]byte{turn("end", outcome)}
+		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
+			return [][]byte{b, end} // refresh title/slug, then end the turn
+		}
+		return [][]byte{end}
 	case "SessionEnd":
 		// Only reaches durable state when the turn is still OPEN (the runner
 		// gates terminal ends on turn polarity), i.e. the session was exited
@@ -260,6 +280,30 @@ func ClaudeHookBodies(input []byte) [][]byte {
 		return [][]byte{turn("end", "interrupted")}
 	}
 	return nil
+}
+
+const maxClaudeTerminalBytes = 256 << 10
+
+func claudeLatestTerminal(ref string) (string, bool) {
+	if ref == "" {
+		return "", false
+	}
+	exchanges, err := NewClaude().RenderConversationExchanges(ref)
+	if err != nil || len(exchanges) == 0 {
+		return "", false
+	}
+	return capClaudeTerminal(exchanges[len(exchanges)-1].Terminal)
+}
+
+func capClaudeTerminal(output string) (string, bool) {
+	if len(output) <= maxClaudeTerminalBytes {
+		return output, false
+	}
+	cut := maxClaudeTerminalBytes
+	for cut > 0 && (output[cut]&0xc0) == 0x80 {
+		cut--
+	}
+	return output[:cut], true
 }
 
 // claudeSessionBody builds the authoritative "session" bind body: the held

@@ -40,13 +40,18 @@ func runClaudeHook(in io.Reader, sock string) {
 	if sock == "" {
 		return
 	}
+	var event struct {
+		Name           string `json:"hook_event_name"`
+		TranscriptPath string `json:"transcript_path"`
+	}
+	_ = json.Unmarshal(input, &event)
+	if event.Name == "Stop" || event.Name == "StopFailure" {
+		awaitClaudeTerminalExchange(event.TranscriptPath, 500*time.Millisecond)
+	}
 	for _, body := range adapters.ClaudeHookBodies(input) {
 		postClaudeHookEvent(sock, body)
 	}
-	var event struct {
-		Name string `json:"hook_event_name"`
-	}
-	if json.Unmarshal(input, &event) == nil && event.Name == "SessionStart" {
+	if event.Name == "SessionStart" {
 		scheduleClaudeReady(sock)
 	}
 }
@@ -86,6 +91,30 @@ func runClaudeReady(sock string, delay time.Duration) {
 // postClaudeHookEvent POSTs one event body to the runner's /hook/event over the
 // Unix socket. Best-effort with a short timeout; transport errors are swallowed
 // so the hook never surfaces a failure into Claude.
+// Claude can invoke its terminal hook just before the final transcript append
+// becomes visible. Give that append a short bounded window before publishing
+// the turn end, so an observational wait can render the exchange it resolved.
+func awaitClaudeTerminalExchange(ref string, timeout time.Duration) {
+	if ref == "" {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		exchanges, err := adapters.NewClaude().RenderConversationExchanges(ref)
+		if err == nil && len(exchanges) > 0 && exchanges[len(exchanges)-1].Iterations > 0 {
+			// The runner bind and conversation watcher reach gmuxd on separate
+			// streams. Let the already-visible append propagate before the turn
+			// end releases observational waiters.
+			time.Sleep(200 * time.Millisecond)
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func postClaudeHookEvent(sock string, body []byte) {
 	client := &http.Client{
 		Timeout: 2 * time.Second,

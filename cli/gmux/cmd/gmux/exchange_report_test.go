@@ -190,6 +190,27 @@ func TestAgentLogsRequiresExchangeScopeMarker(t *testing.T) {
 	}
 }
 
+func TestClaudePromptFallsBackToSettledObservationalWait(t *testing.T) {
+	d := startStubDaemon(t, localSession())
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/wait") {
+			t.Fatalf("fallback path = %s", r.URL.Path)
+		}
+		writeEnvelope(w, http.StatusOK, map[string]any{
+			"reason": "idle", "outcome": "error", "output": "provider failed",
+			"exchanges": []map[string]any{{"ordinal": 1, "user": "go", "iterations": 1}},
+		})
+	})
+	body := []byte(`{"data":{"outcome":"error","exchanges":[]}}`)
+	var code int
+	stdout := captureStdout(t, func() {
+		code = reportAgentPromptSuccess(cliSession{ID: "s1", Adapter: "claude"}, http.StatusOK, body, false, "go")
+	})
+	if code != waitExitError || !strings.Contains(stdout, "[USER]: go") || !strings.Contains(stdout, "[AGENT, partial]: provider failed") {
+		t.Fatalf("exit=%d report=%q", code, stdout)
+	}
+}
+
 func TestWaitExitTaxonomyAndSignalFormatting(t *testing.T) {
 	if waitExitOK != 0 || waitExitError != 1 || waitExitInterrupted != 2 {
 		t.Fatalf("exit taxonomy=%d/%d/%d", waitExitOK, waitExitError, waitExitInterrupted)

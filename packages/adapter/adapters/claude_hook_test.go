@@ -108,10 +108,19 @@ func TestClaudeHookBodies_PromptSubmitRefreshesRenamedTitle(t *testing.T) {
 
 func TestClaudeHookBodies_StopRefreshesThenEnds(t *testing.T) {
 	tr := writeClaudeTranscript(t)
-	in, _ := json.Marshal(map[string]string{"hook_event_name": "Stop", "transcript_path": tr})
+	f, err := os.OpenFile(tr, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"secret"},{"type":"text","text":"visible final"}]}}` + "\n")
+	_ = f.Close()
+	in, _ := json.Marshal(map[string]string{"hook_event_name": "Stop", "transcript_path": tr, "last_assistant_message": "hook-authoritative final"})
 	got := decodeBodies(t, ClaudeHookBodies(in))
 	if len(got) != 2 || got[0]["op"] != "session" || got[1]["op"] != "turn" || got[1]["outcome"] != "completed" {
 		t.Fatalf("Stop → [session, turn end completed], got %v", got)
+	}
+	if got[1]["output"] != "hook-authoritative final" {
+		t.Fatalf("terminal output missing or leaked thinking: %v", got[1])
 	}
 }
 
