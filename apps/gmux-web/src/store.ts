@@ -13,10 +13,10 @@
  * Call `initStore()` once from the app root to start SSE, fetch data, etc.
  */
 
-import { signal, computed, batch, effect } from '@preact/signals'
+import { signal, computed, batch, effect, untracked } from '@preact/signals'
 import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
 import type { View } from './routing'
-import { resolveViewFromPath, viewToPath, withTabParams } from './routing'
+import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
@@ -454,6 +454,20 @@ export const urlSearch = signal(
   typeof location !== 'undefined' ? location.search : '',
 )
 
+/** Current URL fragment (including the leading '#'). Kept separate from
+ * `urlSearch`: fragments are not query data, but same-view rewrites such as
+ * filter/sidebar edits and slug canonicalization must preserve them. */
+export const urlHash = signal(
+  typeof location !== 'undefined' ? location.hash : '',
+)
+
+/** Read the live fragment at a rewrite seam. `urlHash` drives reactive
+ * effects and supplies DOM-less tests; the browser value also covers a
+ * synchronous hash-only change before its `hashchange` event is delivered. */
+function currentHash(fallback?: string): string {
+  return typeof location !== 'undefined' ? location.hash : (fallback ?? urlHash.value)
+}
+
 /**
  * Activity tracking: which sessions recently produced output.
  *
@@ -533,22 +547,22 @@ export const filteredSessions = computed(() => {
 })
 
 /** Rewrite the tab's `?filter=` param (null/empty clears it). Replaces
- *  the history entry: narrowing tweaks shouldn't pollute Back. */
+ *  the history entry: narrowing tweaks shouldn't pollute Back. Targets
+ *  the full current URL so non-tab params (?settings, ?mock) survive a
+ *  filter edit. */
 export function setFilterSelectors(selectors: readonly Selector[]) {
-  const params = new URLSearchParams(urlSearch.value)
-  const value = formatFilterParam(selectors)
-  if (value) params.set('filter', value)
-  else params.delete('filter')
-  const qs = params.toString()
-  navigate(qs ? `${urlPath.value}?${qs}` : urlPath.value, true)
+  navigate(urlPath.value + urlSearch.value + currentHash(), true, {
+    filter: formatFilterParam(selectors) || null,
+  })
 }
 
 /** Href that carries the tab-identity params (?filter=, ?sidebar=).
  *  Every in-app link should go through this so navigating within a
- *  pinned tab keeps the pin. Reads the urlSearch signal, so links
- *  re-render when the tab's params change. */
+ *  pinned tab keeps the pin. Same carry contract as `navigate()`
+ *  (anchors bypass it: preact-iso routes the literal href), and reads
+ *  the same signals, so links re-render when the tab's params change. */
 export function tabHref(path: string): string {
-  return withTabParams(path, urlSearch.value)
+  return withCarriedParams(path)
 }
 
 export function removeSelector(sel: Selector) {
@@ -656,21 +670,29 @@ export const sidebarActivity = computed(() =>
 // Persistence is the URL (`?sidebar=activity`; absent = projects), so a
 // pinned tab keeps its view across reloads and other tabs can't
 // reconfigure it out from under the user.
+//
+// The URL is a *mirror*, not the source of truth: this signal is. It's
+// seeded from `?sidebar` once at boot (deep links work), and thereafter
+// the URL follows the signal — `navigate()` stamps the current mode
+// into every target URL, and a repair effect in `initStore` rewrites
+// (replaceState) any URL that disagrees, e.g. a history entry that
+// snapshotted an older mode. Back/Forward therefore never flips the
+// sidebar view; only the explicit toggle does.
 
 export type SidebarMode = 'projects' | 'activity'
 
-export const sidebarMode = computed<SidebarMode>(() =>
-  new URLSearchParams(urlSearch.value).get('sidebar') === 'activity'
+export const sidebarMode = signal<SidebarMode>(
+  typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('sidebar') === 'activity'
     ? 'activity'
     : 'projects',
 )
 
 export function setSidebarMode(m: SidebarMode) {
-  const params = new URLSearchParams(urlSearch.value)
-  if (m === 'activity') params.set('sidebar', 'activity')
-  else params.delete('sidebar')
-  const qs = params.toString()
-  navigate(qs ? `${urlPath.value}?${qs}` : urlPath.value, true)
+  sidebarMode.value = m
+  // Mirror into the URL immediately (replace: a view toggle is not a
+  // navigation). Preserve any non-tab params (e.g. ?settings).
+  navigate(urlPath.value + urlSearch.value + currentHash(), true)
 }
 
 // ── Alive-only toggle ────────────────────────────────────────────────────
@@ -1066,7 +1088,7 @@ function commitWithSlugRewrite(
   // Sync the browser URL bar. navigate(replace) uses history.replaceState
   // via preact-iso, so back/forward history isn't polluted. urlPath was
   // already set above inside the batch for atomicity with the session data.
-  navigate(newUrl, true)
+  navigate(newUrl + currentHash(), true)
   return true
 }
 
@@ -1480,15 +1502,59 @@ export function setNavigate(fn: (url: string, replace?: boolean) => void) {
   _navigate = fn
 }
 
-export function navigate(url: string, replace?: boolean) {
+/** Stamp the tab-identity params onto a target URL. The contract for
+ *  all programmatic navigation (`navigate`):
+ *
+ *   - `?filter=` is carried from the current URL by default; callers
+ *     change it only via `opts.filter` (string = set, null = clear) —
+ *     never by hand-building a query string.
+ *   - `?sidebar=` always mirrors the `sidebarMode` signal (the source
+ *     of truth), so no navigation can capture a stale mode.
+ *   - Recognized mock boot context (`?mock`, `?host`) is also carried,
+ *     so an SPA route remains reloadable in the same mock environment.
+ *   - Any other params already on the target URL pass through.
+ *
+ *  This is why canonicalization rewrites (rename, slug collision,
+ *  resume) can navigate with a bare path and still keep the tab's
+ *  narrowing — carrying is the default, not a per-call-site chore. */
+function withCarriedParams(url: string, opts?: { filter?: string | null }): string {
+  // Detach a hash fragment first: URLSearchParams would otherwise
+  // swallow it into the last param's value.
+  const hi = url.indexOf('#')
+  const hash = hi >= 0 ? url.slice(hi) : ''
+  const base = hi >= 0 ? url.slice(0, hi) : url
+  const qi = base.indexOf('?')
+  const path = qi >= 0 ? base.slice(0, qi) : base
+  const params = new URLSearchParams(qi >= 0 ? base.slice(qi) : '')
+  const current = new URLSearchParams(urlSearch.value)
+  const filter = opts?.filter !== undefined
+    ? opts.filter
+    : current.get('filter')
+  if (filter) params.set('filter', filter)
+  else params.delete('filter')
+  if (sidebarMode.value === 'activity') params.set('sidebar', 'activity')
+  else params.delete('sidebar')
+  // Mock mode is selected only at document boot. Keep its recognized context
+  // on route changes so a later reload does not silently leave mock mode.
+  for (const key of ['mock', 'host']) {
+    if (!params.has(key)) {
+      for (const value of current.getAll(key)) params.append(key, value)
+    }
+  }
+  const qs = params.toString()
+  return (qs ? `${path}?${qs}` : path) + hash
+}
+
+export function navigate(url: string, replace?: boolean, opts?: { filter?: string | null }) {
+  const full = withCarriedParams(url, opts)
   // When the bundle has drifted from the daemon, the version watcher
   // converts the next in-app navigation into a full document load.
   // The user perceives it as a normal route transition that happens
   // to also pick up the new bundle. (The store ↔ version-watch
   // module cycle is safe: neither side touches the other at top
   // level.)
-  if (navigateWithReload(url, replace)) return
-  _navigate?.(url, replace)
+  if (navigateWithReload(full, replace)) return
+  _navigate?.(full, replace)
 }
 
 /**
@@ -1505,9 +1571,9 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
     sessions.value,
   )
   if (!path) return false
-  // Carry the tab-identity params (?filter=, ?sidebar=) so programmatic
-  // navigation doesn't un-pin a narrowed tab.
-  navigate(withTabParams(path, urlSearch.value), replace)
+  // navigate() carries the tab-identity params (?filter=, ?sidebar=),
+  // so programmatic navigation doesn't un-pin a narrowed tab.
+  navigate(path, replace)
   return true
 }
 
@@ -1517,6 +1583,33 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
  */
 export function initStore(): () => void {
   const cleanups: (() => void)[] = []
+
+  // Sidebar-mode repair: the URL mirrors the `sidebarMode` signal, but
+  // history entries snapshot the query string at push time, so Back can
+  // land on an entry stamped with an older mode (or a pre-signal-era
+  // bookmark). The signal is authoritative after boot: rewrite any URL
+  // that disagrees, in place (replaceState — no history pollution, and
+  // the forward stack survives). Converges in one step: the rewritten
+  // URL matches the signal, so the effect re-runs once and does nothing.
+  const disposeSidebarRepair = effect(() => {
+    const path = urlPath.value
+    const search = urlSearch.value
+    const hash = urlHash.value
+    const params = new URLSearchParams(search)
+    const sidebarValues = params.getAll('sidebar')
+    const mode = sidebarMode.peek()
+    const canonical = mode === 'activity'
+      ? sidebarValues.length === 1 && sidebarValues[0] === 'activity'
+      : sidebarValues.length === 0
+    if (!canonical) {
+      // The setter owns signal-driven mirroring. This effect tracks URL
+      // changes only, avoiding a duplicate soft (or hard) replacement when
+      // the user toggles modes; untracked keeps navigate's signal reads from
+      // becoming dependencies during a repair run.
+      untracked(() => navigate(path + search + currentHash(hash), true))
+    }
+  })
+  cleanups.push(disposeSidebarRepair)
 
   if (USE_MOCK) {
     const localHost = new URLSearchParams(location.search).get('host')
@@ -1633,9 +1726,8 @@ export function initStore(): () => void {
     if (v === null) return
     const url = viewToPath(v, projects.value, sessions.value)
     if (url && url !== urlPath.value) {
-      // Preserve tab-identity params across normalization; the raw
-      // path replace would otherwise strip ?filter=/?sidebar=.
-      navigate(withTabParams(url, urlSearch.value), true)
+      // navigate() preserves tab-identity params across normalization.
+      navigate(url + currentHash(), true)
     }
   })
   cleanups.push(disposeUrlNorm)

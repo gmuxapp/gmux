@@ -373,7 +373,7 @@ function FolderGroup({
 
 /** Compact popover behind the header's arrange icon. Three concerns,
  *  three lifetimes:
- *    View  — Projects/Activity, persisted in the URL (?sidebar=).
+ *    View  — Projects/Activity signal, mirrored to the URL (?sidebar=).
  *    Host  — narrows the tab to one host (`*@host` in ?filter=).
  *    Alive only — hides resumable corpses; sessionStorage (per tab).
  *  One entry point, instant switching — the list is the preview. */

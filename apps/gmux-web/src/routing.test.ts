@@ -7,22 +7,9 @@ import {
   resolveViewFromPath,
   viewToPath,
   viewsEqual,
-  withTabParams,
   hasSessionSlugCollision,
 } from './routing'
 import { makeSession } from './test-helpers'
-
-describe('withTabParams', () => {
-  it('carries filter and sidebar params onto a path', () => {
-    expect(withTabParams('/gmux/shell/x', '?filter=gmux%40server&sidebar=activity'))
-      .toBe('/gmux/shell/x?filter=gmux%40server&sidebar=activity')
-  })
-
-  it('drops transient params (settings) and returns the bare path when none apply', () => {
-    expect(withTabParams('/gmux', '?settings=hosts')).toBe('/gmux')
-    expect(withTabParams('/gmux', '')).toBe('/gmux')
-  })
-})
 
 describe('parseSessionPath', () => {
   it('parses full local path', () => {

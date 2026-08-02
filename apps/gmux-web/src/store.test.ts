@@ -5,8 +5,8 @@ import {
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
-  isSessionUnavailable, urlPath, urlSearch, filteredSessions, sidebarSessions, selectedId, folders,
-  navigateToSession, setNavigate,
+  isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, folders,
+  navigateToSession, setNavigate, navigate, tabHref, initStore,
   applyPending, _rawSessions, _setRawWorld, _pendingMutations,
   applySessionsSnapshot,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
@@ -50,6 +50,8 @@ beforeEach(() => {
   worldLoaded.value = false
   urlPath.value = '/'
   urlSearch.value = ''
+  urlHash.value = ''
+  sidebarMode.value = 'projects'
 })
 
 describe('postAction surfaces backend failures as error toasts', () => {
@@ -515,8 +517,11 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     expect(navCalls).toContainEqual(['/myproject/pi/refactor-login', true])
   })
 
-  it('atomically switches the selected row to its full ID when a duplicate slug arrives', () => {
+  it('atomically switches the selected row to its full ID and carries route state when a duplicate slug arrives', () => {
     expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
+    urlSearch.value = '?filter=myproject'
+    urlHash.value = '#terminal'
+    sidebarMode.value = 'activity'
 
     applySessionsSnapshot([
       makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: true }),
@@ -525,7 +530,24 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
 
     expect(urlPath.value).toBe('/myproject/pi/~1vshk4fu')
     expect(view.value).toEqual({ kind: 'session', sessionId: '1vshk4fu' })
-    expect(navCalls).toContainEqual(['/myproject/pi/~1vshk4fu', true])
+    expect(navCalls).toContainEqual([
+      '/myproject/pi/~1vshk4fu?filter=myproject&sidebar=activity#terminal', true,
+    ])
+  })
+
+  it('preserves the tab filter across a slug-rewrite navigation', () => {
+    // Regression: the canonicalization rewrite used to navigate with the
+    // bare path, stripping ?filter= (and ?sidebar=) from a pinned tab.
+    urlSearch.value = '?filter=myproject'
+    sidebarMode.value = 'activity'
+
+    applySessionsSnapshot([
+      makeSession({ id: '1vshk4fu', cwd: '/dev/project', adapter: 'pi', slug: 'refactor-login' }),
+    ])
+
+    expect(navCalls).toContainEqual(
+      ['/myproject/pi/refactor-login?filter=myproject&sidebar=activity', true],
+    )
   })
 
   it('leaves the URL untouched when the selected slug is unchanged', () => {
@@ -800,14 +822,17 @@ describe('navigateToSession', () => {
     expect(navigateMock).not.toHaveBeenCalled()
   })
 
-  it('returns true and dispatches the project-prefixed URL once both are loaded', () => {
+  it('returns true and dispatches the exact-ID URL with applicable route context once loaded', () => {
     _setRawWorld({ projects: [{ slug: 'myproject', match: [{ path: '/dev/p' }] }] })
     _rawSessions.value = [makeSession({ id: '1vshk4fu', cwd: '/dev/p', adapter: 'shell' })]
+    urlSearch.value = '?filter=myproject&mock=&host=server'
+    sidebarMode.value = 'activity'
     expect(navigateToSession('1vshk4fu', true)).toBe(true)
     expect(navigateMock).toHaveBeenCalledTimes(1)
-    const [url, replace] = navigateMock.mock.calls[0]
-    expect(url).toMatch(/^\/myproject\/shell\//)
-    expect(replace).toBe(true)
+    expect(navigateMock).toHaveBeenCalledWith(
+      '/myproject/shell/~1vshk4fu?filter=myproject&sidebar=activity&mock=&host=server',
+      true,
+    )
   })
 
   it('routes peer-owned sessions through /@<peer>/<slug>/...', () => {
@@ -1087,30 +1112,72 @@ describe('tab-identity params (?filter=, ?sidebar=)', () => {
     setNavigate(() => {/* no-op */})
   })
 
-  it('sidebarMode parses ?sidebar=activity and defaults to projects', () => {
-    expect(sidebarMode.value).toBe('projects')
-    urlSearch.value = '?sidebar=activity'
-    expect(sidebarMode.value).toBe('activity')
-    // Unknown values fall back to the default rather than erroring.
-    urlSearch.value = '?sidebar=garbage'
-    expect(sidebarMode.value).toBe('projects')
-  })
-
-  it('setSidebarMode omits the param at the default and preserves ?filter=', () => {
+  it('setSidebarMode mirrors the signal into the URL, omitting the default', () => {
     // The default state leaves a clean URL: no ?sidebar=projects.
     urlSearch.value = '?filter=gmux&sidebar=activity'
+    sidebarMode.value = 'activity'
     setSidebarMode('projects')
+    expect(sidebarMode.value).toBe('projects')
     expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux', true)
 
     urlSearch.value = '?filter=gmux'
     setSidebarMode('activity')
+    expect(sidebarMode.value).toBe('activity')
     expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux&sidebar=activity', true)
+  })
+
+  it('setSidebarMode preserves non-tab params (?settings)', () => {
+    urlSearch.value = '?settings=hosts'
+    setSidebarMode('activity')
+    expect(navigateMock).toHaveBeenLastCalledWith('/?settings=hosts&sidebar=activity', true)
+  })
+
+  it('navigate stamps the sidebar mode from the signal, not the URL', () => {
+    // A stale URL param (e.g. an old history entry) never wins: the
+    // signal is the source of truth for every navigation.
+    urlSearch.value = '?sidebar=activity'
+    sidebarMode.value = 'projects'
+    navigate('/gmux/pi/x', true)
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x', true)
+
+    urlSearch.value = ''
+    sidebarMode.value = 'activity'
+    navigate('/gmux/pi/x')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?sidebar=activity', undefined)
+  })
+
+  it('navigate carries ?filter= from the current URL by default', () => {
+    urlSearch.value = '?filter=gmux%40server'
+    navigate('/gmux/pi/x')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?filter=gmux%40server', undefined)
   })
 
   it('setFilterSelectors clears the param when the list empties', () => {
     urlSearch.value = '?filter=gmux&sidebar=activity'
+    sidebarMode.value = 'activity'
     setFilterSelectors([])
     expect(navigateMock).toHaveBeenLastCalledWith('/?sidebar=activity', true)
+  })
+
+  it('tabHref uses the same carry contract as navigate', () => {
+    urlSearch.value = '?filter=gmux&settings=hosts'
+    sidebarMode.value = 'activity'
+    // Filter and sidebar identify the tab; transient settings state drops.
+    expect(tabHref('/gmux/pi/x')).toBe('/gmux/pi/x?filter=gmux&sidebar=activity')
+    sidebarMode.value = 'projects'
+    urlSearch.value = ''
+    expect(tabHref('/gmux/pi/x')).toBe('/gmux/pi/x')
+  })
+
+  it('carries mock boot context so an SPA destination remains reloadable', () => {
+    urlSearch.value = '?mock=&host=server&filter=gmux&settings=hosts'
+    expect(tabHref('/gmux/pi/~1vshk4fu')).toBe(
+      '/gmux/pi/~1vshk4fu?filter=gmux&mock=&host=server',
+    )
+    // Explicit target values win over the current mock context.
+    expect(tabHref('/gmux/pi/~1vshk4fu?mock=target&host=laptop')).toBe(
+      '/gmux/pi/~1vshk4fu?mock=target&host=laptop&filter=gmux',
+    )
   })
 
   it('setHostFilter replaces host-wide selectors but keeps project selectors', () => {
@@ -1123,6 +1190,39 @@ describe('tab-identity params (?filter=, ?sidebar=)', () => {
     expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux', true)
   })
 
+  it('setFilterSelectors preserves non-tab params (?settings, ?mock)', () => {
+    // Regression: targeting the bare path dropped every non-tab param,
+    // so a filter edit silently closed the settings modal / left mock mode.
+    urlSearch.value = '?mock=&settings=hosts&filter=old'
+    setFilterSelectors([{ project: 'gmux', host: '*' }])
+    expect(navigateMock).toHaveBeenLastCalledWith('/?mock=&settings=hosts&filter=gmux', true)
+  })
+
+  it('keeps hash fragments out of query data and preserves them on same-view edits', () => {
+    urlSearch.value = '?filter=gmux'
+    navigate('/gmux/pi/x?settings=hosts#terminal', true)
+    expect(navigateMock).toHaveBeenLastCalledWith(
+      '/gmux/pi/x?settings=hosts&filter=gmux#terminal', true,
+    )
+
+    urlPath.value = '/gmux/pi/x'
+    urlHash.value = '#stale'
+    // Hash-only navigation can update the browser before `hashchange` runs;
+    // rewrite seams must prefer the live fragment over the signal snapshot.
+    vi.stubGlobal('location', { hash: '#terminal' })
+    try {
+      setFilterSelectors([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x#terminal', true)
+    // Apply the router's resulting location signals before the next edit.
+    urlSearch.value = ''
+    urlHash.value = '#terminal'
+    setSidebarMode('activity')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?sidebar=activity#terminal', true)
+  })
+
   it('homePartition participates in the tab scope', () => {
     _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
     _rawSessions.value = [
@@ -1131,6 +1231,90 @@ describe('tab-identity params (?filter=, ?sidebar=)', () => {
     ]
     urlSearch.value = '?filter=proj'
     expect(homePartition.value.flatMap(b => b.sessions.map(s => s.id))).toEqual(['in'])
+  })
+})
+
+describe('sidebar-mode deep-link seed', () => {
+  it('seeds activity from the initial document URL before repair starts', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '?sidebar=activity', hash: '' })
+    vi.resetModules()
+    try {
+      const freshStore = await import('./store')
+      expect(freshStore.sidebarMode.value).toBe('activity')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('sidebar-mode repair effect (initStore)', () => {
+  // The commit's core invariant: after boot the sidebarMode signal is
+  // authoritative and the URL is a mirror. A history entry stamped with
+  // a stale ?sidebar (Back/Forward, old bookmark) must be rewritten in
+  // place — never adopted into the signal. Mutation-proof: inverting
+  // the repair direction (sidebarMode.value = urlMode) fails this test.
+  let navigateMock: ReturnType<typeof vi.fn>
+  let cleanup: (() => void) | null = null
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }))
+    class FakeEventSource {
+      addEventListener() { /* no-op */ }
+      close() { /* no-op */ }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    navigateMock = vi.fn()
+    setNavigate(navigateMock)
+  })
+  afterEach(() => {
+    cleanup?.()
+    cleanup = null
+    setNavigate(() => {/* no-op */})
+    vi.unstubAllGlobals()
+  })
+
+  it('rewrites a stale ?sidebar entry in place; the signal never adopts from the URL', () => {
+    cleanup = initStore()
+    // Simulate Back onto an entry stamped with the old mode while the
+    // tab is in projects mode. Non-tab params must survive the repair.
+    urlPath.value = '/gmux/pi/x'
+    urlSearch.value = '?sidebar=activity&settings=hosts'
+
+    expect(sidebarMode.value).toBe('projects')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?settings=hosts', true)
+
+    // Convergence: once the router applies the repaired URL, the effect
+    // re-runs and does nothing further.
+    navigateMock.mockClear()
+    urlSearch.value = '?settings=hosts'
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
+  it('repairs in the other direction too (activity signal, bare URL)', () => {
+    cleanup = initStore()
+    sidebarMode.value = 'activity'
+    navigateMock.mockClear()
+    urlPath.value = '/gmux/pi/x'
+    urlSearch.value = '?filter=gmux'
+    expect(sidebarMode.value).toBe('activity')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?filter=gmux&sidebar=activity', true)
+  })
+
+  it('dispatches exactly one replacement for an explicit mode toggle', () => {
+    cleanup = initStore()
+    navigateMock.mockClear()
+    setSidebarMode('activity')
+    expect(navigateMock).toHaveBeenCalledTimes(1)
+    expect(navigateMock).toHaveBeenCalledWith('/?sidebar=activity', true)
+  })
+
+  it('canonicalizes malformed and repeated sidebar params in place', () => {
+    cleanup = initStore()
+    navigateMock.mockClear()
+    urlPath.value = '/gmux/pi/x'
+    urlSearch.value = '?sidebar=bogus&sidebar=activity&settings=hosts'
+    expect(sidebarMode.value).toBe('projects')
+    expect(navigateMock).toHaveBeenLastCalledWith('/gmux/pi/x?settings=hosts', true)
   })
 })
 
