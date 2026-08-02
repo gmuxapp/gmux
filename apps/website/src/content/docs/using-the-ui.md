@@ -69,7 +69,7 @@ Each project has host-local **match rules** that determine which sessions belong
 You can manage projects at any time in **Settings → Projects** (gear button in the sidebar header, or the `?settings` URL parameter):
 
 - **Your projects**: configured projects with their match rules. Drag to reorder, click **×** to remove.
-- **Discovered**: local directories gmux noticed from active sessions that don't match any project. Type to filter, click **Add**, or enter a local path manually.
+- **Discovered**: directories gmux noticed from active sessions that don't match any project — including directories advertised by connected network hosts for their own unmatched sessions. Type to filter, click **Add**, or enter a local path manually.
 - **From other hosts**: projects advertised by connected network hosts. Add a reference here before that project's sessions appear in this dashboard.
 
 ## Sessions

@@ -50,7 +50,7 @@ already inside a gmux session:
 | stdin | stdout | Inside `GMUX=1`? | Behavior |
 | ----- | ------ | ---------------- | -------- |
 | TTY | TTY | no | Attach interactively: forward terminal input, Ctrl-C, and resize; print no session ID. |
-| TTY | TTY | yes | Auto-detach to avoid nested PTYs; print the session ID on stdout. |
+| TTY | TTY | yes | Auto-detach to avoid nested PTYs; print a confirmation message on stderr (no session ID — use `gmux -d` to capture one). |
 | any other combination | any other combination | either | Headless foreground: block, stream merged PTY output to stdout, print the session ID on stderr, and propagate the child exit code. Launcher stdin is not forwarded; use `gmux send` for input. |
 
 The headless row is the canonical shape for scripts and agent harnesses:
