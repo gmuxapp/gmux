@@ -32,6 +32,31 @@ func (baseOnlyAdapter) Discover() bool                  { return true }
 func (baseOnlyAdapter) Match([]string) bool             { return false }
 func (baseOnlyAdapter) Env(adapter.EnvContext) []string { return nil }
 
+type conversationSourceAdapter struct{ baseOnlyAdapter }
+
+func (conversationSourceAdapter) SnapshotConversations(adapter.ConversationSink) {}
+func (conversationSourceAdapter) WatchConversations(ctx context.Context, _ adapter.ConversationSink) error {
+	return ctx.Err()
+}
+
+func TestSemanticAgentAdapterUsesConversationSource(t *testing.T) {
+	if semanticAgentAdapter(baseOnlyAdapter{name: "shell"}) {
+		t.Fatal("base/shell adapter classified as semantic agent")
+	}
+	if !semanticAgentAdapter(conversationSourceAdapter{baseOnlyAdapter{name: "codex"}}) {
+		t.Fatal("conversation source not classified as semantic agent")
+	}
+	for _, name := range []string{"pi", "claude", "codex"} {
+		a := adapters.FindByAdapter(name)
+		if a == nil || !semanticAgentAdapter(a) {
+			t.Errorf("built-in %s must be a semantic agent via ConversationSource", name)
+		}
+	}
+	if semanticAgentAdapter(adapters.DefaultFallback()) {
+		t.Fatal("built-in shell must remain non-semantic")
+	}
+}
+
 func withAdapters(t *testing.T, values ...adapter.Adapter) {
 	t.Helper()
 	old := adapters.All

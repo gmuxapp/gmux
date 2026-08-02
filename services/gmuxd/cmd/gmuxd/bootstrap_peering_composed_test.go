@@ -65,6 +65,53 @@ func eventually(t *testing.T, f func() bool) {
 	t.Fatal("condition did not become true")
 }
 
+func TestComposedPeerFamilyFactsReachViewerWire(t *testing.T) {
+	spoke := newComposedSpoke(t, []peering.SessionProjection{
+		{ID: "root", Adapter: "pi", Alive: true, SemanticAgent: true},
+		{ID: "child", Adapter: "pi", Alive: true, ParentSessionID: "root", SemanticAgent: true},
+		{ID: "promoted", Adapter: "pi", Alive: true, ParentSessionID: "root", SemanticAgent: true, PromotedToRoot: true},
+		{ID: "cross", Adapter: "pi", Alive: true, ParentSessionID: "external@tower", SemanticAgent: true},
+	})
+	mgr := peering.NewProjectionManager([]config.PeerConfig{{Name: "box", URL: spoke.URL}}, "self", nil, peering.EventHooks{})
+	adapter := &centralPeerAdapter{manager: mgr}
+	mgr.Start()
+	defer mgr.Stop()
+
+	var byID map[string]struct {
+		parent             string
+		semantic, promoted bool
+	}
+	eventually(t, func() bool {
+		rows := adapter.PeerSessions()
+		if len(rows) != 4 {
+			return false
+		}
+		byID = make(map[string]struct {
+			parent             string
+			semantic, promoted bool
+		}, len(rows))
+		for _, row := range rows {
+			byID[row.ID] = struct {
+				parent             string
+				semantic, promoted bool
+			}{row.ParentSessionID, row.SemanticAgent, row.PromotedToRoot}
+		}
+		return true
+	})
+	if got := byID["root@box"]; !got.semantic || got.parent != "" {
+		t.Fatalf("root viewer wire facts = %#v", got)
+	}
+	if got := byID["child@box"]; !got.semantic || got.parent != "root@box" || got.promoted {
+		t.Fatalf("child viewer wire facts = %#v", got)
+	}
+	if got := byID["promoted@box"]; !got.semantic || got.parent != "root@box" || !got.promoted {
+		t.Fatalf("promoted viewer wire facts = %#v", got)
+	}
+	if got := byID["cross@box"]; !got.semantic || got.parent != "external@tower" {
+		t.Fatalf("cross-host parent viewer wire facts = %#v", got)
+	}
+}
+
 func TestComposedPeerActivityReachesCoordinatorOutcomeWithoutLegacySink(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

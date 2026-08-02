@@ -234,7 +234,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		return h
 	}
 
-	converter := &wire.Converter{Titlers: make(map[string]func([]string) string), ResumeCommand: func(adapterName, ref string) []string {
+	converter := &wire.Converter{Titlers: make(map[string]func([]string) string), SemanticAgents: make(map[string]bool), ResumeCommand: func(adapterName, ref string) []string {
 		legacy := &compatSession{Adapter: adapterName, ConversationRef: ref}
 		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}, IsLocalPeer: func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }}
@@ -242,10 +242,16 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if titler, ok := a.(adapter.CommandTitler); ok {
 			converter.Titlers[a.Name()] = titler.CommandTitle
 		}
+		if semanticAgentAdapter(a) {
+			converter.SemanticAgents[a.Name()] = true
+		}
 	}
 	if fallback := adapters.DefaultFallback(); fallback != nil {
 		if titler, ok := fallback.(adapter.CommandTitler); ok {
 			converter.Titlers[fallback.Name()] = titler.CommandTitle
+		}
+		if semanticAgentAdapter(fallback) {
+			converter.SemanticAgents[fallback.Name()] = true
 		}
 	}
 

@@ -562,6 +562,15 @@ func (p *Peer) applySessionsSnapshot(input any) {
 			continue
 		}
 		sess.ID = NamespaceID(sess.ID, p.Config.Name)
+		// Bare parent IDs are owned by the same origin as the child and must
+		// enter the viewer namespace with it. Already-qualified references name
+		// another host (or were explicitly qualified by the origin), so retain
+		// them rather than manufacturing parent@other@this-peer.
+		if sess.ParentSessionID != "" {
+			if _, parentPeer := ParseID(sess.ParentSessionID); parentPeer == "" {
+				sess.ParentSessionID = NamespaceID(sess.ParentSessionID, p.Config.Name)
+			}
+		}
 		sess.Peer = p.Config.Name
 		sess.SocketPath = ""
 		out = append(out, sess)

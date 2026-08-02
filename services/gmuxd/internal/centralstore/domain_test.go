@@ -865,6 +865,10 @@ func TestPromotionAndParentProjectTransitions(t *testing.T) {
 	if got := rootOrder(t, s, p1); !reflect.DeepEqual(got, []string{"l:root", "l:child", "l:parent"}) {
 		t.Fatalf("promoted roots=%v", got)
 	}
+	promoted, ok, err := s.Session(ctx, "child")
+	if err != nil || !ok || promoted.LaunchParentID == nil || *promoted.LaunchParentID != "parent" || !promoted.PromotedToRoot {
+		t.Fatalf("promotion lost provenance: child=%#v ok=%v err=%v", promoted, ok, err)
+	}
 	idx = 0
 	result, err = s.SetPromotion(ctx, "child", false, &idx)
 	if err != nil || result.SessionVersion != 3 {

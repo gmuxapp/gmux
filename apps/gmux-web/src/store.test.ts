@@ -5,7 +5,7 @@ import {
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
-  isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, folders,
+  isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, familySelectedId, folders,
   navigateToSession, setNavigate, navigate, tabHref, initStore,
   applyPending, _rawSessions, _setRawWorld, _pendingMutations,
   applySessionsSnapshot,
@@ -264,6 +264,92 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
     setAliveOnly(false)
   })
   afterEach(() => setAliveOnly(false))
+
+  it('hides agent children from both views and selects their root row', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'root', cwd: '/p', adapter: 'pi', slug: 'root', project_slug: 'proj', semantic_agent: true, alive: false, resumable: false }),
+      makeSession({ id: 'child', cwd: '/other', adapter: 'pi', slug: 'child', project_slug: 'proj', semantic_agent: true, parent_session_id: 'root' }),
+      makeSession({ id: 'helper', cwd: '/p', adapter: 'shell', slug: 'helper', project_slug: 'proj', parent_session_id: 'root' }),
+    ]
+    urlPath.value = '/proj/pi/child'
+    expect(folderIds()).toEqual(['helper', 'root'])
+    expect(ids(sidebarActivity.value)).toEqual(['helper', 'root'])
+    expect(familySelectedId.value).toBe('root')
+  })
+
+  it('projects normalized peer family facts as one viewer-visible root row', () => {
+    _setRawWorld({
+      projects: [{ slug: 'proj', peer: 'tower' }],
+      peers: [{ name: 'tower', url: '', status: 'connected', session_count: 2 }],
+    })
+    const now = new Date().toISOString()
+    _rawSessions.value = [
+      makeSession({ id: 'root@tower', peer: 'tower', cwd: '/p', adapter: 'pi', slug: 'root', project_slug: 'proj', semantic_agent: true, last_output_at: now }),
+      makeSession({ id: 'child@tower', peer: 'tower', cwd: '/p', adapter: 'pi', slug: 'child', project_slug: 'proj', semantic_agent: true, parent_session_id: 'root@tower', last_output_at: now }),
+    ]
+    expect(folderIds()).toEqual(['root@tower'])
+    expect(ids(sidebarActivity.value)).toEqual(['root@tower'])
+    expect(homePartition.value.flatMap(bucket => bucket.sessions.map(s => s.id))).toEqual(['root@tower'])
+  })
+
+  it('temporarily places an unstamped root from its relevant child folder', () => {
+    const root = makeSession({ id: 'root', cwd: '/p', adapter: 'pi', slug: 'root', semantic_agent: true, alive: false, resumable: false })
+    const child = makeSession({ id: 'child', cwd: '/p', adapter: 'pi', slug: 'child', project_slug: 'proj', semantic_agent: true, parent_session_id: 'root', alive: true })
+    _rawSessions.value = [root, child]
+
+    expect(folders.value.map(folder => [folder.slug, ...folder.sessions.map(s => s.id)])).toEqual([['proj', 'root']])
+    expect(ids(sidebarActivity.value)).toEqual(['root'])
+    expect(_rawSessions.value.find(s => s.id === 'root')?.project_slug).toBeUndefined()
+
+    _rawSessions.value = [{ ...root, project_slug: 'proj' }, child]
+    expect(folders.value.map(folder => [folder.slug, ...folder.sessions.map(s => s.id)])).toEqual([['proj', 'root']])
+    expect(ids(sidebarActivity.value)).toEqual(['root'])
+    expect(folders.value[0]?.sessions[0]?.project_slug).toBe('proj')
+  })
+
+  it('keeps a dead root visible while a live child makes its family relevant', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'root', cwd: '/p', adapter: 'pi', slug: 'root', project_slug: 'proj', semantic_agent: true, alive: false, resumable: false }),
+      makeSession({ id: 'child', cwd: '/p', adapter: 'pi', slug: 'child', project_slug: 'proj', semantic_agent: true, parent_session_id: 'root', alive: true }),
+    ]
+    expect(folderIds()).toEqual(['root'])
+    expect(ids(sidebarActivity.value)).toEqual(['root'])
+  })
+
+  it('resolves family edges against the full snapshot under a tab filter', () => {
+    _setRawWorld({ projects: [
+      { slug: 'root-project', match: [{ path: '/root' }] },
+      { slug: 'child-project', match: [{ path: '/child' }] },
+    ], peers: [] })
+    _rawSessions.value = [
+      makeSession({ id: 'root', cwd: '/root', adapter: 'pi', slug: 'root', project_slug: 'root-project', semantic_agent: true, alive: false, resumable: false }),
+      makeSession({ id: 'child', cwd: '/child', adapter: 'pi', slug: 'child', project_slug: 'child-project', semantic_agent: true, parent_session_id: 'root', alive: true }),
+    ]
+    urlSearch.value = '?filter=child-project'
+    expect(folderIds()).toEqual(['root'])
+  })
+
+  it('keeps malformed cycle members reachable in the sidebar and Home', () => {
+    const now = new Date().toISOString()
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/p', adapter: 'pi', slug: 'a', project_slug: 'proj', semantic_agent: true, parent_session_id: 'b', last_output_at: now }),
+      makeSession({ id: 'b', cwd: '/p', adapter: 'pi', slug: 'b', project_slug: 'proj', semantic_agent: true, parent_session_id: 'a', last_output_at: now }),
+    ]
+    expect(folderIds()).toEqual(['a', 'b'])
+    expect(homePartition.value.flatMap(bucket => bucket.sessions.map(s => s.id)).sort()).toEqual(['a', 'b'])
+  })
+
+  it('never hides unresolved or non-agent launch-parent edges', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'agent-parent', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true }),
+      makeSession({ id: 'shell-child', cwd: '/p', adapter: 'shell', project_slug: 'proj', parent_session_id: 'agent-parent' }),
+      makeSession({ id: 'shell-parent', cwd: '/p', adapter: 'shell', project_slug: 'proj' }),
+      makeSession({ id: 'agent-under-shell', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true, parent_session_id: 'shell-parent' }),
+      makeSession({ id: 'orphan', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true, parent_session_id: 'missing' }),
+    ]
+    expect(folderIds()).toEqual(['agent-parent', 'agent-under-shell', 'orphan', 'shell-child', 'shell-parent'])
+    expect(ids(sidebarActivity.value)).toEqual(folderIds())
+  })
 
   it('Activity lists exactly the sessions the folders do (alive, resumable, dead-selected)', () => {
     _rawSessions.value = [
@@ -1517,6 +1603,18 @@ describe('parseConnectURL', () => {
 
   it('returns null for non-URL input so the separate token field is used', () => {
     expect(parseConnectURL('gmux-host')).toBeNull()
+  })
+})
+
+describe('family wire mapping', () => {
+  it('preserves parent provenance, semantic capability, and promotion', () => {
+    const parsed = SessionSchema.parse({
+      id: 'child', alive: true, parent_session_id: 'root',
+      semantic_agent: true, promoted_to_root: true,
+    })
+    expect(toUISession(parsed)).toMatchObject({
+      parent_session_id: 'root', semantic_agent: true, promoted_to_root: true,
+    })
   })
 })
 

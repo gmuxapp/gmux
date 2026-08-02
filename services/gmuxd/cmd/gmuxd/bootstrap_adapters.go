@@ -19,6 +19,14 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
 
+// semanticAgentAdapter is the shared server-side classification used by task
+// families and notification semantics. ConversationSource is the existing
+// capability that distinguishes conversation-backed agents from shells.
+func semanticAgentAdapter(a adapter.Adapter) bool {
+	_, ok := a.(adapter.ConversationSource)
+	return ok
+}
+
 // productionEndpointSource enumerates both current and legacy runner dirs.
 type productionEndpointSource struct{}
 

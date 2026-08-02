@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"nhooyr.io/websocket"
@@ -37,12 +38,15 @@ func defaultNotifyConfig() notifyConfig {
 }
 
 type notifySessionSnapshot struct {
-	Active      bool
-	Interrupted bool
-	Unread      bool
-	Alive       bool
-	Title       string
-	Start       string
+	Active        bool
+	Interrupted   bool
+	Unread        bool
+	Alive         bool
+	Title         string
+	Start         string
+	ParentID      string
+	Promoted      bool
+	SemanticAgent bool
 }
 
 type pendingCentralNotif struct {
@@ -63,15 +67,30 @@ type centralNotifyRouter struct {
 	presence *presence.Table
 	config   notifyConfig
 
-	mu        sync.Mutex
-	prevState map[string]notifySessionSnapshot
-	pending   map[string]*pendingCentralNotif
-	active    map[string]activeCentralNotif
-	nextID    int
+	// deliveryMu linearizes a timer's complete pending→active→send transition
+	// with cancellation. Without it, cancellation can observe the gap after a
+	// timer dequeues pending attention but before it records/sends the active
+	// notification.
+	deliveryMu         sync.Mutex
+	mu                 sync.Mutex
+	prevState          map[string]notifySessionSnapshot
+	suppressedInactive map[string]bool
+	pending            map[string]*pendingCentralNotif
+	active             map[string]activeCentralNotif
+	nextID             int
+
+	// These are deterministic test seams for the cancellation interleaving.
+	// Production leaves both nil.
+	afterPendingDequeue func()
+	beforeCancelLock    func()
 }
 
 func newCentralNotifyRouter(p *presence.Table, cfg notifyConfig) *centralNotifyRouter {
-	return &centralNotifyRouter{presence: p, config: cfg, prevState: make(map[string]notifySessionSnapshot), pending: make(map[string]*pendingCentralNotif), active: make(map[string]activeCentralNotif)}
+	return &centralNotifyRouter{
+		presence: p, config: cfg,
+		prevState: make(map[string]notifySessionSnapshot), suppressedInactive: make(map[string]bool),
+		pending: make(map[string]*pendingCentralNotif), active: make(map[string]activeCentralNotif),
+	}
 }
 
 func (r *centralNotifyRouter) Run(ctx context.Context, seed []sessioncoord.Outcome, events <-chan sessioncoord.Outcome) {
@@ -104,6 +123,11 @@ func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 		snap.Unread = o.Session.Unread
 		snap.Title = o.Session.Title
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
+		snap.Promoted = o.Session.PromotedToRoot
+		snap.SemanticAgent = semanticAgentAdapter(adapters.FindByAdapter(o.Session.Adapter))
+		if o.Session.LaunchParentID != nil {
+			snap.ParentID = string(*o.Session.LaunchParentID)
+		}
 	}
 	return snap
 }
@@ -112,6 +136,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if o.Type == sessioncoord.OutcomeRemoved {
 		r.mu.Lock()
 		delete(r.prevState, string(o.ID))
+		delete(r.suppressedInactive, string(o.ID))
 		r.mu.Unlock()
 		return
 	}
@@ -123,13 +148,39 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	r.mu.Lock()
 	prev, existed := r.prevState[id]
 	r.prevState[id] = cur
+	transitionedInactive := existed && prev.Active && !cur.Active
+	// Suppression is decided at the committed child transition using only the
+	// direct parent's latest committed outcome already observed by this router.
+	// A later parent outcome never retroactively changes this decision. This is
+	// intentionally one hop: an inactive/missing direct parent ends the lookup.
+	if cur.Active {
+		// A new turn gets a fresh completion decision.
+		delete(r.suppressedInactive, id)
+	} else if transitionedInactive {
+		delete(r.suppressedInactive, id)
+		if cur.SemanticAgent && !cur.Promoted && cur.ParentID != "" {
+			parent, parentExists := r.prevState[cur.ParentID]
+			r.suppressedInactive[id] = parentExists && parent.SemanticAgent && parent.Active
+		}
+	}
+	// Runner facts can arrive in separate committed outcomes (for example the
+	// inactive edge before the final unread bit). Once this completion was
+	// suppressed, keep all later attention for that inactive turn suppressed;
+	// parent inactivity or fact ordering must not resurrect it.
+	suppress := !cur.Active && r.suppressedInactive[id]
 	r.mu.Unlock()
 	if !existed {
 		return
 	}
+	if suppress {
+		// Remove attention already pending for this child as well as the
+		// completion/unread attention carried by this outcome.
+		r.CancelForSession(id)
+		return
+	}
 	// An intentional stop is not a completion (ADR 0027): no "finished"
 	// notification for a turn the user themselves ended.
-	if prev.Active && !cur.Active && cur.Alive && !cur.Interrupted {
+	if transitionedInactive && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start))
 	}
 	if !prev.Unread && cur.Unread {
@@ -186,6 +237,8 @@ func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, 
 }
 
 func (r *centralNotifyRouter) firePending(sessionID string) {
+	r.deliveryMu.Lock()
+	defer r.deliveryMu.Unlock()
 	r.mu.Lock()
 	p, ok := r.pending[sessionID]
 	if !ok {
@@ -206,6 +259,9 @@ func (r *centralNotifyRouter) firePending(sessionID string) {
 		return
 	}
 	r.mu.Unlock()
+	if r.afterPendingDequeue != nil {
+		r.afterPendingDequeue()
+	}
 	if r.presence.AnyFocused() || r.presence.AnyViewing(sessionID) {
 		return
 	}
@@ -239,6 +295,8 @@ func (r *centralNotifyRouter) fireCoalesced(count int) {
 }
 
 func (r *centralNotifyRouter) CancelAllPending() {
+	r.deliveryMu.Lock()
+	defer r.deliveryMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for sid, p := range r.pending {
@@ -248,6 +306,11 @@ func (r *centralNotifyRouter) CancelAllPending() {
 }
 
 func (r *centralNotifyRouter) CancelForSession(sessionID string) {
+	if r.beforeCancelLock != nil {
+		r.beforeCancelLock()
+	}
+	r.deliveryMu.Lock()
+	defer r.deliveryMu.Unlock()
 	r.mu.Lock()
 	if p, ok := r.pending[sessionID]; ok {
 		p.timer.Stop()

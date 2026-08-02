@@ -328,6 +328,11 @@ export function countUnmatchedActive(
  * renders on the session row so the user knows it's a container
  * session.
  */
+export interface TemporaryPresentationPlacement {
+  ownerPeer: string
+  slug: string
+}
+
 export function buildProjectFolders(
   projects: ProjectItem[],
   sessions: Session[],
@@ -337,6 +342,13 @@ export function buildProjectFolders(
   // `peer` is a frozen viewer-owned label, so references bucket/label by
   // it directly; this only sets the unresolved flag. Omitted ⇒ present.
   isPresent?: (peer: string, nodeId?: string) => boolean,
+  // Presentation roots that must remain locatable (for example when a live
+  // child is selected but its root itself is inactive).
+  forceVisible?: ReadonlySet<string>,
+  // Ephemeral placement for an unstamped presentation root whose relevant
+  // child already resolves to a folder. This affects only this projection;
+  // the root's authoritative project/peer facts remain untouched.
+  temporaryPlacements?: ReadonlyMap<string, TemporaryPresentationPlacement>,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -351,7 +363,11 @@ export function buildProjectFolders(
   }
 
   for (const s of sessions) {
-    if (!s.project_slug) continue // unstamped: surfaces via discovery only
+    if (!s.project_slug) {
+      const temporary = temporaryPlacements?.get(s.id)
+      if (temporary) bucket(temporary.ownerPeer, temporary.slug, s)
+      continue // all other unstamped sessions surface via discovery only
+    }
     const sessionPeer = s.peer ?? ''
     const ownerPeer = sessionPeer && !(isLocalPeer?.(sessionPeer))
       ? sessionPeer
@@ -368,7 +384,7 @@ export function buildProjectFolders(
     const ownerPeer = project.peer ?? ''
     const unresolved = ownerPeer !== '' && !!isPresent && !isPresent(ownerPeer, project.node_id)
     const ss = buckets.get(`${ownerPeer}::${project.slug}`) ?? []
-    const visible = ss.filter(s => s.alive || s.resumable === true)
+    const visible = ss.filter(s => s.alive || s.resumable === true || forceVisible?.has(s.id))
     visible.sort(compareFolderSessions)
     placeChildSessions(visible)
     // Owned: derive launchCwd from the project's first path rule.

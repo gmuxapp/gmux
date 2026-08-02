@@ -10,6 +10,24 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
+func TestInheritLaunchParentOnlyForFreshUnboundLaunch(t *testing.T) {
+	getenv := func(name string) string {
+		if name != "GMUX_SESSION_ID" {
+			t.Fatalf("unexpected env lookup %q", name)
+		}
+		return "parent"
+	}
+	if got := inheritLaunchParent(runDirectives{}, getenv).ParentSessionID; got != "parent" {
+		t.Fatalf("fresh nested launch parent=%q, want parent", got)
+	}
+	if got := inheritLaunchParent(runDirectives{ParentSessionID: "explicit"}, getenv).ParentSessionID; got != "explicit" {
+		t.Fatalf("explicit parent overwritten: %q", got)
+	}
+	if got := inheritLaunchParent(runDirectives{ResumeID: "existing"}, getenv).ParentSessionID; got != "" {
+		t.Fatalf("resume acquired parent %q", got)
+	}
+}
+
 func TestExplicitResumeIDNeverFallsBackToPhantomSession(t *testing.T) {
 	if mayRetrySessionID("1juyvpd8", ptyserver.ErrSocketInUse) {
 		t.Fatal("explicit resume collision would mint an unrelated session id")
