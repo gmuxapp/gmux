@@ -401,8 +401,8 @@ the `initialize` handshakes exercised live. Answers adopted here:
 Genuinely open, deferred to the runner work (and the follow-up ADRs named):
 
 - **The session-spec resolver** (decision 5): shorthand matching over usable
-  catalogs, recency tiebreak, `preferred_backends` semantics and default
-  order — a follow-up ADR.
+  catalogs, recency tiebreak, and `preferred_backends` semantics are decided
+  by ADR 0034; catalog wire shape and preference identifiers remain open there.
 - **Permission policy defaults and UI**: auto-allow/allow-safe/ask tiers,
   timeout behavior, ADR 0018 notification shape.
 - **Adapter distribution and binary policy**: bundling vs `npx`, pin cadence,
