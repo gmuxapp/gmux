@@ -46,6 +46,134 @@ func TestClaudeConversationExchanges(t *testing.T) {
 	}
 }
 
+func TestClaudeCurrentSplitResponsesGroupByMessageID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "split.jsonl")
+	// Claude Code 2.1.220 persists one record per content block. Records from
+	// one completed API response share message.id even when bookkeeping records
+	// interleave them.
+	transcript := `{"type":"user","message":{"role":"user","content":"go"}}
+{"uuid":"a1","type":"assistant","message":{"id":"msg-a","role":"assistant","content":[{"type":"thinking","thinking":"secret"}]}}
+{"type":"progress","message":{"role":"assistant","content":"ignored bookkeeping"}}
+{"uuid":"a2","type":"assistant","message":{"id":"msg-a","role":"assistant","content":[{"type":"text","text":"Checking"}]}}
+{"uuid":"a3","type":"assistant","message":{"id":"msg-a","role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}}]}}
+{"uuid":"b1","type":"assistant","message":{"id":"msg-b","role":"assistant","content":[{"type":"text","text":"Answer prose"}]}}
+{"uuid":"b2","type":"assistant","message":{"id":"msg-b","role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ex, err := NewClaude().RenderConversationExchanges(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex) != 1 || ex[0].Iterations != 2 || ex[0].Terminal != "Answer prose" {
+		t.Fatalf("split exchange = %#v", ex)
+	}
+
+	messages, err := NewClaude().RenderConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 3 || messages[1].Text != "Checking\n\n[tool] Read {\"file_path\":\"a.go\"}" ||
+		messages[2].Text != "Answer prose\n\n[tool] Bash {\"command\":\"go test ./...\"}" || messages[2].Prose != "Answer prose" {
+		t.Fatalf("split messages = %#v", messages)
+	}
+}
+
+func TestClaudeMissingMessageIDsRemainLegacyResponseBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.jsonl")
+	transcript := `{"type":"user","message":{"role":"user","content":"go"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first"},{"type":"tool_use","name":"Read","input":{}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}`
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := NewClaude().RenderConversationExchanges(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex) != 1 || ex[0].Iterations != 2 || ex[0].Terminal != "second" {
+		t.Fatalf("legacy exchange = %#v", ex)
+	}
+}
+
+func TestClaudeInjectedCommandRegistryRequiresProvenance(t *testing.T) {
+	command := "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"
+	for _, tc := range []struct {
+		name   string
+		output string
+	}{
+		{name: "command only"},
+		{name: "stdout", output: "<local-command-stdout>bookkeeping output</local-command-stdout>"},
+		{name: "stderr", output: "<local-command-stderr>bookkeeping error</local-command-stderr>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "commands.jsonl")
+			transcript := `{"uuid":"user","type":"user","message":{"role":"user","content":"real prompt"}}
+{"uuid":"assistant","parentUuid":"user","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}
+{"uuid":"caveat","parentUuid":"assistant","type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>generated caveat</local-command-caveat>"}}
+` + `{"uuid":"command","parentUuid":"caveat","type":"user","isMeta":false,"message":{"role":"user","content":` + quoteJSON(command) + `}}`
+			if tc.output != "" {
+				transcript += "\n" + `{"uuid":"output","parentUuid":"command","type":"user","isMeta":false,"message":{"role":"user","content":` + quoteJSON(tc.output) + `}}`
+			}
+			if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ex, err := NewClaude().RenderConversationExchanges(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ex) != 1 || ex[0].User != "real prompt" || ex[0].Terminal != "answer" {
+				t.Fatalf("proven injected command leaked: %#v", ex)
+			}
+			messages, err := NewClaude().RenderConversation(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 2 {
+				t.Fatalf("proven injected command leaked into conversation: %#v", messages)
+			}
+		})
+	}
+}
+
+func TestClaudeAmbiguousCommandShapesRemainUserPrompts(t *testing.T) {
+	prompts := []string{
+		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>",
+		"<local-command-stdout>user-owned example</local-command-stdout>",
+		"<local-command-stderr>user-owned example</local-command-stderr>",
+		"<local-command-caveat>user-owned example</local-command-caveat>",
+		"<bash-input>echo user-owned</bash-input>",
+		"<command-name>explain this element</command-name>",
+		"<local-command-stdout>unterminated example",
+		"prefix <local-command-stdout>example</local-command-stdout>",
+	}
+	for _, prompt := range prompts {
+		t.Run(prompt, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ambiguous.jsonl")
+			transcript := `{"uuid":"prompt","type":"user","message":{"role":"user","content":` + quoteJSON(prompt) + `}}
+{"uuid":"answer","parentUuid":"prompt","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}`
+			if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ex, err := NewClaude().RenderConversationExchanges(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ex) != 1 || ex[0].User != prompt || ex[0].Terminal != "answer" {
+				t.Fatalf("legitimate prompt erased: %#v", ex)
+			}
+			messages, err := NewClaude().RenderConversation(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 2 || messages[0].Text != prompt {
+				t.Fatalf("legitimate prompt erased from conversation: %#v", messages)
+			}
+		})
+	}
+}
+
 func TestClaudeConversationUsesActiveParentBranch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "branched.jsonl")
 	transcript := `{"uuid":"u1","parentUuid":null,"type":"user","message":{"role":"user","content":"root"}}
@@ -73,6 +201,7 @@ func TestClaudeConversationIgnoresTrailingHiddenLeaves(t *testing.T) {
 	}{
 		{"sidechain", `{"uuid":"side","parentUuid":"u1","type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"private sidechain"}]}}`},
 		{"meta", `{"uuid":"meta","parentUuid":"u1","type":"user","isMeta":true,"message":{"role":"user","content":"hidden metadata"}}`},
+		{"compact summary", `{"uuid":"compact","parentUuid":"u1","type":"user","isCompactSummary":true,"message":{"role":"user","content":"hidden compact summary"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "hidden-tail.jsonl")

@@ -129,12 +129,12 @@ func TestRenderConversationMissingFile(t *testing.T) {
 	}
 }
 
-// TestFormatPiToolCallTruncatesArgs: tool arguments (edit bodies, long
+// TestFormatToolCallTruncatesArgs: tool arguments (edit bodies, long
 // shell commands) are capped so tool lines stay one-line context, and
 // no markdown wrapping is added around the arbitrary argument bytes.
-func TestFormatPiToolCallTruncatesArgs(t *testing.T) {
+func TestFormatToolCallTruncatesArgs(t *testing.T) {
 	long := strings.Repeat("x", 500)
-	got := formatPiToolCall("edit", []byte(`{"text":"`+long+`"}`))
+	got := formatToolCall("edit", []byte(`{"text":"`+long+`"}`))
 	if !strings.HasPrefix(got, "[tool] edit {\"text\":\"xxx") {
 		t.Fatalf("prefix: got %q", got)
 	}
@@ -146,10 +146,10 @@ func TestFormatPiToolCallTruncatesArgs(t *testing.T) {
 	}
 
 	// No-arg and empty-arg calls render bare.
-	if got := formatPiToolCall("ls", nil); got != "[tool] ls" {
+	if got := formatToolCall("ls", nil); got != "[tool] ls" {
 		t.Fatalf("nil args: got %q", got)
 	}
-	if got := formatPiToolCall("ls", []byte(`{}`)); got != "[tool] ls" {
+	if got := formatToolCall("ls", []byte(`{}`)); got != "[tool] ls" {
 		t.Fatalf("empty args: got %q", got)
 	}
 }
