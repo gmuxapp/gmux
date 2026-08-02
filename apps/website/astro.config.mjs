@@ -7,12 +7,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'gmux',
-      description: 'Keep tabs on every AI agent, test runner, and long-running process across your machines.',
-      logo: {
-        light: './src/assets/logo-light.svg',
-        dark: './src/assets/logo-dark.svg',
-        replacesTitle: true,
-      },
+      description: 'The control plane for AI agents. Humans and agents start, watch, steer, and delegate coding-agent sessions from one place.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/gmuxapp/gmux' },
         { icon: 'discord', label: 'Discord', href: 'https://discord.gg/Mg6EJHFZxu' },

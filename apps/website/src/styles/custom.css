@@ -30,6 +30,15 @@
   font-family: 'Instrument Sans', sans-serif;
 }
 
+/* Site title: match the landing page wordmark */
+.site-title {
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: -0.04em;
+  color: var(--sl-color-white);
+}
+
 /* Discord-blurple LinkCard variant */
 .discord-card .sl-link-card {
   border-color: oklch(55% 0.15 270 / 0.4);
