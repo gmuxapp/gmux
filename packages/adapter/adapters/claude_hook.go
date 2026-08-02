@@ -2,6 +2,8 @@ package adapters
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +33,10 @@ func (c *Claude) HookCommand(args []string, selfBin string) ([]string, bool) {
 	if i < 0 || selfBin == "" {
 		return args, false
 	}
-	tail, userSettings := extractClaudeSettings(args[i+1:])
+	tail, userSettings, err := extractClaudeSettings(args[i+1:])
+	if err != nil {
+		return args, false
+	}
 	settingsJSON, err := buildClaudeSettings(selfBin, userSettings)
 	if err != nil {
 		return args, false
@@ -59,7 +64,7 @@ func claudeBinaryIndex(args []string) int {
 // extractClaudeSettings removes `--settings <value>` / `--settings=<value>`
 // pairs from tokens, returning the filtered tokens and the collected values.
 // Stops at a bare `--` so a positional prompt is never misread as a flag value.
-func extractClaudeSettings(tokens []string) (filtered, values []string) {
+func extractClaudeSettings(tokens []string) (filtered, values []string, err error) {
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
 		if tok == "--" {
@@ -68,17 +73,22 @@ func extractClaudeSettings(tokens []string) (filtered, values []string) {
 		}
 		switch {
 		case tok == "--settings":
-			if i+1 < len(tokens) {
-				values = append(values, tokens[i+1])
-				i++
+			if i+1 >= len(tokens) || tokens[i+1] == "--" {
+				return nil, nil, errors.New("claude --settings requires a value")
 			}
+			values = append(values, tokens[i+1])
+			i++
 		case strings.HasPrefix(tok, "--settings="):
-			values = append(values, strings.TrimPrefix(tok, "--settings="))
+			value := strings.TrimPrefix(tok, "--settings=")
+			if value == "" {
+				return nil, nil, errors.New("claude --settings requires a value")
+			}
+			values = append(values, value)
 		default:
 			filtered = append(filtered, tok)
 		}
 	}
-	return filtered, values
+	return filtered, values, nil
 }
 
 // buildClaudeSettings returns the inline JSON for `--settings`: gmux's session
@@ -86,9 +96,11 @@ func extractClaudeSettings(tokens []string) (filtered, values []string) {
 func buildClaudeSettings(selfBin string, userSettings []string) (string, error) {
 	var base any = claudeGmuxHooks(selfBin)
 	for _, us := range userSettings {
-		if obj, ok := parseClaudeSettings(us); ok {
-			base = mergeClaudeSettings(base, obj)
+		obj, err := parseClaudeSettings(us)
+		if err != nil {
+			return "", fmt.Errorf("invalid Claude settings %q: %w", us, err)
 		}
+		base = mergeClaudeSettings(base, obj)
 	}
 	out, err := json.Marshal(base)
 	if err != nil {
@@ -138,7 +150,7 @@ func claudeGmuxHooks(selfBin string) map[string]any {
 
 // parseClaudeSettings interprets a user `--settings` value as inline JSON
 // (starts with `{`) or a path to a JSON file.
-func parseClaudeSettings(value string) (map[string]any, bool) {
+func parseClaudeSettings(value string) (map[string]any, error) {
 	trimmed := strings.TrimSpace(value)
 	var data []byte
 	if strings.HasPrefix(trimmed, "{") {
@@ -146,15 +158,15 @@ func parseClaudeSettings(value string) (map[string]any, bool) {
 	} else {
 		b, err := os.ReadFile(trimmed)
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		data = b
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return nil, false
+		return nil, err
 	}
-	return obj, true
+	return obj, nil
 }
 
 // mergeClaudeSettings deep-merges over onto base. Objects merge recursively;

@@ -59,6 +59,8 @@ func TestAgentPromptGrammarMatrix(t *testing.T) {
 		{"agent", "prompt", "--timeout", "1", "--no-wait", "s", "x"},
 		{"agent", "prompt", "--model", "m", "s", "x"},
 		{"agent", "prompt", "--name", "n", "s", "x"},
+		{"agent", "prompt", "--adapter", "claude", "s", "x"},
+		{"agent", "prompt", "--new", "--adapter", "codex", "x"},
 		{"agent", "cancel", "a", "b"},
 	}
 	for _, args := range invalid {
@@ -66,7 +68,11 @@ func TestAgentPromptGrammarMatrix(t *testing.T) {
 			t.Errorf("accepted %v", args)
 		}
 	}
-	c, err := parseCLI([]string{"agent", "prompt", "s", "--timeout literal"})
+	c, err := parseCLI([]string{"agent", "prompt", "--new", "--adapter", "claude", "--model", "sonnet", "x"})
+	if err != nil || !c.agentNew || c.agentAdapter != "claude" || c.agentModel != "sonnet" {
+		t.Fatalf("claude launch selector: c=%+v err=%v", c, err)
+	}
+	c, err = parseCLI([]string{"agent", "prompt", "s", "--timeout literal"})
 	if err != nil || c.promptText == nil || *c.promptText != "--timeout literal" {
 		t.Fatalf("post-ref text was parsed as flags: c=%+v err=%v", c, err)
 	}

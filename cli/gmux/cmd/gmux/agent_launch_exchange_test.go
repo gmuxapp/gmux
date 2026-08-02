@@ -16,6 +16,23 @@ func stubAgentLaunch(t *testing.T, id string, err error) *[]string {
 	return &got
 }
 
+func TestAgentPromptNewClaudeSelection(t *testing.T) {
+	d := startStubDaemon(t, localSession())
+	d.on(func(w http.ResponseWriter, _ *http.Request) {
+		writeEnvelope(w, http.StatusAccepted, map[string]any{"admission": "accepted"})
+	})
+	argv := stubAgentLaunch(t, "1va8lvdv", nil)
+	text := "go"
+	stdout := captureStdout(t, func() {
+		if code := cmdAgentPromptNew("claude", "sonnet", "review", true, 0, &text); code != 0 {
+			t.Fatalf("exit = %d", code)
+		}
+	})
+	if stdout != "1va8lvdv\n" || strings.Join(*argv, " ") != "claude --model sonnet --name review" {
+		t.Fatalf("stdout=%q argv=%v", stdout, *argv)
+	}
+}
+
 func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 	t.Run("no wait prints bare id", func(t *testing.T) {
 		d := startStubDaemon(t, localSession())
@@ -25,7 +42,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		stubAgentLaunch(t, "1va8lvdv", nil)
 		text := "go"
 		var code int
-		stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", true, 0, &text) })
+		stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", "", true, 0, &text) })
 		if code != 0 || stdout != "1va8lvdv\n" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
 		}
@@ -42,7 +59,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		var code int
 		var stderr string
 		stdout := captureStdout(t, func() {
-			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", "", false, 0, &text) })
 		})
 		if code != 0 || !strings.HasPrefix(stdout, "[USER]: go") || !strings.Contains(stdout, "[AGENT]: done") {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
@@ -62,7 +79,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		var code int
 		var stderr string
 		stdout := captureStdout(t, func() {
-			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+			stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", "", false, 0, &text) })
 		})
 		if code != waitExitError || stdout != "" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
@@ -77,7 +94,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		stubAgentLaunch(t, "", errors.New("spawn failed"))
 		text := "go"
 		var code int
-		stdout := captureStdout(t, func() { captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) }) })
+		stdout := captureStdout(t, func() { captureStderr(t, func() { code = cmdAgentPromptNew("", "", "", false, 0, &text) }) })
 		if code != waitExitError || stdout != "" {
 			t.Fatalf("exit=%d stdout=%q", code, stdout)
 		}
@@ -87,7 +104,7 @@ func TestAgentPromptNewOutputAndOrphanContracts(t *testing.T) {
 		startStubDaemon(t, localSession())
 		argv := stubAgentLaunch(t, "1va8lvdv", nil)
 		empty := "   "
-		captureStderr(t, func() { _ = cmdAgentPromptNew("", "", false, 0, &empty) })
+		captureStderr(t, func() { _ = cmdAgentPromptNew("", "", "", false, 0, &empty) })
 		if *argv != nil {
 			t.Fatalf("spawned invalid prompt: %q", *argv)
 		}

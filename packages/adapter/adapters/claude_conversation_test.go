@@ -45,3 +45,39 @@ func TestClaudeConversationExchanges(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeConversationUsesActiveParentBranch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "branched.jsonl")
+	transcript := `{"uuid":"u1","parentUuid":null,"type":"user","message":{"role":"user","content":"root"}}
+{"uuid":"a-old","parentUuid":"u1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"old"}]}}
+{"uuid":"u-old","parentUuid":"a-old","type":"user","message":{"role":"user","content":"abandoned private text"}}
+{"uuid":"a-new","parentUuid":"u1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"active"}]}}
+{"uuid":"u-new","parentUuid":"a-new","type":"user","message":{"role":"user","content":"active followup"}}
+{"uuid":"a-end","parentUuid":"u-new","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := NewClaude().RenderConversationExchanges(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex) != 2 || ex[0].User != "root" || ex[0].Terminal != "active" || ex[1].User != "active followup" || ex[1].Terminal != "done" {
+		t.Fatalf("active exchanges = %#v", ex)
+	}
+}
+
+func TestClaudeImageOnlyUserIsExchangeBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image.jsonl")
+	transcript := `{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"secret"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"seen"}]}}`
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := NewClaude().RenderConversationExchanges(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex) != 1 || ex[0].User != "[image]" || ex[0].Terminal != "seen" {
+		t.Fatalf("image exchange = %#v", ex)
+	}
+}

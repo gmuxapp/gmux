@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -317,5 +318,24 @@ func TestClaudeHookCommand_UserCannotWipeHooks(t *testing.T) {
 	}
 	if n := sessionStartHookCount(mergedSettings(t, out)); n != 1 {
 		t.Fatalf("gmux SessionStart hook must survive hooks:null, got %d", n)
+	}
+}
+
+func TestClaudeHookCommand_InvalidSettingsPreserved(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	for _, args := range [][]string{
+		{"claude", "--settings"},
+		{"claude", "--settings="},
+		{"claude", "--settings", missing, "--model", "opus"},
+		{"claude", "--settings", `{not-json}`, "--model", "opus"},
+	} {
+		original := append([]string(nil), args...)
+		out, ok := (&Claude{}).HookCommand(args, "/usr/bin/gmux")
+		if ok {
+			t.Errorf("invalid settings unexpectedly injected: %v", args)
+		}
+		if !reflect.DeepEqual(out, original) {
+			t.Errorf("invalid settings changed argv: got %v want %v", out, original)
+		}
 	}
 }

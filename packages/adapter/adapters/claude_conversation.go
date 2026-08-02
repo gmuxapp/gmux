@@ -18,6 +18,8 @@ var (
 // alone is deliberately not enough to establish a user exchange boundary.
 type claudeConversationEntry struct {
 	Type        string `json:"type"`
+	UUID        string `json:"uuid"`
+	ParentUUID  string `json:"parentUuid"`
 	IsMeta      bool   `json:"isMeta"`
 	IsSidechain bool   `json:"isSidechain"`
 	Message     *struct {
@@ -31,19 +33,72 @@ func readClaudeEntries(ref string) ([]claudeConversationEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var entries []claudeConversationEntry
+	var linear []claudeConversationEntry
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		var entry claudeConversationEntry
 		// A transcript can be observed while its final line is being appended.
-		if json.Unmarshal([]byte(line), &entry) != nil || entry.IsMeta || entry.IsSidechain {
+		if json.Unmarshal([]byte(line), &entry) != nil {
 			continue
 		}
-		entries = append(entries, entry)
+		linear = append(linear, entry)
 	}
-	return entries, nil
+	return claudeActiveBranch(linear), nil
+}
+
+// claudeActiveBranch follows Claude's native parent-linked history from the
+// final persisted node. Rewind/fork leaves abandoned messages in the JSONL;
+// rendering file order would disclose and misattribute that abandoned branch.
+// Older transcripts without parent links remain linear.
+func claudeActiveBranch(linear []claudeConversationEntry) []claudeConversationEntry {
+	if len(linear) == 0 {
+		return nil
+	}
+	hasParents := false
+	byID := make(map[string]claudeConversationEntry, len(linear))
+	for _, entry := range linear {
+		if entry.ParentUUID != "" {
+			hasParents = true
+		}
+		if entry.UUID != "" {
+			byID[entry.UUID] = entry
+		}
+	}
+	if !hasParents {
+		return linear
+	}
+	// Non-conversation bookkeeping records can trail the active message and
+	// carry no UUID. They must not disable branch reconstruction.
+	leaf := claudeConversationEntry{}
+	for i := len(linear) - 1; i >= 0; i-- {
+		if linear[i].UUID != "" {
+			leaf = linear[i]
+			break
+		}
+	}
+	if leaf.UUID == "" {
+		return linear
+	}
+	var reverse []claudeConversationEntry
+	seen := make(map[string]bool)
+	for cur := leaf; cur.UUID != "" && !seen[cur.UUID]; {
+		reverse = append(reverse, cur)
+		seen[cur.UUID] = true
+		if cur.ParentUUID == "" {
+			break
+		}
+		next, ok := byID[cur.ParentUUID]
+		if !ok {
+			break
+		}
+		cur = next
+	}
+	for left, right := 0, len(reverse)-1; left < right; left, right = left+1, right-1 {
+		reverse[left], reverse[right] = reverse[right], reverse[left]
+	}
+	return reverse
 }
 
 // renderClaudeContent returns a visible rendering, its prose-only subset, and
@@ -77,6 +132,7 @@ func renderClaudeContent(raw json.RawMessage) (text, prose string, userBoundary 
 			parts = append(parts, formatPiToolCall(block.Name, block.Input))
 		case "image":
 			parts = append(parts, "[image]")
+			userBoundary = true
 		}
 	}
 	return strings.Join(parts, "\n\n"), strings.Join(proseParts, "\n\n"), userBoundary
@@ -89,7 +145,7 @@ func (c *Claude) RenderConversation(ref string) ([]adapter.ConversationMessage, 
 	}
 	var out []adapter.ConversationMessage
 	for _, entry := range entries {
-		if entry.Message == nil || (entry.Type != "user" && entry.Type != "assistant") {
+		if entry.IsMeta || entry.IsSidechain || entry.Message == nil || (entry.Type != "user" && entry.Type != "assistant") {
 			continue
 		}
 		text, prose, boundary := renderClaudeContent(entry.Message.Content)
@@ -110,7 +166,7 @@ func (c *Claude) RenderConversationExchanges(ref string) ([]adapter.Exchange, er
 	}
 	var out []adapter.Exchange
 	for _, entry := range entries {
-		if entry.Message == nil {
+		if entry.IsMeta || entry.IsSidechain || entry.Message == nil {
 			continue
 		}
 		text, prose, boundary := renderClaudeContent(entry.Message.Content)
