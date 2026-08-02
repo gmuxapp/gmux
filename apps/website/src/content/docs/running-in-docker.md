@@ -100,7 +100,7 @@ The container runs `gmuxd run` as its entrypoint. In the WireGuard and Traefik e
 
 ### What's blocked over TCP
 
-The `/v1/shutdown` endpoint is blocked on the TCP listener regardless of authentication. Stopping the daemon is a local-only operation available through the Unix socket. This prevents an authenticated network user from killing gmuxd.
+`/v1/shutdown` and the admin state routes (`/v1/state/*` — check, backup, export) are blocked on network listeners regardless of authentication; they remain available through the local Unix socket. This prevents an authenticated network user from killing gmuxd or pulling daemon-local state inventory.
 
 ## Customization
 

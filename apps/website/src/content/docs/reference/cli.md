@@ -575,7 +575,8 @@ anything else (a failed activity, a `--timeout`, a transport failure), and
 `128+N` for a first local signal (which prints only the
 `[Wait interrupted; agent remains active]` line; a second signal kills
 immediately). The report is printed on stdout for every one of those
-outcomes; stderr only ever explains why no report could be produced.
+outcomes; stderr explains why no report could be produced — plus, for
+`--new`, the one line carrying the fresh session's ID (see below).
 
 **Steering does not interrupt anybody.** A `--steer` or merged `--follow-up`
 (or a human typing into the TUI) becomes a new `[USER]:` boundary in the

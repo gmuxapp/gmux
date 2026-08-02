@@ -159,7 +159,7 @@ pi, Claude Code, and Codex now report status/titles/attribution through injected
 
 ### Per-session sockets moved
 
-1.6 put runner sockets in shared `/tmp/gmux-sessions`; 2.0 uses `~/.local/state/gmux/run/sessions` (per-user, 0700). Tooling should read `$GMUX_SOCKET` instead of constructing paths. **Known 2.0 limitation:** the compatibility scan does not include the actual 1.6 `/tmp/gmux-sessions` directory, so do not rely on a live 1.6 runner surviving the daemon upgrade. `GMUX_SOCKET_DIR` still overrides.
+1.6 put runner sockets in shared `/tmp/gmux-sessions`; 2.0 uses `~/.local/state/gmux/run/sessions` (per-user, 0700). Tooling should read `$GMUX_SOCKET` instead of constructing paths. Sessions that were running under 1.6 are not carried into the 2.0 daemon — restart them after upgrading. `GMUX_SOCKET_DIR` still overrides.
 
 ### Fresh login environment
 

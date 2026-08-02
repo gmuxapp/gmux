@@ -58,11 +58,9 @@ In **Settings → Hosts**, each host shows an explicit status:
 
 Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
 
-**Upgrading to 2.0:** the daemon starts with a clean SQLite database (`state.db`) and does not import old hosts, projects, references, or JSON state. Re-add wanted hosts with **Connect to host**, then add their projects under **Settings → Projects → From other hosts**. See the [migration guide](/migrating-to-2/) for the full upgrade story.
-
 ## Projects
 
-Sessions don't appear in the sidebar until you add a project. The first time you open the dashboard, click the **+** button to launch a session. gmux creates a default "home" project that catches sessions started in your home directory itself. As you work in more repositories, open **Settings → Projects** to organize sessions by repo.
+Sessions don't appear in the sidebar until you add a project. On a fresh install, the empty sidebar shows a single **+** button; launching from it creates a default "home" project that catches sessions started in your home directory itself. Sessions launched from the CLI in other directories stay out of the sidebar until you add their project — open **Settings → Projects** and add it from the *Discovered* list.
 
 In the sidebar, sessions are grouped into a **folder** per project. Click a **project name** to collapse or expand its folder (a chevron shows the state); the header stays pinned to the top of the list while you scroll through its sessions. Collapsed state is remembered per browser tab.
 
@@ -88,7 +86,7 @@ Each session has a dot on the left edge:
 
 Agent sessions (pi, Claude, Codex) only trigger the unread dot when the assistant completes a turn, not on every line of output.
 
-Hover over a session to reveal the **×** button. Dismissing a session stops every live runner in its launch subtree and recursively dismisses its descendants. The rows disappear and lose project placement, but SQLite retains their hidden session rows, conversation identity, provenance, and timestamps until adapter reconciliation removes them. Treat dismissing a parent as an action on the whole descendant tree.
+Hover over a session to reveal the **×** button. Dismissing a session stops it **and every session it launched**, then removes them all from the UI. Dismissal is not permanent data deletion: agent conversations stay in their own tools, and the session's terminal history is kept until gmux eventually cleans it up.
 
 ## The activity dashboard
 

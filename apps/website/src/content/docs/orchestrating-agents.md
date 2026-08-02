@@ -91,7 +91,8 @@ for a first local signal, which prints only
 `[Wait interrupted; agent remains active]` and leaves the agent running. So
 `report=$(gmux agent prompt …)` captures the account even when `$?` is
 nonzero. stderr is reserved for gmux's inability to produce a report at all
-(unknown session, unsupported adapter, transport failure). A single-session
+(unknown session, unsupported adapter, transport failure) — plus, for a
+synchronous `--new`, the single line carrying the fresh session's id. A single-session
 command then prints nothing on stdout and exits 1. After a multi-wait has
 armed, one such failure can coexist with ordered stdout blocks from the other
 sessions (and a header for the failed session); stderr identifies which report

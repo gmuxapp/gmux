@@ -3,7 +3,7 @@ title: pi
 description: How gmux works with the pi coding agent.
 ---
 
-gmux has built-in support for [pi](https://github.com/mariozechner/pi-coding-agent). No configuration is needed — launch pi through gmux and everything works automatically.
+gmux has built-in support for [pi](https://github.com/earendil-works/pi). No configuration is needed — launch pi through gmux and everything works automatically.
 
 ## What you get
 
@@ -66,7 +66,7 @@ Pi stores conversations as JSONL files in `~/.pi/agent/sessions/`. Each working 
     2026-03-15T11-30-00-000Z_def456.jsonl
 ```
 
-gmuxd watches this directory to discover resumable conversations and to notice when a conversation file is deleted (a deleted conversation also retires its resumable entry). gmux honors pi's own `PI_CODING_AGENT_DIR` override: if you point pi at an isolated data directory, gmux looks for conversations under `$PI_CODING_AGENT_DIR/sessions`. Live session state — attribution, title, and status — comes from the extension, not from parsing these files. The first line of each file is a session header with a UUID and timestamp.
+gmuxd watches this directory to keep its conversation index (URL resolution and search) current and to notice when a conversation file is deleted — a deleted conversation lets gmux retire the corresponding dead session. Watching never creates sidebar sessions on its own. gmux honors pi's own `PI_CODING_AGENT_DIR` override: if you point pi at an isolated data directory, gmux looks for conversations under `$PI_CODING_AGENT_DIR/sessions`. Live session state — attribution, title, and status — comes from the extension, not from parsing these files. The first line of each file is a session header with a UUID and timestamp.
 
 ### The gmux extension
 

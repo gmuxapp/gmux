@@ -28,11 +28,9 @@ runner-owned and re-register; the loss is dead-session history.
 
 A byte-identical snapshot is detected in the composition path and never broadcast — this no-op dedup is load-bearing for the snapshot protocol. Cross-entity operations (registration + project assignment, dismissal + recursive placement removal, etc.) execute in one transaction.
 
-### `Upsert` vs `UpsertRemote`
+### Local rows vs peer projections
 
-Sessions owned by a peer go through `store.UpsertRemote` instead of `store.Upsert`. The difference is that `UpsertRemote` does **not** re-run `resolveTitle` or re-derive `resumable`: those fields were already authoritatively resolved on the spoke and arrive in the SSE payload. It also skips `last_activity_at` recomputation — the stamp arrives in the peer payload. Canonicalization, duplicate-slug handling, unique-slug numbering, and the broadcast all still run.
-
-This split exists because the spoke keeps `shell_title` and `adapter_title` as internal fields and drops them in `MarshalJSON`. If the hub called `Upsert` on a remote session it would see those fields empty, fall through to the `CommandTitler` or the bare adapter name, and overwrite the correct spoke-resolved `title`. `UpsertRemote` trusts the spoke. The alternative, putting the internal title fields on the wire, was rejected: it widens the public API surface for a purely internal concern.
+Only local sessions live in the SQLite store. Sessions owned by a peer are an in-memory **connection projection**: the hub consumes the spoke's snapshot stream, namespaces the IDs (`id@peer`), and overlays the rows into outgoing snapshots without persisting them. Peer-resolved fields like `title` and `resumable` are trusted as-is — the spoke already resolved them authoritatively — and the projection disappears when the peer disconnects.
 
 ## Who writes what
 
@@ -46,8 +44,8 @@ Each field on a session has a single owner. No two subsystems write the same fie
 | Held file + title + status | **Agent hook** | runner SSE `conversation_file` / `status` events |
 | Session dies (clean exit) | **Subscription** | Runner SSE `exit` event |
 | Session dies (crash) | **Discovery Scan** | Socket file gone |
-| Session removed | **Dismiss handler** | User clicks × |
-| Activity stamp | **Store** | `last_activity_at` on noteworthy transitions |
+| Session hidden | **Dismiss** | User clicks × (recursive over launch descendants) |
+| Activity stamp | **Store** | `last_output_at` when unread turns on (new unseen output) |
 
 ### Register: single entry point for live sessions
 
@@ -57,7 +55,7 @@ For resumed sessions, the daemon launches the runner with `--resume-id` (ADR 000
 
 ### Discovery Scan: consistency check, not session creator
 
-Scan runs every 3 seconds (plus once at startup, with a first-scan hook) and does two things:
+Runners register themselves; the scan is a periodic fallback (every 30 seconds, plus once at startup) that does two things:
 
 1. **New sockets** → delegates to `Register()` (never creates sessions directly)
 2. **Missing sockets** → marks alive sessions as dead
@@ -76,7 +74,7 @@ Separately, each file-backed adapter implements `ConversationSource` to keep the
 
 Dead sessions survive daemon restarts because they are rows in the SQLite database. When a session exits, its state is committed to `state.db`; on startup gmuxd rediscovers surviving runners and merges their live state, then serves the first snapshot. There is no separate sweep or JSON file to synchronize.
 
-Retention: adapters own resumability and retention policy. Each adapter reconciles its retained candidates and returns a disposition (retain, remove, or unknown). Conversation-less sessions (shells) age out (30 days / 200 max by default), and dead-session scrollback is a cache with an aggregate byte cap. There is no periodic scan of adapter conversation directories creating sessions — that mechanism was retired; the conversations index handles dead-conversation URL resolution.
+Retention: adapters own resumability and retention policy. Each adapter reconciles its retained candidates and returns a disposition (retain, remove, or unknown); unknown retains conservatively, so rows are only removed when their adapter positively confirms the conversation is gone. Dead-session scrollback is a cache with an aggregate byte target. There is no periodic scan of adapter conversation directories creating sessions — that mechanism was retired; the conversations index handles dead-conversation URL resolution.
 
 ## Session lifecycle
 
@@ -93,24 +91,22 @@ stateDiagram-v2
 
 **Key transitions:**
 
-- **alive → resumable:** Subscription receives exit event from the runner, or discovery finds the socket gone. All dead sessions with a command are immediately resumable. For adapters with native resume (pi, claude, codex), the exit handler replaces the command with the tool-specific resume command. For others, the original command is kept.
-- **resumable → alive:** User clicks the session. The resume handler launches a runner with the session's command but does **not** modify the store. When the runner registers, `Register()` merges it back to alive.
-- **resumable → dismissed:** Dismiss kills any live runner, runs the adapter's `OnDismiss`, removes project membership, and deletes the persisted meta dir — so a dismissed session stays gone, including across daemon restarts.
+- **alive → resumable:** Subscription receives an exit event from the runner, or discovery finds the socket gone. A dead row is offered as resumable when it has evidence it actually ran, its adapter has not declared the conversation gone, and a resume command can be derived. The stored launch `command` is preserved; the resume command is derived from `(adapter, conversation_ref)` at resume time, not written back into the row.
+- **resumable → alive:** User clicks the session. The resume handler spawns a runner for the existing session ID; when the runner registers, the coordinator merges it back to alive under the same identity.
+- **resumable → dismissed:** Dismiss stamps `dismissed_at` and removes project placement — recursively across launch descendants. The row stays in SQLite, hidden, until adapter reconciliation removes it; it does not resurface across daemon restarts.
 - **Editor sessions** (`gmux edit`) are an exception: they're dismissed automatically when the editor closes, never becoming resumable.
 
 ## Derived fields
 
-These are computed in `Upsert()` and `Update()`, never set manually:
+These are computed by the daemon when composing snapshots, never set manually:
 
 | Field | Derivation |
 |---|---|
 | `title` | `adapter_title` > `shell_title` > `CommandTitler` > adapter name |
-| `resumable` | `!alive && has command` |
-| `last_activity_at` | stamped on noteworthy transitions (exit, unread on, active/error on) |
+| `resumable` | dead + ran-evidence + adapter has not declared the conversation gone + a resume command can be derived |
+| `last_output_at` | stamped when `unread` turns on — the session produced output the user hasn't seen. Powers the activity feed's recency ordering |
 
 Staleness (the "outdated" badge) is **frontend-derived**: the UI compares each session's `runner_version`/`binary_hash` against `/v1/health`. There is no `stale` store field.
-
-All dead sessions with a command are resumable, regardless of adapter. The exit handler swaps in a tool-specific resume command only for sessions with a recorded conversation file (adapters implementing `Resumer`); everything else keeps the original launch command, so "resume" re-runs it in the same working directory.
 
 **Title priority:** `adapter_title` always wins over `shell_title`. An empty `adapter_title` from the runner never overwrites a non-empty one on the daemon, preserving titles across resume where the daemon knows the title but the freshly-started runner doesn't yet. The next fallback is the adapter's `CommandTitler` interface (shell uses this to show `pytest -x`). The final fallback is the adapter name (e.g. "codex").
 
@@ -162,4 +158,4 @@ Status carries only granular booleans (`active`, `error`, `interrupted`) and is 
 | Dead, non-zero exit | Dimmed row, "exited (N)" from `exit_code` | `null` |
 | Resumable | Normal row, clickable | `null` |
 
-Exit text (`exited (N)` / `Session ended`) is derived in the frontend from `exit_code`, not carried in Status. On exit the daemon sets Status to `null`.
+Exit text (`exited (N)` / `Session ended`) is derived in the frontend from `exit_code`, not carried in Status. A reported terminal outcome (error/interrupted) is retained across death so `gmux wait` and reports can attribute the last turn's outcome.

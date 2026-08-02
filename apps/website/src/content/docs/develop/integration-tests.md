@@ -3,7 +3,7 @@ title: Integration Tests
 description: End-to-end tests that launch real tools through gmuxd.
 ---
 
-Integration tests verify the full pipeline — from launching a real tool through gmuxd to observing session state transitions, file attribution, title derivation, and resume. They catch issues that unit tests can't: hook/file attribution timing, TUI input handling, trust prompts, and title derivation against real conversation files. (pi's discovery is file-watch based; claude and codex report state via authoritative agent hooks.)
+Integration tests verify the full pipeline — from launching a real tool through gmuxd to observing session state transitions, attribution, title derivation, and resume. They catch issues that unit tests can't: hook timing, TUI input handling, trust prompts, and title derivation against real conversation files. (pi, claude, and codex all report identity and state via authoritative agent hooks; file watching only feeds the conversation index.)
 
 ## Running
 
@@ -112,7 +112,7 @@ func TestMyAppTurnAndTitle(t *testing.T) {
 - **Trust prompts.** Claude Code and Codex both ask "do you trust this directory?" on first launch in a new workspace. Dismiss them by waiting for `"trust"` in the scrollback, then sending `\r`.
 - **TUI readiness.** Ink-based TUIs (pi, codex) need a moment after rendering before they accept input. A 2-second sleep after `WaitForOutput` is usually enough.
 - **Batch file writes.** Some tools write user + assistant messages in one batch after the turn completes (pi does this). You can't reliably observe transient `active=true` status via polling — wait for the final state instead.
-- **Hook-driven adapters attribute fast.** Claude and Codex report session identity through an injected hook (ADR 0010/0011), so attribution appears as soon as the hook fires — no file-watcher race. The long attribution timeout is only needed for file-watch adapters like pi.
+- **Hook-driven adapters attribute fast.** pi, Claude, and Codex report session identity through an injected hook (ADR 0010/0011), so attribution appears as soon as the hook fires — no file-watcher race. Keep a generous timeout anyway; hook delivery still depends on the tool reaching its ready state.
 - **Not every adapter needs these tests.** Shell and editor sessions have no API cost and are covered by cheaper lifecycle tests; the API-cost suite is for agent adapters.
 
 ## Related docs

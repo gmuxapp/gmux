@@ -20,7 +20,7 @@ Spokes need zero configuration changes. The hub authenticates with each spoke's 
 
 gmux does **not** auto-connect machines on your tailnet. Being on the same tailnet lets a machine *reach* another, but connecting still requires that host's bearer token, exactly like any other peer ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). This keeps a single compromised node (say, a container running an untrusted agent) from driving every other machine on the tailnet.
 
-All connected hosts must run gmux 2.0. A 2.0 hub cannot aggregate a 1.x spoke and vice versa; upgrade every machine (and rebuild devcontainers) together.
+All connected hosts must run the same major gmux version; update every machine (and rebuild devcontainers) together.
 
 To add a tailnet machine, run `gmux auth` on it and copy the **connect URL** it prints (it also prints a QR code you can scan from a device on your tailnet). If the machine doesn't have gmux remote access enabled yet, run `gmux remote` first — without it, `gmux auth` prints only the local URL:
 

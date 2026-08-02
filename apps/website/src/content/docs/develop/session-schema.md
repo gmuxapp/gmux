@@ -23,7 +23,7 @@ Session data flows through three boundaries. Not every field crosses every bound
 
 Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `/events` stream (subscribed for live updates).
 
-**GET /meta** returns the full session state including internal title inputs (`shell_title`, `adapter_title`) and build identity (`binary_hash`, `runner_version`). gmuxd deserializes this into `store.Session`.
+**GET /meta** returns the full session state including internal title inputs (`shell_title`, `adapter_title`) and build identity (`binary_hash`, `runner_version`). gmuxd merges these runner facts into the session's durable SQLite row.
 
 **SSE events** carry incremental updates:
 
@@ -38,7 +38,7 @@ Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `
 
 ### gmuxd → frontend
 
-gmuxd exposes the aggregated store to the browser via `GET /v1/events` (SSE). Session state arrives as coalesced `snapshot.sessions` full-replacement snapshots (ADR 0001); `session-activity` is forwarded as a bare signal. `GET /v1/sessions` remains for CLI/scripting. A custom `MarshalJSON` on `store.Session` controls which fields are serialized in both. Internal fields are excluded; their derived outputs are included instead.
+gmuxd exposes the aggregated state to the browser via `GET /v1/events` (SSE). Session state arrives as coalesced `snapshot.sessions` full-replacement snapshots (ADR 0001); `session-activity` is forwarded as a bare signal. `GET /v1/sessions` remains for CLI/scripting. A wire-conversion layer controls which fields are serialized in both: internal fields are excluded, their derived outputs included instead.
 
 ### Field map
 
@@ -60,7 +60,7 @@ gmuxd exposes the aggregated store to the browser via `GET /v1/events` (SSE). Se
 | `exit_code` | ✓ | ✓ | ✓ | — |
 | `started_at` | ✓ | ✓ | ✓ | — |
 | `exited_at` | ✓ | ✓ | ✓ | — |
-| `last_activity_at` | — | ✓ stamped | ✓ | ✓ home recency buckets |
+| `last_output_at` | — | ✓ stamped | ✓ | ✓ activity-feed recency |
 | **Display** |
 | `title` | ✓ computed | ✓ re-resolved | ✓ | ✓ header, sidebar |
 | `subtitle` | ✓ | ✓ | ✓ | — |
@@ -96,7 +96,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 |-------|------|-------------|
 | `id` | string | Unique session identifier (e.g. `16y0lfv7`) |
 | `created_at` | ISO 8601 | When the session was created |
-| `command` | string[] | The command being run. For resumed sessions, replaced with the resume command. |
+| `command` | string[] | The command the session was launched with. Preserved across exit; resume commands are derived separately. |
 | `cwd` | string | Working directory |
 | `adapter` | string | Adapter name: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
 | `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for project grouping. |
@@ -113,16 +113,16 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `exit_code` | number? | Exit code when dead |
 | `started_at` | ISO 8601 | When the process was started |
 | `exited_at` | ISO 8601? | When the process exited |
-| `last_activity_at` | ISO 8601? | Stamped by the owning daemon on noteworthy transitions (exit, unread on, active on, error on). Powers the home screen's recency buckets. |
+| `last_output_at` | ISO 8601? | Stamped by the owning daemon when `unread` turns on — the session produced output the user hasn't seen. Powers the activity feed's recency ordering. |
 
 ### Resume & conversations
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `resumable` | boolean | Derived: `!alive && command present`. Never set manually. |
-| `conversation_file` | string? | The agent's on-disk conversation file, reported authoritatively by the agent hook (ADR 0011). Drives resume-command derivation on exit; duplicate values across live sessions trigger a "conversation open in multiple tabs" warning. |
+| `resumable` | boolean | Derived, never set manually: the session is dead, has evidence it actually ran, its adapter has not declared the conversation gone, and a resume command can be derived. |
+| `conversation_file` | string? | The agent's opaque conversation ref (for file-backed adapters, the transcript path), reported authoritatively by the agent hook (ADR 0011). Drives resume-command derivation; duplicate values across live sessions trigger a "conversation open in multiple tabs" warning. |
 
-All dead sessions with a command are resumable. On exit, adapters with native resume (pi, claude, codex) get their command replaced with a tool-specific resume command derived from the conversation file; sessions without one keep the original command, so "resume" re-runs it in the same working directory. Dead conversations can be resolved via `GET /v1/conversations/{adapter}/{slug}`.
+The stored launch `command` is preserved across exit. Resuming derives a tool-specific resume command from `(adapter, conversation_ref)` at spawn time. Dead conversations can be resolved via `GET /v1/conversations/{adapter}/{slug}`.
 
 ### Routing
 
@@ -239,13 +239,13 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "socket_path": "~/.local/state/gmux/run/sessions/16y0lfv7.sock",
   "slug": "fix-auth-bug",
   "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
-  "last_activity_at": "2026-03-14T10:05:00Z",
+  "last_output_at": "2026-03-14T10:05:00Z",
   "runner_version": "2.0.0",
   "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
 
-Note the differences: `shell_title` and `adapter_title` are absent from the API response — `title` is the resolved value. `runner_version` and `binary_hash` ride the wire so the frontend can derive staleness against `/v1/health`. `last_activity_at` is stamped by the daemon.
+Note the differences: `shell_title` and `adapter_title` are absent from the API response — `title` is the resolved value. `runner_version` and `binary_hash` ride the wire so the frontend can derive staleness against `/v1/health`. `last_output_at` is stamped by the daemon.
 
 ## Terminology (2.0)
 
