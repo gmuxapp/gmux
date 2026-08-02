@@ -180,7 +180,7 @@ Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026)
 Not breaking, but 1.x docs and muscle memory point at moved things:
 
 - **Home screen** is now a pure output-recency dashboard (Today, Yesterday, recent weekdays, then dates). Status changes a session's indicator, not its section. Host cards and quick-launch buttons are gone.
-- **Project management** moved from the sidebar's "Manage projects" modal to **Settings → Projects** (gear button).
+- **Project management** moved from the sidebar's "Manage projects" modal to **Settings → Projects** (sliders button in the sidebar header).
 - **Hosts roster** lives in **Settings → Hosts**, with explicit Online / Connecting… / Auth needed / Offline statuses.
 - **Mobile toolbar** reworked: dedicated ↑ ↓ and word-jump keys are always present; ctrl/alt arm-and-highlight instead of relabeling keys; paste moved off the toolbar (paste keybind or long-press).
 - **Cmd/Ctrl+F** now opens find-in-terminal instead of browser find. Restore browser find with `{ "key": "secondary+f", "action": "none" }` in [`settings.jsonc`](/reference/settings/#keybinds-guide).

@@ -58,7 +58,7 @@ A host's name is adopted at first contact and then frozen — renaming the machi
 If gmux can't match a reference to any current host — it's not in the roster because it was removed, or set up on a previous install — the reference is **not** silently dropped:
 
 - The sidebar shows the project muted, with a warning marker.
-- The settings gear gets a small red pip.
+- The settings button gets a small red pip.
 - **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Re-add the host under **Connect to host** (the reference re-anchors on the re-added host's node ID) and the references resolve again; otherwise remove them.
 
 Removing a host clears the references that pointed at it, so a deliberate removal leaves nothing behind here.
