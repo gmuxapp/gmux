@@ -66,7 +66,7 @@ Do not move or copy a live `state.db` directly. If startup or `state check` fail
 
 ## Sessions don't appear in the sidebar
 
-- **No project configured.** gmux discovers sessions but doesn't add them to the sidebar automatically. Open **Settings → Projects** (gear button) and add the project from the *Discovered* list, or click **Add a project** in the empty state.
+- **No project configured.** gmux discovers sessions but doesn't add them to the sidebar automatically. Open **Settings → Projects** (sliders button in the sidebar header) and add the project from the *Discovered* list, or click **Add a project** in the empty state.
 - **Session exited immediately.** Fast-exit commands still register as dead rows. If one is absent, check the daemon log for a registration error and verify that the project matches its working directory.
 - **Different daemon.** If you have multiple gmux installs (e.g. Homebrew and a dev build), `gmux` and `gmuxd` might not be talking to the same instance. Run `gmux daemon status` to see the running daemon's version and socket path and compare against `gmux version`.
 

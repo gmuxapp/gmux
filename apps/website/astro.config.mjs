@@ -4,6 +4,13 @@ import mermaid from 'astro-mermaid';
 
 export default defineConfig({
   site: 'https://gmux.app',
+  redirects: {
+    // Folded into the CLI reference (raw-session scripting) and
+    // Orchestrating agents (semantic agent surface).
+    '/integrations/scripts-and-agents': '/reference/cli/',
+    // Old short URL used in the v1.6.0 release notes.
+    '/scripts-and-agents': '/reference/cli/',
+  },
   integrations: [
     starlight({
       title: 'gmux',
@@ -48,6 +55,7 @@ export default defineConfig({
             { label: 'Interface stability', slug: 'reference/stability' },
             { label: 'Settings', slug: 'reference/settings' },
             { label: 'Theme', slug: 'reference/theme' },
+            { label: 'URLs and filters', slug: 'reference/urls' },
           ],
         },
         {

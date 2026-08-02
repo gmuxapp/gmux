@@ -89,7 +89,7 @@ curl -X PUT --unix-socket "$GMUX_SOCKET" \
   -d '{"active": true}'
 ```
 
-Status carries only `active`, `error` and `interrupted` booleans — display text is derived by the UI. Send `null` to clear the status. See [Scripts & agents](/integrations/scripts-and-agents) for how this composes with `gmux wait`.
+Status carries only `active`, `error` and `interrupted` booleans — display text is derived by the UI. Send `null` to clear the status. See [`gmux wait`](/reference/cli/#gmux-wait-id) for how this composes with waits.
 
 ## Writing an adapter
 

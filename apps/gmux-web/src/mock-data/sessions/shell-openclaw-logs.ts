@@ -24,7 +24,6 @@ export default {
   project_slug: 'openclaw',
   last_output_at: ago(51),
   socket_path: '/tmp/gmux-sessions/mock.sock',
-  peer: 'devcontainer',
   mockActive: true,
   terminal: [
     `${GRAY}[09:14:22]${RST} ${DIM}info${RST}  worker started pid=4821`,

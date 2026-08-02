@@ -12,7 +12,7 @@ gmux 2.0 is a breaking release. It starts with a clean SQLite state store; it do
 1. Upgrade every machine (and rebuild devcontainers) **together** — 2.0 hosts can't peer with 1.x hosts.
 2. Update scripts and muscle memory to the verb-first CLI: `gmux -- <cmd>` to run, `gmux open` for the UI, `gmux ls/attach/send/wait/kill` instead of flags.
 3. Re-add each remote host with its connect URL (**Settings → Hosts → Connect to host**, using `gmux auth` on that host), then add the projects you want under **Settings → Projects → From other hosts**.
-4. Recreate local projects. Running 1.x sessions can re-register, but dead history, project order, references, and connected hosts do not carry over.
+4. Recreate local projects. Restart any sessions that were running under 1.x — they, along with dead history, project order, references, and connected hosts, do not carry over.
 5. If you parse gmux JSON: `kind` → `adapter`, `session_file` → `conversation_file`.
 
 ---
@@ -180,7 +180,7 @@ Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026)
 Not breaking, but 1.x docs and muscle memory point at moved things:
 
 - **Home screen** is now a pure output-recency dashboard (Today, Yesterday, recent weekdays, then dates). Status changes a session's indicator, not its section. Host cards and quick-launch buttons are gone.
-- **Project management** moved from the sidebar's "Manage projects" modal to **Settings → Projects** (gear button).
+- **Project management** moved from the sidebar's "Manage projects" modal to **Settings → Projects** (sliders button in the sidebar header).
 - **Hosts roster** lives in **Settings → Hosts**, with explicit Online / Connecting… / Auth needed / Offline statuses.
 - **Mobile toolbar** reworked: dedicated ↑ ↓ and word-jump keys are always present; ctrl/alt arm-and-highlight instead of relabeling keys; paste moved off the toolbar (paste keybind or long-press).
 - **Cmd/Ctrl+F** now opens find-in-terminal instead of browser find. Restore browser find with `{ "key": "secondary+f", "action": "none" }` in [`settings.jsonc`](/reference/settings/#keybinds-guide).

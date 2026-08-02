@@ -13,7 +13,7 @@ description: User-facing highlights for each gmux release.
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 <Aside type="tip">
-Full commit-level changelogs are on each [GitHub Release](https://github.com/gmuxapp/gmux/releases). This page tracks user-facing highlights only.
+Each release is also published as a [GitHub Release](https://github.com/gmuxapp/gmux/releases) with downloadable binaries.
 </Aside>
 
 ## Install / Update
@@ -44,7 +44,7 @@ The biggest release yet, and the first with breaking changes. 2.0 makes agent st
 
 ### Agents can now orchestrate other agents
 
-The new machine-oriented `gmux agent` surface launches, prompts, observes, and cancels subagents without scraping terminal output. `gmux agent prompt --new --no-wait` prints an addressable session as soon as readiness, delivery, and admission complete, without waiting for the turn to finish; `gmux wait <id>...` waits on several agents concurrently and prints source-attributed exchange reports in argument order. Stable exit codes and delivery errors distinguish completed work, agent failure, interruption, timeout, safe retry, and indeterminate delivery — enough structure to build reliable agent swarms from shell scripts and other tools. See **[Orchestrating agents](https://gmux.app/orchestrating-agents/)** for the complete workflow.
+The new machine-oriented `gmux agent` surface launches, prompts, observes, and cancels subagents without scraping terminal output. `gmux agent prompt --new --no-wait` returns an addressable session once the prompt is admitted, without waiting for the turn to finish; `gmux wait <id>...` waits on several agents concurrently and prints source-attributed exchange reports in argument order. Stable exit codes and delivery errors distinguish completed work, agent failure, interruption, timeout, safe retry, and indeterminate delivery — enough structure to build reliable agent swarms from shell scripts and other tools. See **[Orchestrating agents](https://gmux.app/orchestrating-agents/)** for the complete workflow.
 
 ### A rebuilt web app
 

@@ -225,7 +225,48 @@ const KEYBINDS_GUIDE = `\
 
 gmux ships a complete default keymap. Every key combo that does something other than "send bytes to the terminal" is listed explicitly; nothing relies on implicit browser or xterm.js passthrough.
 
-Your \`keybinds\` array layers on top: same-key entries override the defaults, and the \`none\` action disables a default. See [Keyboard shortcuts](/using-the-ui#keyboard-shortcuts) for the full default keymap.
+Your \`keybinds\` array layers on top: same-key entries override the defaults, and the \`none\` action disables a default.
+
+### Default keymap
+
+Keys not listed here go straight to the terminal.
+
+**All platforms**
+
+| Shortcut | Action |
+|----------|--------|
+| **Shift+Enter** | Sends a plain newline (\`\\n\`) instead of Enter |
+| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT |
+| **Cmd/Ctrl+F** | Open find-in-terminal (replaces the browser's in-page find) |
+
+**Linux / Windows**
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Shift+C** | Copy selection to clipboard |
+| **Ctrl+V** | Paste from clipboard |
+| **Ctrl+Shift+V** | Paste from clipboard |
+| **Ctrl+Alt+T** | Sends Ctrl+T (browser steals Ctrl+T) |
+| **Ctrl+Alt+N** | Sends Ctrl+N (browser steals Ctrl+N) |
+| **Ctrl+Alt+W** | Sends Ctrl+W (browser steals Ctrl+W) |
+| **Ctrl+Backspace** | Delete word backward |
+| **Ctrl+Delete** | Delete word forward |
+
+**Mac**
+
+| Shortcut | Action |
+|----------|--------|
+| **Cmd+C** | Copy selection to clipboard |
+| **Cmd+V** | Paste from clipboard |
+| **Cmd+A** | Select all terminal content |
+| **Cmd+Left** | Home (beginning of line) |
+| **Cmd+Right** | End (end of line) |
+| **Cmd+Backspace** | Delete to start of line (sends Ctrl+U) |
+| **Cmd+K** | Clear screen (sends Ctrl+L) |
+
+:::tip[App mode]
+\`gmux\` tries to open in Chrome/Chromium \`--app\` mode for a standalone window with full keyboard access. If it falls back to a regular browser tab, shortcuts like Ctrl+T, Ctrl+N, and Ctrl+W are intercepted by the browser — the Ctrl+Alt workarounds above cover this case. You can also install gmux as a PWA from the browser menu (⋮ → Install gmux).
+:::
 
 ### Key format
 
