@@ -8,17 +8,21 @@
 
 ADR 0033 defines `model:effort@harness` as the canonical session spec for
 driven launches and reserves shorthand resolution for this ADR. Callers want
-"the latest fable" to work without maintaining an alias per release; that
-convenience must not rest on arbitrary fuzzy matching.
+`fable` to work as a shorthand without maintaining aliases; that convenience
+must not rest on arbitrary fuzzy matching.
 
-Pi's current behavior shows the failure: it picks the first fuzzy match across
-every model it knows, so `fable` can resolve to `amazon-bedrock/fable` — a
-provider the user never configured — and the launch fails. The corpus was
-wrong, not the shorthand idea.
+Pi's current behavior shows the failure: it picks the first fuzzy match
+across every model it knows, so `fable` can resolve to
+`amazon-bedrock/fable` — a provider the user never configured — and the
+launch fails. The corpus was wrong, not the shorthand idea.
 
-Resolution is host-dependent (installed harnesses and configured providers
-differ per host), and the same catalog data must drive the web UI model
-picker.
+Each harness already maintains a user-facing notion of which models its own
+picker offers: pi's scoped-models list (`enabledModels`), Claude's
+`availableModels` settings allowlist over the SDK model list, Codex's
+non-hidden `model/list` catalog. gmux should resolve against that, not
+against a parallel model universe of its own. Resolution is host-dependent
+(installed harnesses and configured providers differ per host), and the same
+data must drive the web UI model picker.
 
 ## Decision
 
@@ -29,22 +33,27 @@ launches (`gmux agent prompt --new --model <spec>`) and the web UI
 new-session flow. It runs daemon-side at launch time against the target
 host. Interactive `gmux -- <harness>` is untouched.
 
-### Candidate corpus: usable models only
+### Candidate corpus: the harness's own in-scope, usable models
 
-Shorthand resolution considers only models that are **usable** on the target
-host at resolution time: harness installed, provider configured and
-authenticated, model not deprecated. Unconfigured providers drop out before
-matching — the structural fix for the Bedrock failure.
+Shorthand resolution considers only models that are, on the target host at
+resolution time:
 
-The corpus comes from a new adapter capability: a **model catalog** carrying
-canonical model identity, usability status, version ordering (release date or
-explicit), model-family grouping, and adapter-specific selection facts such as
-pi's scoped/featured flag. (Feasible today: Codex exposes `model/list`; Claude
-exposes model and effort as config options.) An adapter without a catalog
-degrades gracefully: its models resolve only via exact canonical spec and
-contribute no shorthand candidates. The same catalogs feed the web model
-picker, so picker visibility and shorthand eligibility share one source of
-truth.
+- **in scope for their harness** — the list the harness's own picker would
+  show, as the user configured it in the harness itself (pi's scoped models;
+  Claude's `availableModels` allowlist; Codex's non-hidden catalog); and
+- **usable** — harness installed, provider configured and authenticated.
+
+Unconfigured providers drop out before matching — the structural fix for the
+Bedrock failure. gmux introduces no model-curation surface of its own; scope
+is edited where it already lives, in each harness.
+
+The corpus comes from a new adapter capability: report the harness's
+in-scope model list with canonical identity (`provider/model` where the
+harness has providers), usability status, and available effort levels. An
+adapter without this capability degrades gracefully: its models resolve only
+via exact canonical spec and contribute no shorthand candidates. The same
+lists feed the web model picker, so picker visibility and shorthand
+eligibility share one source of truth.
 
 ### Resolution ladder
 
@@ -53,73 +62,81 @@ advances — never an ambiguous guess.
 
 1. **Exact canonical form** (`anthropic/claude-fable-5:low@pi`) is used
    verbatim, with no inference. Ordinary launch validation still applies.
-2. **Unique whole-token match** over the usable corpus: the shorthand must
-   equal a complete token of the model name (`sol` matches `gpt-5.6-sol`, not
+2. **Whole-token match** over the corpus: the shorthand must equal a
+   complete token of the model name (`sol` matches `gpt-5.6-sol`, not
    `solar`). This is **partial-name specification, not fuzzy matching** — no
-   substring, prefix, or edit-distance search.
-   - Matches within one model family → pick the latest by catalog version
-     ordering, so `fable` tracks new releases with zero maintenance.
-   - Same family launchable through multiple harnesses →
-     `preferred_harnesses` order wins.
-   - Matches spanning distinct families → fail, listing the canonical
-     candidates. An agent retries cheaply with a longer token.
-3. **History** has exactly two jobs: default thinking effort for the resolved
-   model (its most recent launch) and tiebreak among otherwise-equal
-   candidates (recency, never frequency). History never introduces a
-   candidate the catalog did not offer.
-4. **Echo and freeze**: the resolved canonical form is printed at launch and
+   substring, prefix, or edit-distance search. A unique match resolves.
+3. **Recency selects among multiple matches**: the match most recently
+   launched through gmux wins. Ties without usable history (e.g. never-used
+   matches) fall to `preferred_harnesses` order across harnesses; if still
+   ambiguous, fail listing the canonical candidates — an agent retries
+   cheaply with a longer token. History never introduces a candidate the
+   corpus did not offer.
+4. **Effort default**: when effort is omitted, use the resolved model's most
+   recent gmux launch effort; otherwise the harness default.
+5. **Echo and freeze**: the resolved canonical form is printed at launch and
    recorded in the session's durable state. Nothing ever re-resolves.
 
-A shorthand reaching no usable candidate fails with an error asking for a
-model. There is no implicit default model.
+A shorthand reaching no candidate fails with an error asking for a model.
+There is no implicit default model.
 
 ### Configuration
 
-One new key: `preferred_harnesses`, an ordered preference shipped with a sane
-default covering all supported harnesses, so zero-config works — unavailable
-harnesses drop out of the corpus naturally. A future `default_model` may be
-added; initially an underspecified launch fails and asks.
+One new key: `preferred_harnesses`, an ordered preference used only for the
+no-history tie above, shipped with a sane default covering all supported
+harnesses so zero-config works. A future `default_model` may be added;
+initially an underspecified launch fails and asks.
 
 ### Stability convention
 
-Shorthand is a human/agent ergonomic affordance; its meaning legitimately
-advances when a new family member releases. The echo makes that visible and
-the frozen record makes it auditable. Automation needing reproducibility uses
-the canonical form.
+Shorthand is a human/agent ergonomic affordance: `fable` means "the fable I
+last used", and switches to a new release only when the caller picks it once
+(canonically or via the picker). The echo makes each resolution visible and
+the frozen record makes it auditable. Automation needing reproducibility
+uses the canonical form.
 
 ## Consequences
 
-- Resolution happens on the target host, so its actual installation and
-  credentials govern availability in multi-host launches.
+- Resolution happens on the target host, so its actual installation,
+  credentials, and harness-side scope govern availability in multi-host
+  launches.
 - Echo + freeze are required contract, not diagnostics: a shorthand may
   resolve differently across time and hosts by design.
-- Family shorthand correctness depends on accurate family identity and
-  version ordering in catalogs (see open questions).
-- CLI resolution and the web picker consume one catalog capability and cannot
-  disagree about what is launchable.
+- Selection needs no model-family identity or version-ordering knowledge:
+  recency replaces "latest within a family". A newly released model is
+  adopted by using it once, not automatically.
+- CLI resolution and the web picker consume one adapter capability and
+  cannot disagree about what is launchable.
+- gmux launch history becomes resolution input and must be recorded per
+  (model, harness) with effort.
 
 ## Rejected alternatives
 
-- **User-maintained aliases** — drift, require an edit per release, and fail
-  the "latest fable without config" requirement.
+- **User-maintained aliases in gmux** — a second curation surface that
+  drifts from the harness-side scope; scope plus recency covers the need.
+- **Family/version machinery ("latest fable")** — requires cross-harness
+  model-family identity and version ordering that no harness reports today;
+  recency gives a simpler, more predictable meaning with zero new metadata.
 - **Auto-populated preferences from usage** — self-modifying configuration
-  the user never wrote; history stays runtime data with its two narrow jobs.
+  the user never wrote; history stays runtime data.
 - **Most-common-usage ranking** — frequency entrenches old choices; recency
-  only, as tiebreaker.
-- **Silent cross-harness or cross-provider fallback** — changes capabilities,
-  configuration, and privacy semantics; fail with candidates instead.
+  only.
+- **Silent cross-harness or cross-provider fallback** — changes
+  capabilities, configuration, and privacy semantics; fail with candidates
+  instead.
 - **Substring/edit-distance fuzzy matching** — admits accidental neighbors;
   whole-token equality has a stable, explainable boundary.
-- **History expanding the catalog** — past use is not evidence of present
-  launchability.
+- **History expanding the corpus** — past use is not evidence of present
+  scope or launchability.
 
 ## Open questions
 
-- **Cross-harness model-family identity** — the one real design risk: "latest
-  fable" requires knowing fable-5 and fable-6 are one family, including when
-  different harnesses expose them. Declared per adapter, reconciled centrally,
-  or inferred from naming?
-- **Catalog capability wire shape**: framing, refresh/invalidation, and how
-  pi's scoped-model list maps to usability and ranking.
+- **Adapter capability wire shape**: framing, refresh/invalidation, and the
+  per-harness mapping (pi exposes scoped models via RPC; Claude's list
+  requires the SDK/adapter or reading its settings; Codex's `model/list`
+  needs `hidden` filtering).
+- **Adapter-side recency as a cold-start hint**: pi persists a single
+  last-used model/effort default; whether adapters should report it to seed
+  resolution before any gmux history exists.
 - Whether this resolver also powers `gmux agent prompt` on existing sessions
   that permit changing model; this ADR governs launch selection only.
