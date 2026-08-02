@@ -12,7 +12,7 @@ gmux 2.0 is a breaking release. It starts with a clean SQLite state store; it do
 1. Upgrade every machine (and rebuild devcontainers) **together** — 2.0 hosts can't peer with 1.x hosts.
 2. Update scripts and muscle memory to the verb-first CLI: `gmux -- <cmd>` to run, `gmux open` for the UI, `gmux ls/attach/send/wait/kill` instead of flags.
 3. Re-add each remote host with its connect URL (**Settings → Hosts → Connect to host**, using `gmux auth` on that host), then add the projects you want under **Settings → Projects → From other hosts**.
-4. Recreate local projects. Running 1.x sessions can re-register, but dead history, project order, references, and connected hosts do not carry over.
+4. Recreate local projects. Restart any sessions that were running under 1.x — they, along with dead history, project order, references, and connected hosts, do not carry over.
 5. If you parse gmux JSON: `kind` → `adapter`, `session_file` → `conversation_file`.
 
 ---

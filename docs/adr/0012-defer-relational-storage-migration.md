@@ -6,6 +6,7 @@
 > stores. ADR 0026 later replaced that decision with authoritative SQLite for
 > daemon-owned state. The body below is preserved as the rationale at the time,
 > not as current implementation guidance.
+
 **Date:** 2026-06-16
 **Related:** ADR 0002 (project ownership; share-nothing peering), ADR 0010 /
 ADR 0011 (authoritative attribution + runner-owned state)

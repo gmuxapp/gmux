@@ -85,7 +85,7 @@ Sessions are grouped into **projects** by working directory — manage the proje
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
 - **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
-- **Session lifecycle** — live status, exit codes, kill from the UI; supported adapter conversations remain resumable
+- **Session lifecycle** — live status, exit codes, kill from the UI; dead sessions stay resumable (agent conversations continue, other commands re-run)
 - **Reconnecting** — tab away, come back, the terminal is right where you left it
 - **Editor tabs** — `gmux edit <file>` opens a managed editor session; works as `$EDITOR` (blocks and propagates the exit code, so `git commit` just works)
 
