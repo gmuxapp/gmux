@@ -219,17 +219,17 @@ Driven launches address what the caller actually chooses — a model, an
 effort, and a harness to run them in — with one spec syntax:
 
 ```text
-gmux agent prompt --new anthropic/claude-fable-5:low@pi 'review this branch'
+gmux agent prompt --new --model anthropic/claude-fable-5:low@pi 'review this branch'
 ```
 
 `model:effort@harness` is the canonical long-term surface for driven
-launches, replacing the `--adapter` + `--model` flag pair as those verbs
-mature. The harness names the identity (decision 1); the drive mode is not
-part of the spec — gmux selects it per the harness's available backends and
-the user's `preferred_backends` configuration (shipped with a sane default
-order). Every component is optional shorthand in practice: the **resolver**
+launches, carried by `--model` and replacing the separate `--adapter` flag
+as those verbs mature (the positional argument remains the session address,
+per ADR 0027/0031). The harness names the identity (decision 1); the drive
+mode is not part of the spec — gmux selects it per the harness's available
+modes. Every component is optional shorthand in practice: the **resolver**
 — unique whole-token shorthand matching over the usable catalogs, recency
-tiebreak, and the `preferred_backends` semantics — is deliberately **not
+tiebreak, and the `preferred_harnesses` semantics — is deliberately **not
 specified here** and is reserved for a follow-up ADR. This ADR fixes only
 the canonical shape and that resolution operates over (harness, mode) pairs
 whose capability sets this document defines.
@@ -401,8 +401,8 @@ the `initialize` handshakes exercised live. Answers adopted here:
 Genuinely open, deferred to the runner work (and the follow-up ADRs named):
 
 - **The session-spec resolver** (decision 5): shorthand matching over usable
-  catalogs, recency tiebreak, and `preferred_backends` semantics are decided
-  by ADR 0034; catalog wire shape and preference identifiers remain open there.
+  catalogs, recency tiebreak, and `preferred_harnesses` semantics are decided
+  by ADR 0034; catalog wire shape remains open there.
 - **Permission policy defaults and UI**: auto-allow/allow-safe/ask tiers,
   timeout behavior, ADR 0018 notification shape.
 - **Adapter distribution and binary policy**: bundling vs `npx`, pin cadence,
