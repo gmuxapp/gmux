@@ -16,11 +16,31 @@ func TestParseClaudeHookCLI(t *testing.T) {
 	if err != nil || cmd.mode != modeClaudeHook {
 		t.Fatalf("want modeClaudeHook, got %+v err=%v", cmd, err)
 	}
+	cmd, err = parseCLI([]string{"__claude-ready"})
+	if err != nil || cmd.mode != modeClaudeReady {
+		t.Fatalf("want modeClaudeReady, got %+v err=%v", cmd, err)
+	}
 }
 
 func TestRunClaudeHookInertWithoutSocket(t *testing.T) {
 	// No socket: must drain stdin and return without panicking.
 	runClaudeHook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit"}`), "")
+}
+
+func TestClaudeSessionStartSchedulesDelayedReadiness(t *testing.T) {
+	old := scheduleClaudeReady
+	defer func() { scheduleClaudeReady = old }()
+	called := ""
+	scheduleClaudeReady = func(sock string) { called = sock }
+	runClaudeHook(strings.NewReader(`{"hook_event_name":"SessionStart"}`), "/tmp/runner.sock")
+	if called != "/tmp/runner.sock" {
+		t.Fatalf("scheduled socket = %q", called)
+	}
+	called = ""
+	runClaudeHook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit"}`), "/tmp/runner.sock")
+	if called != "" {
+		t.Fatalf("non-start event scheduled readiness: %q", called)
+	}
 }
 
 func TestRunClaudeHookPosts(t *testing.T) {

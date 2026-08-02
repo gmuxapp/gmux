@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
@@ -41,6 +43,44 @@ func runClaudeHook(in io.Reader, sock string) {
 	for _, body := range adapters.ClaudeHookBodies(input) {
 		postClaudeHookEvent(sock, body)
 	}
+	var event struct {
+		Name string `json:"hook_event_name"`
+	}
+	if json.Unmarshal(input, &event) == nil && event.Name == "SessionStart" {
+		scheduleClaudeReady(sock)
+	}
+}
+
+// Claude invokes SessionStart before its interactive composer can reliably
+// retain terminal input. A detached helper reports readiness after that startup
+// window; keeping the delay out of the awaited hook lets Claude finish mounting
+// its UI. Duplicate SessionStart events are harmless because runner readiness
+// is idempotent.
+var scheduleClaudeReady = func(sock string) {
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(self, "__claude-ready")
+	cmd.Env = append(os.Environ(), "GMUX_SESSION_SOCK="+sock)
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
+	}
+}
+
+const claudeComposerStartupDelay = 2 * time.Second
+
+func claudeReady() int {
+	runClaudeReady(os.Getenv("GMUX_SESSION_SOCK"), claudeComposerStartupDelay)
+	return 0
+}
+
+func runClaudeReady(sock string, delay time.Duration) {
+	if sock == "" {
+		return
+	}
+	time.Sleep(delay)
+	postClaudeHookEvent(sock, []byte(`{"op":"ready"}`))
 }
 
 // postClaudeHookEvent POSTs one event body to the runner's /hook/event over the

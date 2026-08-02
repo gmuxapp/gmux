@@ -90,6 +90,8 @@ func main() {
 		os.Exit(codexHook(cmd.codexHookEvent))
 	case modeClaudeHook:
 		os.Exit(claudeHook())
+	case modeClaudeReady:
+		os.Exit(claudeReady())
 	}
 }
 

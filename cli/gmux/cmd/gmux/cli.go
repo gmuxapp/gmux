@@ -34,6 +34,7 @@ const (
 	modeDumpEnv                // (internal) gmux __dump-env
 	modeCodexHook              // (internal) gmux __codex-hook <Event>
 	modeClaudeHook             // (internal) gmux __claude-hook
+	modeClaudeReady            // (internal) delayed Claude composer readiness
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -244,6 +245,11 @@ func parseCLI(args []string) (*command, error) {
 		return &command{mode: modeCodexHook, codexHookEvent: rest[0]}, nil
 	case "__claude-hook":
 		return &command{mode: modeClaudeHook}, nil
+	case "__claude-ready":
+		if len(rest) != 0 {
+			return nil, errors.New("__claude-ready takes no arguments")
+		}
+		return &command{mode: modeClaudeReady}, nil
 	case "__edit-child":
 		// Child process of an editor session: prompt (if needed) and exec
 		// the fallback editor. Reuses the editFile field.
