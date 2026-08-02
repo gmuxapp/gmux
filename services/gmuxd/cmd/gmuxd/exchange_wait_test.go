@@ -65,6 +65,18 @@ func TestActiveExchangeReconciliationBeforeAndAfterPersistence(t *testing.T) {
 	}
 }
 
+func TestActiveExchangeReconciliationAnonymousHookFrameDoesNotDuplicateBoundary(t *testing.T) {
+	native := []adapter.Exchange{{Ordinal: 1, User: "real persisted prompt", Iterations: 1, Terminal: "stale"}}
+	current := &sessioncoord.TurnCurrent{Exchanges: []sessioncoord.TurnExchange{{User: ""}}}
+	got := reconcileActiveExchanges(native, current)
+	if len(got) != 1 || got[0].User != "real persisted prompt" || got[0].Terminal != "" {
+		t.Fatalf("anonymous hook frame duplicated or corrupted boundary: %+v", got)
+	}
+	if got := reconcileActiveExchanges(nil, current); len(got) != 0 {
+		t.Fatalf("anonymous pre-persistence frame became an empty user exchange: %+v", got)
+	}
+}
+
 func TestActiveExchangeReconciliationEvictionAndHookLag(t *testing.T) {
 	zero := 0
 	var native []adapter.Exchange
@@ -247,8 +259,13 @@ func TestConversationExchangeEndpointMatrix(t *testing.T) {
 	if err := os.WriteFile(conv, []byte("{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"one\"}}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":\"a\"}}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"two\"}}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	codexConv := filepath.Join(dir, "codex.jsonl")
+	if err := os.WriteFile(codexConv, []byte("{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"inspect this\"}]}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"observed\"}]}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, sess := range []centralstore.NewSession{
 		{ID: "pi", Adapter: "pi", ConversationRef: conv, Command: []string{"pi"}, CreatedAt: 1},
+		{ID: "codex", Adapter: "codex", ConversationRef: codexConv, Command: []string{"codex"}, CreatedAt: 1},
 		{ID: "shell", Adapter: "shell", Command: []string{"sh"}, CreatedAt: 1},
 	} {
 		if _, _, err := st.InsertSession(ctx, sess); err != nil {
@@ -266,6 +283,9 @@ func TestConversationExchangeEndpointMatrix(t *testing.T) {
 	}
 	if body := check("pi", "?tail=1", 200); !strings.Contains(body, "[1 previous exchange]") || !strings.Contains(body, "[USER]: two") {
 		t.Fatalf("tail report=%q", body)
+	}
+	if body := check("codex", "", 200); !strings.Contains(body, "[USER]: inspect this") || !strings.Contains(body, "observed") {
+		t.Fatalf("codex report=%q", body)
 	}
 	check("pi", "?tail=0", 400)
 	check("pi", "?types=user", 400)

@@ -293,19 +293,25 @@ func TestExtractCodexUserText(t *testing.T) {
 }
 
 func TestIsCodexSystemContext(t *testing.T) {
-	if !isCodexSystemContext("<permissions instructions>stuff") {
-		t.Error("should detect permissions")
+	for _, context := range []string{
+		"<permissions instructions>stuff</permissions instructions>",
+		"<environment_context>stuff</environment_context>",
+		"# AGENTS.md instructions for /tmp\n<INSTRUCTIONS>stuff</INSTRUCTIONS>",
+		"<turn_aborted>The user aborted</turn_aborted>",
+	} {
+		if !isCodexSystemContext(context) {
+			t.Errorf("should detect complete context %q", context)
+		}
 	}
-	if !isCodexSystemContext("<environment_context>stuff") {
-		t.Error("should detect environment_context")
-	}
-	if !isCodexSystemContext("# AGENTS.md instructions for /tmp") {
-		t.Error("should detect AGENTS.md")
-	}
-	if !isCodexSystemContext("<turn_aborted>The user aborted") {
-		t.Error("should detect turn_aborted")
-	}
-	if isCodexSystemContext("Fix the auth bug") {
-		t.Error("should not flag user text as system context")
+	for _, prompt := range []string{
+		"Fix the auth bug",
+		"<permissions please explain the deployment steps",
+		"<environment_context> is an XML element; explain it",
+		"# AGENTS.md is the heading I want to use",
+		"<turn_aborted> can appear in documentation",
+	} {
+		if isCodexSystemContext(prompt) {
+			t.Errorf("should retain ambiguous user prompt %q", prompt)
+		}
 	}
 }
