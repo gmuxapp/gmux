@@ -1,78 +1,32 @@
 ---
 title: Using the UI
-description: What you see in gmux and how to work with it.
+description: A tour of the gmux dashboard — from your first session to working from your phone.
 ---
 
 Running `gmux open` opens the dashboard in a dedicated browser window. You can also navigate to **[localhost:8790](http://localhost:8790)** directly; the first time you'll need to authenticate by visiting the login URL from `gmux auth`.
 
-## The sidebar
+## The dashboard
 
-The left panel lists your sessions grouped into projects.
+![The gmux dashboard: sessions grouped by project in the sidebar, recent activity on the home screen](../../assets/hero-desktop.png)
 
-### Logo
+The **sidebar** lists your sessions, grouped into projects. The **home screen** on the right is a feed of recent activity. Everything updates live — no refreshing.
 
-Click the **gmux** logo at the top of the sidebar to return to the home screen. The logo doubles as a cue: it lights up when a session elsewhere is waiting on you. The gear button next to it opens **Settings**; a red pip on the gear flags unresolved host references.
+Three controls sit in the sidebar header:
 
-### List options
+- The **gmux logo** returns you home. It lights up when a session elsewhere is waiting on you.
+- The **gear** opens **Settings** (projects, hosts, notifications). A red pip on it flags a host reference that needs attention.
+- The **arrange button** switches the sidebar between **Projects** (grouped, your order) and **Activity** (flat, by recency) views, narrows the tab to one host, or hides dead sessions. A dot on the button marks any non-default state.
 
-The arrange button next to the gear opens a compact menu controlling how the sidebar presents your sessions:
+## Your first project
 
-- **View** — **Projects** (the default: grouped by project, your manual order) or **Activity** (a flat list ordered by output recency and grouped by calendar day). The choice is stored in the URL (`?sidebar=activity`), so each tab keeps its own view.
-- **Host** — narrow the tab to a single host. Picking a host adds a filter chip above the list; **All hosts** clears it.
-- **Alive only** — hide dead-but-resumable sessions. This one is per-tab and intentionally forgotten when the tab closes (after a reboot every session is resumable, so a remembered toggle would greet you with an empty sidebar).
+A fresh sidebar is empty **by design**: gmux discovers sessions but never adds anything to the sidebar on its own. Two ways to fill it:
 
-A dot on the arrange button marks any non-default state.
+- **Launch from the UI.** On a fresh install the sidebar shows a single **+** button; launching from it creates a default *home* project that catches sessions started in your home directory. Once you have projects, hover a project name to reveal its **+** — it launches in that project's own directory, and the menu lists the agents installed on that host (Shell, pi, Claude Code, Codex, Editor). Double-click the **+** to launch the default instantly.
+- **Add the directory you already work in.** Sessions launched from the CLI in other directories stay out of the sidebar until their project exists. Open **Settings → Projects**: gmux lists the *Discovered* directories it noticed sessions in, so adding yours is one click (or type a path).
 
-### Filtering a tab
+Each project matches sessions by filesystem path (the directory and everything under it) or by git remote URL (grouping clones and worktrees). Drag to reorder, click a project name to collapse its folder. Projects on other machines aren't matched by rules — add them under **Settings → Projects → From other hosts** once the host is [connected](/multi-machine/).
 
-A tab can be narrowed to specific projects or hosts with the `?filter=` URL parameter — a comma-separated list of selectors:
-
-| Selector | Matches |
-|----------|---------|
-| `gmux` | the gmux project on every host |
-| `*@server` | everything on the host named `server` |
-| `gmux@server` | exactly that project on that host |
-
-Multiple selectors combine as a union: `?filter=gmux,api@server`. The filter scopes the whole tab — sidebar, home dashboard, and the waiting indicator — and every in-app link preserves it. Each selector shows as a removable chip above the sidebar list.
-
-Because the filter lives in the URL, a narrowed tab is bookmarkable: keep one browser window per project, pin a tab to a remote host, or add a filtered view to your phone's home screen. Your own host matches by its hostname or the alias `local`.
-
-## Home: the Activity dashboard
-
-The home screen is a recent overview of live sessions across all hosts. Sessions are ordered by `last_output_at` (falling back to creation time) and grouped into Today, Yesterday, recent weekdays, and dates. Working, unread, and error state changes the row indicator; it does not move the row into a separate status section. Home omits the older dated tail, while the sidebar's Activity view keeps the full alive/resumable feed.
-
-An **Enable notifications** pill in the Activity header opts into browser notifications. Project and host management live in **Settings** (gear button in the sidebar header).
-
-## Settings → Hosts
-
-Hosts you add via **Settings → Hosts → Connect to host** persist across restarts and reconnect automatically. gmux does not auto-discover tailnet machines — adding one is an explicit, token-authenticated step (see [Multi-Machine](/multi-machine/) and [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
-
-In **Settings → Hosts**, each host shows an explicit status:
-
-| Status | Meaning |
-|--------|---------|
-| **Online** | Connected and authenticated |
-| **Connecting…** | Handshake in progress |
-| **Auth needed** | Reachable, but the token is missing or wrong — an **Add token** button pre-fills the connect form so you can supply it |
-| **Offline** | Unreachable right now (shows the connection error); it reconnects on its own when the host comes back |
-
-Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
-
-## Projects
-
-Sessions don't appear in the sidebar until you add a project. On a fresh install, the empty sidebar shows a single **+** button; launching from it creates a default "home" project that catches sessions started in your home directory itself. Sessions launched from the CLI in other directories stay out of the sidebar until you add their project — open **Settings → Projects** and add it from the *Discovered* list.
-
-In the sidebar, sessions are grouped into a **folder** per project. Click a **project name** to collapse or expand its folder (a chevron shows the state); the header stays pinned to the top of the list while you scroll through its sessions. Collapsed state is remembered per browser tab.
-
-Each project has host-local **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or git remote URL. To show a network host's project, configure it on that host and add it under **Settings → Projects → From other hosts**; rules do not group sessions across network hosts automatically.
-
-You can manage projects at any time in **Settings → Projects** (gear button in the sidebar header, or the `?settings` URL parameter):
-
-- **Your projects**: configured projects with their match rules. Drag to reorder, click **×** to remove.
-- **Discovered**: directories gmux noticed from active sessions that don't match any project — including directories advertised by connected network hosts for their own unmatched sessions. Type to filter, click **Add**, or enter a local path manually.
-- **From other hosts**: projects advertised by connected network hosts. Add a reference here before that project's sessions appear in this dashboard.
-
-## Sessions
+## Reading a session row
 
 Each session has a dot on the left edge:
 
@@ -86,127 +40,43 @@ Each session has a dot on the left edge:
 
 Agent sessions (pi, Claude, Codex) only trigger the unread dot when the assistant completes a turn, not on every line of output.
 
-Hover over a session to reveal the **×** button. Dismissing a session stops it **and every session it launched**, then removes them all from the UI. Dismissal is not permanent data deletion: agent conversations stay in their own tools, and the session's terminal history is kept until gmux eventually cleans it up.
-
-## The activity dashboard
-
-Home (`/`) is an output-recency view of live sessions. It shows Today, Yesterday, and recent weekday buckets and omits the older dated tail.
-
-A session row surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. Remote rows use host/project phrases and conditional icons; `@peer` is CLI reference syntax, not a literal suffix shown on every row.
-
-The sidebar's **Activity** view uses the same day grouping at compact density and retains the complete alive/resumable feed, including older dated buckets.
+A row shows its working directory only when it differs from the project's folder — a subfolder or worktree appears as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere unexpected are easy to spot. Sessions on other machines carry their host name and a container icon where relevant.
 
 ## The terminal
 
-Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work. The header bar shows the session title and a status chip: **Working…**/**Error** while an agent is busy, **Exited (N)** for dead sessions, **Resuming…** during a resume.
+Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/) — colors, cursor positioning, mouse support, and images all work. The header shows the session title and a status chip: **Working…**/**Error** while an agent is busy, **Exited (N)** for dead sessions, **Resuming…** during a resume.
 
-### Find in terminal
-
-Press **Cmd/Ctrl+F** (or use the session **⋮** menu → *Find in terminal*) to open a floating find bar over the terminal. Search is incremental; step through matches with Enter/Shift+Enter or the ‹ › buttons, and press Escape to close. This replaces the browser's in-page find, which can't see into a canvas-rendered terminal.
-
-### Session menu
-
-The **⋮** menu in the terminal header offers *Find in terminal*, one lifecycle action (**Restart** for alive sessions; **Resume** or **Rerun** for dead ones — dead sessions also show the same action as a primary button over the replay), and session info (adapter, version, host). An **outdated** badge appears when the session's runner binary is stale relative to the daemon — restart the session to pick up the new version.
+- **Find in terminal** — press **Cmd/Ctrl+F** for a floating find bar (the browser's own find can't see into a canvas-rendered terminal). Enter/Shift+Enter step through matches; Escape closes.
+- **The ⋮ menu** — *Find in terminal*, one lifecycle action (**Restart** for alive sessions, **Resume**/**Rerun** for dead ones), and session info (adapter, version, host). An **outdated** badge means the session's runner predates the current daemon — restart the session to pick up the new version.
+- **Dead sessions** replay their terminal history read-only, with Resume/Rerun as the primary action — agent conversations continue where they left off; other commands re-run in the same directory.
+- **Dismiss** — hover a session in the sidebar and click **×**. This stops the session **and every session it launched**, then removes them from the UI. It is not data deletion: agent conversations stay in their own tools, and terminal history is kept until gmux eventually cleans it up.
 
 Backend or action failures surface as error toasts.
 
-## Launching sessions
+## When sessions pile up
 
-### From the command line
+The **home screen** (`/`) is a feed of live sessions ordered by their last output, grouped into Today, Yesterday, and recent weekdays. Status changes a row's indicator, not its position — the queue stays stable while you work down it, and a session floats up only when it produces new output. Older sessions drop off home; the sidebar's **Activity** view (arrange button) keeps the complete feed, including dead-but-resumable sessions and older dates, in the sidebar's compact density.
 
-```bash
-gmux -- pi              # coding agent
-gmux -- sh -c 'while true; do date; sleep 5; done'  # any long-running command
-```
+An **Enable notifications** pill in the Activity header opts this browser into notifications for turns that finish while you're elsewhere.
 
-```bash
-gmux -d -- make build   # detached; prints the session id
-gmux edit notes.md      # editor session; also works as $EDITOR
-```
+## On your phone
 
-### From the UI
-
-Launch from the sidebar: hover a project name to reveal a **+** button. It launches in the project's own directory — the first configured path for a project you own, or the upstream directory for a [referenced](/multi-machine) project (which routes to the owning machine) — regardless of which session you're currently viewing. Before you've added any projects, the sidebar shows a single **+** to start your first session.
-
-Launch menus show the adapters available on that host (by default: Shell, pi, Claude Code, Codex, Editor — whichever are installed). The first item aligns with the **+** button so a double-click launches the default adapter instantly.
-
-## URL routing
-
-Every view has a stable URL:
-
-| URL pattern | What it shows |
-|-------------|---------------|
-| `/` | Home: the Activity dashboard |
-| `/:project` | Redirects to home (project hub pages were retired) |
-| `/:project/:adapter/:slug` | A specific session's terminal |
-| `/@:owner/:project/...` | A project owned by a peer host |
-
-For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. URLs update as you navigate, work with browser back/forward, and are bookmarkable. Session slugs remain stable across kill and resume.
-
-Two query parameters define a tab's identity and are preserved across in-app navigation: `?filter=` (narrow the tab to projects/hosts — see [Filtering a tab](#filtering-a-tab)) and `?sidebar=activity` (the sidebar's Activity view). Both are omitted in the default state.
-
-## Keyboard shortcuts
-
-gmux ships a complete default keymap. Keys not listed here go straight to the terminal.
-
-### All platforms
-
-| Shortcut | Action |
-|----------|--------|
-| **Shift+Enter** | Sends a plain newline (`\n`) instead of Enter |
-| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT |
-| **Cmd/Ctrl+F** | Open find-in-terminal (replaces the browser's in-page find) |
-
-### Linux / Windows
-
-| Shortcut | Action |
-|----------|--------|
-| **Ctrl+Shift+C** | Copy selection to clipboard |
-| **Ctrl+V** | Paste from clipboard |
-| **Ctrl+Shift+V** | Paste from clipboard |
-| **Ctrl+Alt+T** | Sends Ctrl+T (browser steals Ctrl+T) |
-| **Ctrl+Alt+N** | Sends Ctrl+N (browser steals Ctrl+N) |
-| **Ctrl+Alt+W** | Sends Ctrl+W (browser steals Ctrl+W) |
-| **Ctrl+Backspace** | Delete word backward |
-| **Ctrl+Delete** | Delete word forward |
-
-### Mac
-
-| Shortcut | Action |
-|----------|--------|
-| **Cmd+C** | Copy selection to clipboard |
-| **Cmd+V** | Paste from clipboard |
-| **Cmd+A** | Select all terminal content |
-| **Cmd+Left** | Home (beginning of line) |
-| **Cmd+Right** | End (end of line) |
-| **Cmd+Backspace** | Delete to start of line (sends Ctrl+U) |
-| **Cmd+K** | Clear screen (sends Ctrl+L) |
-
-All defaults can be overridden or disabled in [`settings.jsonc`](/reference/settings/#keybinds-guide).
-
-:::note[macCommandIsCtrl]
-If you prefer every Cmd+character to send its Ctrl equivalent (Cmd+A = beginning of line, Cmd+K = kill to end, Cmd+R = reverse search), enable [`macCommandIsCtrl`](/reference/settings/#maccommandisctrl).
-:::
-
-:::tip[App mode]
-`gmux` tries to open in Chrome/Chromium `--app` mode for a standalone window with full keyboard access. If it falls back to a regular browser tab, shortcuts like Ctrl+T, Ctrl+N, and Ctrl+W are intercepted by the browser. The Ctrl+Alt workarounds in the table above cover this case. You can also install gmux as a PWA from the browser menu (⋮ → Install gmux).
-:::
-
-## Mobile
-
-Open the same URL on your phone (or via [remote access](/remote-access)). The sidebar slides in from the left (tap ☰ — a badge on it flags waiting sessions), and a bottom toolbar provides keys that phones don't have:
+Open the same URL on your phone — or from anywhere via [remote access](/remote-access/). The sidebar slides in from the left (tap **☰**; a badge on it flags waiting sessions), and a bottom toolbar supplies the keys phones don't have:
 
 | Button | Sends |
 |--------|-------|
-| **☰** | Opens the sidebar |
-| **esc** | Escape |
-| **tab** | Tab |
-| **ctrl** | Arms Ctrl for the next key (tap ctrl, then c = Ctrl+C) |
-| **alt** | Arms Alt for the next key |
+| **esc** / **tab** | Escape / Tab |
+| **ctrl** / **alt** | Arms the modifier for the next key: tap **ctrl**, then `c`, for Ctrl+C |
 | **← ↑ ↓ →** | Arrow keys (hold to repeat) |
 | **⇤ ⇥** | Word-jump left / right |
 | **▶** | Send (Enter; Alt+Enter when alt is armed) |
 
-When **ctrl** or **alt** is armed, the key highlights and applies to the next key you press — on the toolbar or the on-screen keyboard — then disarms. Keys never change meaning. When you've scrolled up, an extra key jumps back to the bottom. The toolbar works with the keyboard closed, and on narrow phones it wraps into two rows.
+An armed **ctrl**/**alt** highlights, applies to the next key — toolbar or on-screen keyboard — then disarms; keys never change meaning. Long-press a link in the terminal to copy it or open it in a new tab; paste goes through the paste keybind or long-press.
 
-Long-press a link in the terminal to copy it or open it in a new tab. Paste goes through the paste keybind or long-press, not a toolbar key.
+## Going further
+
+- **[Keyboard shortcuts](/reference/settings/#default-keymap)** — the full default keymap, copy/paste per platform, and how to override any of it.
+- **[URLs and filters](/reference/urls/)** — every session has a stable, bookmarkable URL, and a tab can be narrowed to specific projects or hosts.
+- **[Multi-machine](/multi-machine/)** — connect other hosts and see their sessions here; **Settings → Hosts** shows each host's connection status.
+- **[CLI reference](/reference/cli/)** — everything the UI does is also scriptable.
+- **[Theme](/reference/theme/)** — terminal palette and UI theme via `theme.jsonc`.

@@ -38,7 +38,7 @@ The daemon starts automatically on first use; there's nothing else to set up. Cl
 - **Agents report their own state** — pi, Claude Code, and Codex get a small hook injected at launch and report their conversation, title, and active/idle state themselves. No output scraping. [Integrations →](https://gmux.app/integrations/claude-code/)
 - **Built for orchestration** — a machine-oriented CLI (`gmux agent`, `gmux wait`, `gmux ls --json`, tmux-compatible `send-keys`) with stable exit codes, so scripts and agents can drive other agents. [Orchestrating agents →](https://gmux.app/orchestrating-agents/)
 - **Full terminal, anywhere** — persisted scrollback that replays on reconnect, flicker-free session switching, find-in-terminal, and a phone UI that's actually usable. [Using the UI →](https://gmux.app/using-the-ui/)
-- **Sessions outlive processes** — exit codes and terminal history stick around; agent conversations resume, other commands re-run. [Sessions →](https://gmux.app/using-the-ui/#sessions)
+- **Sessions outlive processes** — exit codes and terminal history stick around; agent conversations resume, other commands re-run. [Sessions →](https://gmux.app/using-the-ui/#the-terminal)
 - **Multi-machine** — connect hosts with token-authenticated peering and see every machine's sessions in one sidebar; devcontainers are discovered automatically. [Multi-machine →](https://gmux.app/multi-machine/)
 - **Remote access built in** — `gmux remote` serves the dashboard over your tailnet with HTTPS, no ports to open. [Remote access →](https://gmux.app/remote-access/)
 - **Editor tabs** — `gmux edit <file>` works as `$EDITOR`, so `git commit` inside a session opens a managed tab and blocks until you're done.

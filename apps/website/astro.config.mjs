@@ -55,6 +55,7 @@ export default defineConfig({
             { label: 'Interface stability', slug: 'reference/stability' },
             { label: 'Settings', slug: 'reference/settings' },
             { label: 'Theme', slug: 'reference/theme' },
+            { label: 'URLs and filters', slug: 'reference/urls' },
           ],
         },
         {

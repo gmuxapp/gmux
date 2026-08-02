@@ -82,9 +82,17 @@ Each spoke connection is independent. A slow or dead spoke never blocks the hub 
 When a spoke goes offline:
 
 - Its ephemeral session projection is removed, so its sessions disappear until it reconnects. Configured host and project-reference rows remain.
-- The host shows as **Offline** in Settings → Hosts (with the connection error as detail); a host whose token is missing or wrong shows **Auth needed** instead.
 - The hub reconnects with exponential backoff (1s initial, 30s max, reset on success).
 - When the spoke comes back, its referenced projects and sessions reappear. No user action is needed.
+
+**Settings → Hosts** shows each host's explicit status:
+
+| Status | Meaning |
+|--------|---------|
+| **Online** | Connected and authenticated |
+| **Connecting…** | Handshake in progress |
+| **Auth needed** | Reachable, but the token is missing or wrong — an **Add token** button pre-fills the connect form so you can supply it |
+| **Offline** | Unreachable right now (shows the connection error); it reconnects on its own when the host comes back |
 
 ### Connection health detection
 
