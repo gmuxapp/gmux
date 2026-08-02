@@ -48,4 +48,13 @@ moon run :lint    # all lint/typecheck
 
 ## Project structure
 
-See [README.md](README.md) for workspace layout and the [website docs](apps/website/src/content/docs/) for architecture, protocol specs, and guides.
+| Path | Language | Purpose |
+|------|----------|---------|
+| `cli/gmux` | Go | Session launcher — PTY, WebSocket, runner |
+| `services/gmuxd` | Go | Machine daemon — discovery, state store, WS proxy, embedded web UI |
+| `packages/*` | Go | Shared libraries — adapters, paths, scrollback, session env |
+| `apps/gmux-web` | TypeScript/Preact | Browser UI — sidebar, terminal, header bar |
+| `packages/protocol` | TypeScript | Shared schemas, zod-validated |
+| `apps/website` | Astro/Starlight | Documentation site ([gmux.app](https://gmux.app)) |
+
+See the [architecture docs](https://gmux.app/architecture/) and the [develop guides](apps/website/src/content/docs/develop/) for how the pieces fit together.
