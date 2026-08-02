@@ -66,15 +66,19 @@ advances — never an ambiguous guess.
    complete token of the model name (`sol` matches `gpt-5.6-sol`, not
    `solar`). This is **partial-name specification, not fuzzy matching** — no
    substring, prefix, or edit-distance search. A unique match resolves.
-3. **Recency selects among multiple matches**: the match most recently
-   launched through gmux wins. Ties without usable history (e.g. never-used
-   matches) fall to `preferred_harnesses` order across harnesses; if still
-   ambiguous, fail listing the canonical candidates — an agent retries
-   cheaply with a longer token. History never introduces a candidate the
-   corpus did not offer.
-4. **Effort default**: when effort is omitted, use the resolved model's most
+3. **Harness preference narrows first**: when matches span multiple
+   harnesses (the same model is often in scope in several), only the
+   matches from the highest-ranked harness in `preferred_harnesses` remain.
+   The shorthand never launches via a lower-ranked harness while a
+   higher-ranked one offers a match — use canonical `@harness` to override.
+4. **Recency selects among the remaining matches**: the one most recently
+   launched through gmux wins. With no usable history and multiple
+   remaining matches, fail listing the canonical candidates — an agent
+   retries cheaply with a longer token. History never introduces a
+   candidate the corpus did not offer.
+5. **Effort default**: when effort is omitted, use the resolved model's most
    recent gmux launch effort; otherwise the harness default.
-5. **Echo and freeze**: the resolved canonical form is printed at launch and
+6. **Echo and freeze**: the resolved canonical form is printed at launch and
    recorded in the session's durable state. Nothing ever re-resolves.
 
 A shorthand reaching no candidate fails with an error asking for a model.
@@ -82,16 +86,17 @@ There is no implicit default model.
 
 ### Configuration
 
-One new key: `preferred_harnesses`, an ordered preference used only for the
-no-history tie above, shipped with a sane default covering all supported
-harnesses so zero-config works. A future `default_model` may be added;
+One new key: `preferred_harnesses`, the ordered harness preference of rung
+3, shipped with a sane default covering all supported harnesses so
+zero-config works. It is per-user intent: one user routes shorthand `fable`
+via pi, another via claude, each without canonical specs. A future `default_model` may be added;
 initially an underspecified launch fails and asks.
 
 ### Stability convention
 
 Shorthand is a human/agent ergonomic affordance: `fable` means "the fable I
-last used", and switches to a new release only when the caller picks it once
-(canonically or via the picker). The echo makes each resolution visible and
+last used, via my preferred harness that offers it", and switches to a new
+release only when the caller picks it once (canonically or via the picker). The echo makes each resolution visible and
 the frozen record makes it auditable. Automation needing reproducibility
 uses the canonical form.
 
