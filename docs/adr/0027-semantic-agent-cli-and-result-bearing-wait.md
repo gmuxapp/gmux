@@ -85,9 +85,9 @@ the capability they use; complete adapter support is a release/documentation
 policy, not a composite `AgentAdapter` marker. Peer forwarding and Claude/Codex
 support are follow-ups. *(Amended 2026-08-02 by
 [ADR 0033](0033-session-backends-and-semantic-capability-boundaries.md):
-the Claude/Codex follow-up is an ACP session backend, not this terminal
-path — their terminal sessions stay interactive-only and refuse semantic
-verbs.)*
+the Claude/Codex follow-up is the ACP drive mode, not this terminal path —
+their terminal-mode sessions stay interactive-only and refuse semantic
+verbs, steer permanently.)*
 
 ### 2. `send` is raw; semantic actions belong to `agent`
 

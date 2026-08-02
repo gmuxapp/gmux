@@ -2,8 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-08-02
-**Related:** ADR 0009 (verb-first CLI), ADR 0013 (codex authoritative state via hooks), ADR 0015 (hook translation at the agent side), ADR 0021 (ACP as the normalized conversation schema), ADR 0023 (unified turn model), ADR 0027 (semantic agent CLI and result-bearing wait), ADR 0028 (CLI output channels), ADR 0029 (agent sessions abstract runner residency), ADR 0030 (exchange-oriented reads and observational wait), ADR 0031 (session ID issuance), ADR 0032 (session input doors)
-**Amends:** ADR 0027 §1 (the "Claude/Codex support are follow-ups" clause — the follow-up is an ACP backend, not the terminal path)
+**Related:** ADR 0009 (verb-first CLI), ADR 0013 (codex authoritative state via hooks), ADR 0015 (hook translation at the agent side), ADR 0021 (ACP as the normalized conversation schema), ADR 0022 (adapter-opaque conversation refs), ADR 0023 (unified turn model), ADR 0027 (semantic agent CLI and result-bearing wait), ADR 0028 (CLI output channels), ADR 0029 (agent sessions abstract runner residency), ADR 0030 (exchange-oriented reads and observational wait), ADR 0031 (session ID issuance), ADR 0032 (session input doors)
+**Amends:** ADR 0027 §1 (the "Claude/Codex support are follow-ups" clause — the follow-up is the ACP drive mode, not the terminal path)
 
 ## Context
 
@@ -55,217 +55,392 @@ and hook vocabularies are owned upstream, optimized for humans, and free to
 change without notice. Emulating a user against them yields a contract whose
 every clause rests on an unfalsifiable timing or keybinding assumption.
 
-Meanwhile ADR 0021 already anticipated ACP-native, terminal-less adapters,
-and draft PR #388 holds the gmux-native conversation UI seam (streaming
-text/thinking/tool-calls). ACP is the interface Claude and Codex *do* offer
-for automation: structured prompts, streaming updates, tool calls, permission
-requests, and cancellation — asserted facts, not scraped ones.
+ACP is the interface Claude and Codex *do* offer for automation. ADR 0021
+already anticipated ACP-native, terminal-less operation, and draft PR #388
+holds the gmux-native conversation UI seam (streaming
+text/thinking/tool-calls). An ACP contract spike (report of 2026-08-02,
+`.grove/acp-contract-spike/`) then verified the ground truth against the
+protocol (v1 stable, v2 draft) and both current first-party adapters
+(`claude-agent-acp` 0.64.0, `codex-acp` 1.1.8, live `initialize` handshakes
+plus pinned-source analysis): ACP as implemented can express essentially the
+whole `gmux agent` contract — **including mid-turn steering distinct from a
+queued follow-up**, via the `_session/steering` extension both adapters
+implement and advertise. Readiness is the `initialize` response instead of
+elapsed-time guesses; submission is a JSON-RPC request instead of
+focus-dependent keystrokes; turn completion is the `session/prompt` response
+instead of a compensating wait; and permission dialogs are requests gmux
+answers instead of key semantics changing underneath a blind writer. Every
+failure cited in the #438/#439 post-mortems has a structural fix here.
 
 ## Decision
 
-### 1. Capabilities attach to the session backend, not the harness name
+### 1. The harness is the identity; capabilities attach to the (harness, mode) pair
 
-A session's capability set is determined by **backend** — the transport and
-contract through which gmux hosts the agent — not by which agent runs inside.
-"A Claude session" is not one thing: a Claude **terminal** session and a
-Claude **ACP** session are different session kinds with different capability
-sets, different configuration surfaces, and potentially different identity
-and lifecycle semantics. Adapter names stop implying capabilities; the
-backend a session was created on decides what gmux may claim about it.
+A session's identity is its **harness** — pi, claude, codex — plus its gmux
+session id and the harness's native conversation. There is one adapter per
+harness. What varies is the **drive mode**: the backend through which gmux
+hosts and drives that harness. Two backends exist:
 
-Two backends exist under this ADR:
+- **Terminal mode** — the existing PTY session: a real process on a durable
+  PTY, attachable, raw-sendable, tailable, with whatever *observational*
+  facts the adapter's hook/extension and native storage trustworthily
+  provide (ADR 0011/0013/0015). Semantic control in this mode requires the
+  ADR 0027 contract to be source-asserted, which today only pi's in-repo
+  extension does.
+- **ACP mode (planned)** — a runner speaking the Agent Client Protocol to a
+  terminal-less agent process: `initialize` as the readiness barrier,
+  `session/new`/`session/load`, structured prompt turns, streaming
+  `session/update` (natively ADR 0021's schema), tool calls, permission
+  requests, cancellation, and the `session/prompt` response as the stable
+  completion boundary, rendered in gmux-native UI (PR #388 is the seam). No
+  PTY exists; there is no screen to tail and nothing to attach to.
 
-- **Terminal backend** — the existing PTY session: a real process on a
-  durable PTY, attachable, raw-sendable, tailable, with whatever
-  *observational* facts the adapter's hook/extension and native storage
-  trustworthily provide (ADR 0011/0013/0015). Semantic control on this
-  backend requires the ADR 0027 contract to be source-asserted, which today
-  only pi's in-repo extension does.
-- **ACP backend (planned)** — a runner speaking the Agent Client Protocol to
-  a terminal-less agent process: structured prompt turns, streaming
-  `session/update`, tool calls, permission requests, cancellation, and
-  stable completion boundaries, normalized per ADR 0021 and rendered in
-  gmux-native UI (PR #388 is the seam). No PTY exists; there is nothing to
-  attach to and no screen to tail.
+Capabilities are a property of the **(harness, mode) pair**, not of the
+harness name alone and not of the mode alone. "A Claude session" is one
+identity — one harness, one native conversation store, one gmux session id —
+that at any moment is being driven in one mode; which verbs it supports
+follows from the pair. Adapter names stop implying capabilities.
 
-### 2. Claude and Codex terminal sessions are interactive-only
+Internally this is a per-adapter seam, not a second adapter: alongside the
+existing terminal seams (argv/hook translation, storage renderers), an
+adapter that supports ACP mode implements a "how to drive this harness via
+ACP" interface — adapter process/argv, initialize expectations, extension
+capabilities to honor (`_meta.steering.supported`), and native-storage
+mapping so both modes read the same conversations. Modeling `claude` and
+`claude-acp` as separate adapters or session kinds is explicitly rejected:
+it would fragment one conversation identity across two names, duplicate
+catalogs and configuration, and turn mode conversion (decision 6) into a
+cross-identity migration.
+
+### 2. Claude and Codex terminal-mode sessions are interactive-only
 
 `gmux -- claude` and `gmux -- codex` remain plain interactive terminal
-sessions. They keep everything the terminal backend honestly provides:
-launch, attach, raw `send`, `tail`, hook-driven active/idle status, titles,
+sessions. They keep everything terminal mode honestly provides: launch,
+attach, raw `send`, `tail`, hook-driven active/idle status, titles,
 attribution, retention, resume-by-relaunch, and observational transcript
-reads from native storage where implemented. They gain no semantic control:
-`gmux agent prompt` (including `--follow-up`/`--steer`), `gmux agent cancel`,
-and `gmux agent prompt --new --adapter claude|codex` refuse these sessions.
+reads from native storage (the review-hardened renderers salvaged from the
+closed PRs — see Consequences). They gain no semantic control in this mode:
+`gmux agent prompt` (plain and `--follow-up`), `gmux agent cancel`, and
+driven launches targeting terminal-mode Claude/Codex refuse, and `--steer`
+refuses **permanently** (decision 3).
 
 `gmux wait` remains universal (ADR 0027 §11): it synchronizes on any
 session's activity, including hook-observed Claude/Codex turns, with the
 fidelity the hooks actually provide (Codex's outcome-less `Stop` stays
-coarse, per ADR 0013). It is result-bearing only where the backend asserts
+coarse, per ADR 0013). It is result-bearing only where the mode asserts
 results; on Claude/Codex terminal sessions it never fabricates an exchange
 report from a screen.
 
-### 3. Refusal is explicit, permanent-shaped, and names the working path
+### 3. Refusal is explicit, names the boundary, and states the remedy
 
-A semantic action against a terminal session whose adapter does not
+A semantic action against a terminal-mode session whose adapter does not
 source-assert the contract fails **before any delivery**, with an error that
-names the backend boundary rather than a transient condition:
+names the mode boundary rather than a transient condition:
 
 ```text
 gmux: claude terminal sessions are interactive-only; semantic control
-requires a Claude ACP session (not yet available). Use gmux send / gmux tail
-to drive this session, or gmux attach to take over.
+requires the session in ACP mode. Use gmux send / gmux tail to drive this
+session, or gmux attach to take over.
 ```
 
 The refusal is a capability fact in the `unsupported_adapter` family of the
 established error taxonomy (ADR 0027's 2026-07-27 amendment): checked and
-reported before readiness, activity, or residency, because "this session
-kind cannot do that" is permanent and actionable while the others are
-transient. It never degrades to raw input — a semantic verb must not
-silently become keystrokes (ADR 0027 §3's loud-failure rule applies at this
-boundary too). Once the ACP backend exists, the parenthetical points at how
-to create the capable session kind instead.
+reported before readiness, activity, or residency, because "this session in
+this mode cannot do that" is permanent-shaped and actionable while the
+others are transient. It never degrades to raw input — a semantic verb must
+not silently become keystrokes (ADR 0027 §3's loud-failure rule applies at
+this boundary too).
 
-### 4. Claude/Codex semantic control is delivered on the ACP backend
+The refusals are not all the same shape:
+
+- **`prompt` and `--follow-up` are refused initially, with a documented
+  future path.** Delivering work has a correct mode available; once mode
+  conversion (decision 6) and the ACP runner exist, an explicit
+  `--convert` flag may perform the idle-gated convert-then-deliver as one
+  command. This stays opt-in and explicit — a plain prompt never converts a
+  session's mode as a side effect.
+- **`--steer` is refused permanently on terminal mode.** Steering means
+  injecting text into a turn that is *right now* mutating the screen and its
+  key semantics — the exact moment a Claude permission dialog can appear and
+  turn the submission Enter into "approve whatever is on screen". There is
+  no future flag that makes that safe. The remedies are stated in the error:
+  attach and type (a human can see the dialog), or convert the session to
+  ACP mode, where steering is a first-class request.
+
+### 4. Claude/Codex semantic control is delivered in ACP mode
 
 The ADR 0027–0030 contract for Claude and Codex — launch, prompt, follow-up,
 steer, cancel, result-bearing wait, exchange logs — is implemented by the
-upcoming ACP runner, where readiness is protocol initialization, submission
-is a `session/prompt` request, completion is a protocol response, results
-arrive as structured updates, and permission requests are first-class events
-rather than key-stealing dialogs. ADR 0027 §4's forward reference ("future
-ACP-native runners set ready after protocol initialization") becomes the
-plan of record for these harnesses.
+upcoming ACP runner, on the mechanics the spike verified:
+
+- **Readiness** is the `initialize` round-trip; session existence is the
+  `session/new`/`session/load` response. No elapsed-time policy.
+- **Steer** is the `_session/steering` extension (not v1 core), gated at
+  runtime on `InitializeResponse._meta.steering.supported` — advertised by
+  both current adapters, verified live. Its injection semantics match pi's
+  merged loop ("one loop is one turn", ADR 0027's 2026-07-28 amendment), so
+  ADR 0030's observational wait needs no changes in kind. Where the
+  capability is absent or a raced idle steer starts a new turn, gmux reports
+  honestly rather than pretending.
+- **Follow-up** is serialized **uniformly in the gmux runner**: at most one
+  outstanding `session/prompt` per session, queued follow-ups delivered on
+  idle. Claude's adapter-native prompt queueing exists but is deliberately
+  not used as the mechanism — the two adapters differ (Codex leaves
+  concurrent prompts undefined), and one runner-side queue keeps behavior
+  adapter-independent and preserves "follow-up on idle acts like plain
+  prompt".
+- **Cancel** is `session/cancel`, with the spec-required `cancelled` stop
+  reason mapping to gmux's *interrupted*.
+- **Turn close** is the `session/prompt` JSON-RPC response; because updates
+  and the response share one ordered pipe, ADR 0027 §9's
+  content-before-turn-end barrier holds by transport construction. The v1
+  response carries only a stop reason, so **gmux assembles the result** from
+  the typed update stream (terminal prose, iteration segmentation at
+  tool/thought boundaries) — the same class of work the pi extension does,
+  from typed events instead of a PTY.
+- **Waiting-on-user is first-class**: a pending `session/request_permission`
+  or elicitation *is* the waiting state, distinguishable from active work —
+  the exact fact #438 could not get from Claude hooks. The corollary is a
+  genuinely new obligation: **gmux is the ACP client and must own the
+  permission-answering policy** (auto-allow / allow-safe / ask, surfaced
+  through ADR 0018 notifications and the web UI, with a default and timeout
+  story before unattended orchestration is safe).
 
 An ACP session is **not a pretend terminal**. gmux does not synthesize a PTY
-around it, `attach` and `tail` do not apply, and its UI is the gmux-native
-conversation view. Where the semantic contract and ACP's expressiveness
-disagree, the resolution is designed in the ACP runner work with honest
-degradation (decision 7's open questions), never by falling back to terminal
-emulation.
+around it, `attach`/`tail` do not apply (their exact CLI behavior for
+terminal-less sessions is an open question below), and its UI is the
+gmux-native conversation view. Where the semantic contract and ACP's
+expressiveness disagree, the resolution is designed in the ACP runner work
+with honest degradation, never by falling back to terminal emulation.
 
-### 5. Pi remains terminal-first with full semantic control
+### 5. The canonical session spec is `model:effort@harness`
 
-Pi keeps its terminal backend and its complete semantic capability set. This
-is the rule of decision 1 applied, not an exception to it: pi's terminal
-*is* part of its product value — extensions, custom renderers, direct human
+Driven launches address what the caller actually chooses — a model, an
+effort, and a harness to run them in — with one spec syntax:
+
+```text
+gmux agent prompt --new anthropic/claude-fable-5:low@pi 'review this branch'
+```
+
+`model:effort@harness` is the canonical long-term surface for driven
+launches, replacing the `--adapter` + `--model` flag pair as those verbs
+mature. The harness names the identity (decision 1); the drive mode is not
+part of the spec — gmux selects it per the harness's available backends and
+the user's `preferred_backends` configuration (shipped with a sane default
+order). Every component is optional shorthand in practice: the **resolver**
+— unique whole-token shorthand matching over the usable catalogs, recency
+tiebreak, and the `preferred_backends` semantics — is deliberately **not
+specified here** and is reserved for a follow-up ADR. This ADR fixes only
+the canonical shape and that resolution operates over (harness, mode) pairs
+whose capability sets this document defines.
+
+### 6. Mode conversion is an explicit relaunch, never a live switch
+
+A session's drive mode can change through one lifecycle operation:
+**"Relaunch as ACP" / "Relaunch as Terminal"**. It keeps the same gmux
+session id and the same harness conversation, ends the current incarnation,
+and starts one in the other mode using the **harness's native resume**
+(`session/load` on the ACP side; `--resume`-style relaunch on the terminal
+side) — the same continuation both tools perform themselves. It is not live
+switching: there is no moment where one conversation is served by both
+modes, and no implicit conversion ever happens as a side effect of another
+verb (the future `--convert` of decision 3 is this operation, invoked
+explicitly).
+
+Preconditions and honesty requirements:
+
+- **Idle-gated.** Conversion waits for the current activity to settle
+  (ADR 0023's turn axis); it never tears down a mid-turn incarnation.
+- **Confirmed.** The user (or the flag-bearing caller) confirms a prompt
+  that enumerates what may be lost: unsubmitted composer text, and any
+  in-flight UI state the native resume does not carry.
+- **Version-skew warning for Claude.** The ACP adapter runs the SDK-bundled
+  Claude binary, not the user's installed CLI (spike risk 5), so a converted
+  session may continue under a different Claude Code version than the
+  terminal it left; the confirmation says so. (`CODEX_PATH` lets Codex run
+  the user's binary; a corresponding `CLAUDE_CODE_EXECUTABLE` policy is an
+  ACP-runner design question.)
+- **Composer preservation is future work**, best-effort by construction:
+  for third-party TUIs a `$EDITOR`-hotkey capture (open the composer content
+  in an editor gmux can read) is the candidate; for pi, a native extension
+  command can return the draft exactly. Until then the confirmation names
+  the composer as at-risk.
+
+### 7. Pi remains terminal-first with full semantic control
+
+Pi keeps its terminal mode and its complete semantic capability set. This is
+decision 1's rule applied, not an exception to it: pi's terminal *is* part
+of its product value — extensions, custom renderers, direct human
 intervention mid-session — and the in-repo extension gives gmux both sides
 of the interface, which is exactly the condition under which a terminal can
-source-assert the contract. No pi ACP session is planned; nothing here
-precludes one later, as its own session kind under the same rule.
+source-assert the contract. No pi ACP mode is planned; nothing here
+precludes one later, as a second mode of the same adapter under the same
+rule.
 
-### 6. The product rule
+### 8. The product rule
 
 **Use the native terminal when the terminal is part of the agent's value;
 use ACP when the terminal is merely a UI around an automatable agent.** For
 pi the terminal is the product surface. For Claude and Codex the terminal is
 one client of an agent that offers a structured protocol for exactly the
 control gmux wants; automating the human client instead of speaking the
-protocol was the category error both PRs paid for.
+protocol was the category error both closed PRs paid for.
 
-### 7. Capability matrix
+### 9. Capability matrix
 
-Capabilities by harness × backend. "Refused" is decision 3's explicit error;
-"n/a" means the surface does not exist on that backend.
+Capabilities by (harness, mode). "Refused" is decision 3's explicit error;
+"n/a" means the surface does not exist in that mode. ACP-mode columns are
+planned, on the spike's verified mechanics.
 
-| Capability | pi · terminal | claude · terminal | codex · terminal | claude/codex · ACP (planned) |
-|---|---|---|---|---|
-| launch (`gmux --` / `-d` / launcher) | yes | yes | yes | yes (ACP runner spawn) |
-| attach / raw `send` / `tail` | yes | yes | yes | n/a (no PTY; gmux-native UI) |
-| hook/event status (active/idle, error) | yes (extension) | yes (hooks) | yes (hooks ≥ 0.135, coarse Stop) | yes (protocol events) |
-| titles, attribution, retention, resume-by-relaunch | yes | yes | yes | per ACP session identity (open) |
-| observational transcript reads (`agent logs`) | yes | salvage pending (see Consequences) | salvage pending | yes (normalized updates/storage) |
-| `gmux wait` synchronization | yes | yes (hook fidelity) | yes (hook fidelity, outcome-less Stop) | yes |
-| result-bearing wait / exchange report | yes | refused / no result claim | refused / no result claim | yes |
-| `agent prompt` (plain / `--follow-up` / `--steer`) | yes | refused | refused | yes (steer expressibility open) |
-| `agent cancel` | yes | refused | refused | yes (`session/cancel`) |
-| `agent prompt --new` | yes | refused | refused | yes |
+| Capability | pi · terminal | claude · terminal | codex · terminal | claude · ACP (planned) | codex · ACP (planned) |
+|---|---|---|---|---|---|
+| launch (`gmux --` / `-d` / launcher) | yes | yes | yes | yes (ACP runner spawn) | yes |
+| driven launch (`prompt --new`, session spec §5) | yes | refused | refused | yes | yes |
+| attach / raw `send` / `tail` | yes | yes | yes | n/a (no PTY; gmux-native conversation UI) | n/a |
+| observational status (active/idle, error) | yes (extension) | yes (hooks) | yes (hooks ≥ 0.135, coarse Stop) | yes (protocol events) | yes |
+| waiting-on-user, distinguishable | yes | no (hooks cannot) | no | yes (permission/elicitation requests) | yes |
+| titles, attribution, retention, resume | yes | yes | yes | yes (`session/load`, stable ids) | yes |
+| observational reads (`agent logs`, native storage) | yes | yes (#448) | yes (#450) | yes (same native storage) | yes |
+| `gmux wait` synchronization | yes | yes (hook fidelity) | yes (hook fidelity) | yes | yes |
+| result-bearing wait / exchange report | yes | refused / no result claim | refused / no result claim | yes (gmux-assembled, v1) | yes |
+| `agent prompt` (plain / `--follow-up`) | yes | refused (future: explicit `--convert`) | refused (future: explicit `--convert`) | yes (runner-serialized queue) | yes |
+| `agent prompt --steer` | yes | **refused permanently** | **refused permanently** | yes (`_session/steering`, capability-gated) | yes |
+| `agent cancel` | yes | refused | refused | yes (`session/cancel`) | yes |
+| explicit mode relaunch (§6) | n/a (single mode) | → ACP (planned) | → ACP (planned) | → terminal (planned) | → terminal (planned) |
 
-### 8. Non-goals
+### 10. Non-goals
 
-- **No live backend switching.** A session is created on one backend and
-  stays there for its lifetime. There is no "upgrade this terminal session
-  to ACP" or the reverse.
-- **No transparent conversion.** A terminal conversation and an ACP
-  conversation may differ in identity, configuration (settings/MCP/plugins
-  loading), and lifecycle semantics; gmux does not claim that continuing one
-  as the other preserves meaning, and does not attempt it.
+- **No live mode switching.** One incarnation, one mode; conversion is a
+  full relaunch under decision 6's gates, never a hot handover.
+- **No implicit conversion.** No verb changes a session's mode as a side
+  effect; the future `--convert` is explicit by name, idle-gated, and
+  confirmed.
+- **No claim of mode equivalence.** The two modes may differ in
+  configuration surface (settings/MCP/plugins loading, binary version) and
+  UI state; conversion states the differences (decision 6) rather than
+  papering over them.
 - **No pretend PTY for ACP sessions**, and no revival of TUI emulation for
   Claude/Codex under any flag.
-- **No inferred semantics on the terminal backend.** PTY output is
-  presentation data (ADR 0027 §9); no amount of screen parsing promotes a
-  terminal session into a semantically controllable one.
+- **No inferred semantics in terminal mode.** PTY output is presentation
+  data (ADR 0027 §9); no amount of screen parsing promotes a terminal
+  session into a semantically controllable one.
 
 ## Consequences
 
-- **Claude/Codex semantic control is consciously blocked on the ACP backend
+- **Claude/Codex semantic control is consciously blocked on the ACP runner
   landing.** We prefer the correct feature when ACP lands over a fragile TUI
   emulator now. The two-step interactive route (`gmux -d -- claude`, then
   `gmux send`/attach) keeps working throughout, as does hook-driven status.
-- **Salvage: the observational work survives.** PR #438's review-hardened
-  transcript pieces — parent-linked active-branch reconstruction with
+- **The observational work survived as salvage.** PR #438's review-hardened
+  Claude transcript pieces (parent-linked active-branch reconstruction,
   sidechain/meta privacy filtering, image-only boundaries, non-destructive
-  settings/hook injection — and PR #439's rollout JSONL renderer are
-  extraction candidates for follow-up PRs *without semantic-control claims*:
-  they serve `agent logs`-style reads and status fidelity on the terminal
-  backend, where storage parsing is trustworthy even though driving the TUI
-  is not.
+  settings/hook injection) landed as PR #448, and PR #439's Codex rollout
+  renderer as PR #450 — observational reads and status fidelity on terminal
+  mode, without semantic-control claims. The same native-storage parsers are
+  the read-without-resume path for ACP-mode sessions (ADR 0029 §3 forbids
+  resuming to read, and `session/load` requires a live adapter process), so
+  their fidelity is shared infrastructure for both modes — and must be
+  regression-tested against adapter/SDK upgrades, since the ACP adapters
+  write the same stores.
 - **ADR 0027 §1 is amended.** "Peer forwarding and Claude/Codex support are
-  follow-ups" now reads with this ADR's split: the follow-up for Claude/Codex
-  is the ACP backend, and the terminal backend never grows their semantic
-  verbs. ADR 0027's 2026-07-28 adapter-contract clause ("claude/codex do not
-  become result-bearing") is confirmed and made permanent for the terminal
-  backend. No other existing doc was found claiming terminal semantic
-  support for Claude/Codex: the website adapter/integration pages describe
-  only observational hooks, status, titles, and resume, which remain true.
-- **Session kinds become a real axis.** Stores, the CLI, and the web UI will
-  eventually need to distinguish a Claude terminal session from a Claude ACP
-  session (naming, launchers, capability checks). That design belongs to the
-  ACP runner work; this ADR fixes only that the axis exists and that
-  capability checks key on it.
-- **Error-message wording gains a second boundary.** Alongside ADR 0029's
-  activity-vocabulary rule, semantic refusals on terminal Claude/Codex name
-  the backend, not a missing feature flag or a "dead" anything.
+  follow-ups" now reads with this ADR's split: the follow-up for
+  Claude/Codex is the ACP drive mode, and terminal mode never grows their
+  steer verb (prompt/follow-up only via explicit conversion). ADR 0027's
+  2026-07-28 adapter-contract clause ("claude/codex do not become
+  result-bearing") is confirmed for terminal mode. No other existing doc was
+  found claiming terminal semantic support for Claude/Codex: the website
+  adapter/integration pages describe only observational hooks, status,
+  titles, and resume, which remain true.
+- **Mode becomes a real session axis.** Stores, the CLI, and the web UI will
+  need to carry and display the drive mode (launchers, capability checks,
+  the conversation-view-vs-terminal split, the relaunch operation). That
+  design belongs to the ACP runner work; this ADR fixes that the axis exists
+  within one harness identity and that capability checks key on the pair.
+- **gmux acquires a permission-answering obligation.** As the ACP client it
+  must answer `session/request_permission`/elicitations; policy, UI, and
+  timeout defaults are prerequisites for unattended ACP orchestration.
+- **Adapter versions become contract surface.** The first-party adapters
+  churn fast (the Codex adapter was replaced wholesale within months; the
+  Claude adapter releases near-daily). Mitigation is decided here: **pinned
+  adapter versions plus a conformance smoke suite** gmux runs against
+  adapter upgrades (initialize capabilities, steer/queue/cancel semantics,
+  taxonomy mapping, storage-parser compatibility).
+- **The v1→v2 protocol transition is contained by design.** ACP v2 (draft)
+  restructures exactly the lifecycle gmux depends on (prompt response
+  becomes acceptance-only; completion via `state_update`; `messageId`
+  upserts). The runner isolates the v1 lifecycle mapping behind one seam so
+  v2 is a mapping change, not a redesign — and v2 would upgrade today's
+  gmux-assembled result heuristics into exact facts.
 
-## Open questions deferred to the ACP implementation
+## Open questions deferred to the ACP runner implementation
 
-An ACP contract spike is running in parallel (`.grove/acp-contract-spike/`),
-building a coverage matrix of the ADR 0027–0032 contract against the ACP
-spec, `claude-code-acp`, and Codex's ACP support. Its findings are **pending
-input** to the ACP runner design; this ADR does not wait for them. Deferred:
+The ACP contract spike answered the questions this ADR's draft had deferred;
+its findings are source-verified against pinned adapter versions, with only
+the `initialize` handshakes exercised live. Answers adopted here:
 
-- **Steer vs follow-up expressibility.** Whether ACP can distinguish
-  mid-turn steering from a queued follow-up per adapter, and the honest
-  degradation if not (refuse `--steer`? cancel-and-reprompt with the
-  semantics stated?).
-- **Result boundaries and taxonomy mapping.** Whether each adapter's turn
-  completion reliably carries final content, and how
-  cancellation/API-error/process-death map onto ADR 0027 §8's
-  completed/interrupted/error.
-- **Waiting-on-user.** Whether permission requests and user questions are
-  distinguishable from active work well enough to surface as a first-class
-  state.
-- **Resume and identity.** `session/load` support per adapter, identity
-  stability across gmux restarts, and how ACP session identity composes with
-  ADR 0029's resumable-conversation handle.
-- **Configuration parity.** How close an ACP session's settings/MCP/plugin
-  surface comes to the interactive tool, and how the difference is stated to
-  users (decision 8's no-transparent-conversion rule is the floor).
-- **Privacy.** Whether hidden reasoning is excluded or marked in updates,
-  and how that composes with ADR 0030's rendering rules.
+- **Steer vs follow-up:** expressible. Steer via the `_session/steering`
+  extension, gated on `_meta.steering.supported`, merging into the running
+  turn like pi's loop; follow-up via **uniform runner-side serialization**
+  (decision 4) despite Claude's native queue, because Codex has none and one
+  queue keeps runner behavior adapter-independent.
+- **Result boundaries:** the prompt response closes the turn with the §9
+  barrier intact; gmux assembles terminal content from the typed stream
+  (v1 has no result payload; tool-only turns are detectably prose-free).
+- **Taxonomy:** `end_turn` → completed; `cancelled` after gmux's own cancel
+  → interrupted; JSON-RPC error (with Claude's structured `errorKind`) →
+  error; stdio EOF with a prompt in flight → error. `refusal`/`max_tokens`/
+  `max_turn_requests` classify as error-with-reason (they end the turn
+  without doing the work).
+- **Waiting-on-user:** first-class via pending permission/elicitation
+  requests; gmux must own the answering policy (decision 4).
+- **Reads without resume:** stay on the native-storage parsers (#448/#450);
+  `session/load` is the resume path, never the read path.
+- **Churn and protocol risk:** adapter pinning + conformance smoke suite;
+  v1 mapping behind one seam for v2 (Consequences).
+
+Genuinely open, deferred to the runner work (and the follow-up ADRs named):
+
+- **The session-spec resolver** (decision 5): shorthand matching over usable
+  catalogs, recency tiebreak, `preferred_backends` semantics and default
+  order — a follow-up ADR.
+- **Permission policy defaults and UI**: auto-allow/allow-safe/ask tiers,
+  timeout behavior, ADR 0018 notification shape.
+- **Adapter distribution and binary policy**: bundling vs `npx`, pin cadence,
+  `CLAUDE_CODE_EXECUTABLE`/`CODEX_PATH` alignment with the user's CLIs
+  (also feeds decision 6's skew warning).
+- **Process topology**: adapter process per session vs shared multiplexed
+  process (failure-domain coupling vs memory).
+- **v1 result-assembly fidelity**: whether iteration counts meet ADR 0030's
+  rendering promises before v2's `messageId`, to be validated at the ACP
+  runner's live gate — which must also exercise steering injection, cancel
+  latency, resume replay, and permission flows (the spike ran handshakes
+  only; the terminal path also looked fine until its live gate).
+- **`gmux tail`/attach behavior for terminal-less sessions**: polite refusal
+  naming `agent logs`/the web view, or a conversation rendering.
+- **Composer capture for conversion** (decision 6): `$EDITOR`-hotkey design
+  for foreign TUIs; pi extension command.
 
 ## Alternatives considered
 
 ### Keep hardening the terminal automation path
 
 Rejected. Both PRs demonstrated the failure is structural, not residual: for
-Claude every fix (readiness delays, focus/keybinding assumptions,
-modal handling) replaced one unverifiable timing assumption with another,
-against an interface whose owner may change any of it in a patch release;
-for Codex the required facts (readiness, turn identity, results) do not
-exist in the interface at all. A contract built on those foundations would
-be ADR 0027's loud-failure principle inverted — quiet lies instead of loud
-errors.
+Claude every fix (readiness delays, focus/keybinding assumptions, modal
+handling) replaced one unverifiable timing assumption with another, against
+an interface whose owner may change any of it in a patch release; for Codex
+the required facts (readiness, turn identity, results) do not exist in the
+interface at all. A contract built on those foundations would be ADR 0027's
+loud-failure principle inverted — quiet lies instead of loud errors.
+
+### Model claude/claude-acp as separate adapters or session kinds
+
+Rejected (an earlier draft of this ADR did exactly this). The conversation,
+its native storage, its titles, and its resume lineage belong to the
+harness; two session kinds would fragment one identity across two names,
+duplicate model catalogs and configuration, make the capability story a
+naming convention instead of a (harness, mode) fact, and turn mode
+conversion into a cross-identity migration with no principled owner for the
+shared conversation.
 
 ### Headless one-shot modes (`claude -p`, `codex exec`) as the semantic backend
 
@@ -280,18 +455,29 @@ vendors maintain for programmatic clients.
 Rejected as a plan. Hook vocabularies are upstream property with no
 committed timeline, and even a complete hook set still leaves *delivery*
 running through the TUI's focus/modal/keybinding surface — hooks fix
-observation, not control. Hooks remain the terminal backend's observational
+observation, not control. Hooks remain terminal mode's observational
 channel; if they improve, observation improves, and nothing here changes.
 
-### Attach capabilities to the adapter with per-verb feature flags
+### Delegate follow-up queueing to Claude's adapter-native queue
 
-Rejected. It encodes the false premise that "a Claude session" is one thing
-with a feature list, and invites exactly the drift this ADR closes: an
-adapter flag flipped on for a backend that cannot honor it. The backend is
-the unit that has a contract; capabilities follow it.
+Rejected. It exists (`_meta.claudeCode.promptQueueing`) and is clean in
+isolation, but Codex's adapter leaves concurrent prompts undefined, and two
+queueing regimes behind one verb is the adapter-dependent behavior this
+namespace exists to prevent. One runner-side queue, drained on idle, gives
+both harnesses the same phenotype and preserves gmux's "follow-up on idle
+acts like plain prompt" rule.
 
 ### Refuse Claude/Codex semantic verbs silently or degrade to raw send
 
-Rejected outright. Degrading a semantic verb to keystrokes is the
-old-runner hazard of ADR 0027 §3 reintroduced deliberately; silent refusal
-teaches callers nothing. The error names the boundary and the working path.
+Rejected outright. Degrading a semantic verb to keystrokes is the old-runner
+hazard of ADR 0027 §3 reintroduced deliberately; silent refusal teaches
+callers nothing. The error names the boundary and the working paths —
+send/attach, or mode conversion once it exists.
+
+### Allow implicit convert-on-prompt instead of an explicit `--convert`
+
+Rejected. A plain prompt that silently relaunches the session in another
+mode would change its binary version (Claude), its configuration surface,
+and its UI affordances as a side effect of delivering text — precisely the
+class of surprise decision 6's confirmation gate exists to prevent. The
+convenience is preserved as an explicit, flag-named opt-in.
