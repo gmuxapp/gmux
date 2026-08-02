@@ -1,13 +1,11 @@
 ---
 title: Using the UI
-description: A tour of the gmux dashboard — from your first session to working from your phone.
+description: A tour of the gmux web UI — from your first session to working from your phone.
 ---
 
-Running `gmux open` opens the dashboard in a dedicated browser window. You can also navigate to **[localhost:8790](http://localhost:8790)** directly; the first time you'll need to authenticate by visiting the login URL from `gmux auth`.
+Running `gmux open` opens gmux in a dedicated browser window. You can also navigate to **[localhost:8790](http://localhost:8790)** directly; the first time you'll need to authenticate by visiting the login URL from `gmux auth`.
 
-## The dashboard
-
-![The gmux dashboard: sessions grouped by project in the sidebar, the Activity feed on the right](../../assets/hero-desktop.png)
+![The gmux web UI: sessions grouped by project in the sidebar, the Activity feed on the right](../../assets/hero-desktop.png)
 
 The **sidebar** lists your sessions, grouped into projects. Home is **Activity**: a feed of live sessions across all your hosts, ordered by last output and grouped by day. A session floats up only when it produces new output you haven't seen — status changes its dot, not its position — so the queue stays stable while you work down it. An **Enable notifications** pill in the Activity header opts this browser into notifications for turns that finish while you're elsewhere.
 
@@ -15,7 +13,7 @@ In the sidebar header, the **gmux logo** takes you home (it lights up when a ses
 
 ## Your first project
 
-A fresh sidebar is empty **by design**: gmux discovers sessions but never adds anything to the sidebar on its own.
+A fresh sidebar is empty: gmux discovers sessions but never adds anything to the sidebar on its own.
 
 The natural way to fill it: run a gmux command in the folder you work in (`gmux -- pi`), then open **Settings → Projects** — the directory is already waiting under **Discovered**, so adding the project is one click. You can also launch straight from the UI: a fresh install shows a single **+** button (which seeds a default *home* project), and once you have projects, hovering a project name reveals its **+**, with a menu of the agents installed on that host.
 
@@ -23,7 +21,7 @@ Projects match sessions by filesystem path or git remote URL. Projects on other 
 
 ## The terminal
 
-Click a session to attach a full interactive terminal ([xterm.js](https://xtermjs.org/) — colors, mouse, images all work). **Cmd/Ctrl+F** opens find-in-terminal; the full default keymap and how to override it is in the [settings reference](/reference/settings/#default-keymap).
+Click a session to attach a full interactive terminal. **Cmd/Ctrl+F** opens find-in-terminal; the full default keymap and how to override it is in the [settings reference](/reference/settings/#default-keymap).
 
 The **⋮** menu holds the lifecycle action — **Restart** for a live session, **Resume** or **Rerun** for a dead one. Dead sessions replay their terminal history read-only: resuming continues an agent conversation where it left off, rerunning starts the command fresh in the same directory.
 
@@ -36,5 +34,5 @@ Open the same URL on your phone — or from anywhere via [remote access](/remote
 ## Next steps
 
 - **[Orchestrating agents](/orchestrating-agents/)** — launch agents from scripts or other agents, prompt them, and harvest their results.
-- **[Devcontainers](/devcontainers/)** — one line in `devcontainer.json` and container sessions appear in this dashboard.
+- **[Devcontainers](/devcontainers/)** — one line in `devcontainer.json` and container sessions appear alongside everything else.
 - **[Remote access](/remote-access/)** — reach gmux from your phone or another machine over your tailnet.
