@@ -2,9 +2,7 @@ package session
 
 import (
 	"encoding/json"
-	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -493,73 +491,55 @@ func TestAdmitActionReservation(t *testing.T) {
 
 // TestAdmitActionIsAtomicAgainstStatusWrites hammers the invariant the whole
 // design rests on: a delivered-but-unobserved prompt blocks the next one, and
-// only a fresh active turn releases it — so at most ONE prompt can be admitted
-// per turn, whatever the interleaving.
+// only a fresh active turn releases it — so exactly one of several concurrent
+// prompts can be admitted per turn.
 //
-// The schedule is adversarial rather than fixed: four admitters race while a
-// coordinator runs a turn every time it sees a reservation appear. Because
-// turns are driven BY admissions, a correct implementation admits one prompt
-// per turn and the count lands on `turns` (+1 for the tail, where the last
-// release can admit one more prompt after the coordinator has stopped). An
-// implementation that checks activity and reserves in two separate critical
-// sections lets several admitters through per release, which doubles the count
-// and fails here — and -race flags it as well.
+// Each round starts four one-shot admitters behind the same gate. The winner
+// confirms its delivery, then the coordinator supplies the sole active edge
+// and closes the turn before the next round. An implementation that checks
+// activity and reserves in two separate critical sections can admit multiple
+// contenders in a round and fails here (and -race flags it as well).
 func TestAdmitActionIsAtomicAgainstStatusWrites(t *testing.T) {
 	s := New(Config{ID: "s1"})
-	const turns = 500
-	done := make(chan struct{})
+	const (
+		turns      = 500
+		contenders = 4
+	)
 
-	var coordinator sync.WaitGroup
-	coordinator.Add(1)
-	go func() {
-		defer coordinator.Done()
-		defer close(done)
-		for range turns {
-			for !s.ReservationHeld() { // wait for somebody's prompt
-				runtime.Gosched()
-			}
-			s.SetStatus(&adapter.Status{Active: true}) // the only release
-			s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
-		}
-	}()
-
-	var admitted atomic.Int64
-	var admitters sync.WaitGroup
-	for range 4 {
-		admitters.Add(1)
-		go func() {
-			defer admitters.Done()
-			for {
-				select {
-				case <-done:
-					return
-				default:
-				}
+	for turn := range turns {
+		start := make(chan struct{})
+		results := make(chan bool, contenders)
+		var admitters sync.WaitGroup
+		for range contenders {
+			admitters.Add(1)
+			go func() {
+				defer admitters.Done()
+				<-start
 				v, reserved := s.AdmitAction(RequireInactive, ReserveIfInactive)
-				switch {
-				case v == Admitted && !reserved:
+				if v == Admitted && !reserved {
 					t.Error("admitted a plain prompt without reserving the turn it starts")
-					return
-				case v == Admitted:
-					s.ConfirmDelivery() // as the runner does after its write
-					admitted.Add(1)
 				}
-				runtime.Gosched()
-			}
-		}()
-	}
-	coordinator.Wait()
-	admitters.Wait()
+				if v == Admitted {
+					s.ConfirmDelivery() // as the runner does after its write
+				}
+				results <- v == Admitted
+			}()
+		}
+		close(start)
+		admitters.Wait()
+		close(results)
 
-	if got := admitted.Load(); got > turns+1 {
-		t.Fatalf("%d prompts admitted across %d turns, want at most one per turn (%d)", got, turns, turns+1)
-	}
-	// Lower bound is deliberately loose, and generous under load: the
-	// coordinator can see the same reservation twice (it polls
-	// ReservationHeld, which stays true across the in-flight phase), so some
-	// turns pass without a new admission. The interesting bound is the upper
-	// one; this only proves the race was actually exercised.
-	if got := admitted.Load(); got*10 < turns {
-		t.Fatalf("only %d prompts admitted across %d turns; the test did not exercise the race", got, turns)
+		admitted := 0
+		for result := range results {
+			if result {
+				admitted++
+			}
+		}
+		if admitted != 1 {
+			t.Fatalf("turn %d: admitted %d of %d concurrent prompts, want 1", turn, admitted, contenders)
+		}
+
+		s.SetStatus(&adapter.Status{Active: true}) // the only release
+		s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 	}
 }
