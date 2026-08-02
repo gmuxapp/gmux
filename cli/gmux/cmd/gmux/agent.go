@@ -437,9 +437,9 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 // so tests can drive `--new`'s output contract without forking a real agent.
 var agentLaunchSession = launchDetachedSession
 
-// agentLaunchAdapter is the adapter `--new` launches through. The launch is
-// pi-only for now (there is no --adapter flag), exactly like the rest of this
-// namespace; a variable so tests can substitute a non-launcher adapter.
+// agentLaunchAdapter is the default adapter `--new` launches when no
+// --adapter selector is supplied; a variable so tests can substitute a
+// non-launcher adapter.
 var agentLaunchAdapter adapter.Adapter = adapters.NewPi()
 
 // cmdAgentPromptNew implements `gmux agent prompt --new`: launch a session and

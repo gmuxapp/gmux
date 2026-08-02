@@ -69,11 +69,13 @@ func claudeActiveBranch(linear []claudeConversationEntry) []claudeConversationEn
 	if !hasParents {
 		return linear
 	}
-	// Non-conversation bookkeeping records can trail the active message and
-	// carry no UUID. They must not disable branch reconstruction.
+	// Sidechain/meta records can be UUID-linked and trail the visible main
+	// conversation while subagent/bookkeeping work is appended. They remain in
+	// byID because a later main record may name one as an ancestor, but they
+	// must never replace the latest eligible main-conversation leaf.
 	leaf := claudeConversationEntry{}
 	for i := len(linear) - 1; i >= 0; i-- {
-		if linear[i].UUID != "" {
+		if linear[i].UUID != "" && !linear[i].IsSidechain && !linear[i].IsMeta {
 			leaf = linear[i]
 			break
 		}

@@ -66,6 +66,50 @@ func TestClaudeConversationUsesActiveParentBranch(t *testing.T) {
 	}
 }
 
+func TestClaudeConversationIgnoresTrailingHiddenLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tail string
+	}{
+		{"sidechain", `{"uuid":"side","parentUuid":"u1","type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"private sidechain"}]}}`},
+		{"meta", `{"uuid":"meta","parentUuid":"u1","type":"user","isMeta":true,"message":{"role":"user","content":"hidden metadata"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hidden-tail.jsonl")
+			transcript := `{"uuid":"u1","parentUuid":null,"type":"user","message":{"role":"user","content":"root"}}
+{"uuid":"main","parentUuid":"u1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"main answer"}]}}
+` + tc.tail
+			if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ex, err := NewClaude().RenderConversationExchanges(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ex) != 1 || ex[0].Iterations != 1 || ex[0].Terminal != "main answer" {
+				t.Fatalf("trailing hidden leaf erased main tail: %#v", ex)
+			}
+		})
+	}
+}
+
+func TestClaudeConversationRetainsHiddenTraversalAncestors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hidden-ancestor.jsonl")
+	transcript := `{"uuid":"u1","parentUuid":null,"type":"user","message":{"role":"user","content":"root"}}
+{"uuid":"hidden","parentUuid":"u1","type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"private"}]}}
+{"uuid":"main","parentUuid":"hidden","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"visible continuation"}]}}`
+	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := NewClaude().RenderConversationExchanges(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex) != 1 || ex[0].Iterations != 1 || ex[0].Terminal != "visible continuation" {
+		t.Fatalf("hidden ancestor broke traversal: %#v", ex)
+	}
+}
+
 func TestClaudeImageOnlyUserIsExchangeBoundary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "image.jsonl")
 	transcript := `{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"secret"}}]}}
