@@ -51,7 +51,6 @@ export default defineConfig({
             { label: 'File paths', slug: 'reference/file-paths' },
             { label: 'host.toml', slug: 'reference/host-toml' },
             { label: 'Interface stability', slug: 'reference/stability' },
-            { label: 'Project model', slug: 'reference/projects-json' },
             { label: 'Settings', slug: 'reference/settings' },
             { label: 'Theme', slug: 'reference/theme' },
           ],

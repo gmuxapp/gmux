@@ -44,11 +44,11 @@ The biggest release yet, and the first with breaking changes. 2.0 makes agent st
 
 ### Agents can now orchestrate other agents
 
-The new machine-oriented `gmux agent` surface launches, prompts, observes, and cancels subagents without scraping terminal output. `gmux agent prompt --new --no-wait` returns an addressable session immediately; `gmux wait <id>...` waits on several agents concurrently and prints source-attributed exchange reports in argument order. Stable exit codes and delivery errors distinguish completed work, agent failure, interruption, timeout, safe retry, and indeterminate delivery — enough structure to build reliable agent swarms from shell scripts and other tools. See **[Orchestrating agents](https://gmux.app/orchestrating-agents/)** for the complete workflow.
+The new machine-oriented `gmux agent` surface launches, prompts, observes, and cancels subagents without scraping terminal output. `gmux agent prompt --new --no-wait` prints an addressable session as soon as readiness, delivery, and admission complete, without waiting for the turn to finish; `gmux wait <id>...` waits on several agents concurrently and prints source-attributed exchange reports in argument order. Stable exit codes and delivery errors distinguish completed work, agent failure, interruption, timeout, safe retry, and indeterminate delivery — enough structure to build reliable agent swarms from shell scripts and other tools. See **[Orchestrating agents](https://gmux.app/orchestrating-agents/)** for the complete workflow.
 
 ### A rebuilt web app
 
-- **Home is an activity dashboard** — Waiting and Active first, then recency buckets; project and host management moved into a proper **Settings** modal.
+- **Home is an activity dashboard** — live sessions ordered by recent output and grouped by calendar day; project and host management moved into a proper **Settings** modal.
 - **Mobile, seriously reworked** — new key row (arm-and-highlight ctrl/alt, always-present arrows and word-jump), copy/paste including images, long-press links to copy or open, and fixed reconnect storms on flaky data.
 - **Find in terminal** (Cmd/Ctrl+F), **error toasts** for failures that used to be silent, and rendering fixes (WebGL artifacts, GPU context loss, scrollbars, stale-tab auto-reload).
 
@@ -58,7 +58,7 @@ The new machine-oriented `gmux agent` surface launches, prompts, observes, and c
 
 ### Multi-machine, locked down
 
-Being on your tailnet now only lets a machine *reach* a host; the host's token authorizes it. Autodiscovery is replaced by explicit, token-authenticated hosts (`gmux auth` → **Settings → Hosts → Connect to host**), and cookie-authed requests are same-origin enforced. Upgrading carries existing hosts forward as "Auth needed" so nothing silently disappears.
+Being on your tailnet now only lets a machine *reach* a host; the host's token authorizes it. Autodiscovery is replaced by explicit, token-authenticated hosts (`gmux auth` → **Settings → Hosts → Connect to host**), and cookie-authed requests are same-origin enforced. The 2.0 state store starts clean: re-add hosts, then add wanted peer projects under **Settings → Projects → From other hosts**.
 
 ### Agents report their own state
 

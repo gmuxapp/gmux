@@ -48,7 +48,7 @@ individual notifications.
 - `internal/presence` — presence table tracking connected clients
 - `internal/notify` — notification router with grace period, coalescing, device routing
 - `apps/gmux-web/src/presence.ts` — presence WebSocket client with auto-reconnect
-- Permission UI: "Enable notifications" button in sidebar footer
+- Permission UI: "Enable notifications" pill in the Activity header on home
 
 ## Open items
 

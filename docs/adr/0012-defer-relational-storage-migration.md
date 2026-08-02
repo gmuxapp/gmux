@@ -1,9 +1,11 @@
 # ADR 0012: Relational (SQLite) storage is a non-goal
 
-**Status:** Accepted (partially superseded by ADR 0024: the "`SessionKey`
-(slug-or-id) membership … unchanged" freeze below no longer holds —
-membership is keyed by session ID and takeover by conversation lineage.
-The storage decision itself — no relational store — stands.)
+**Status:** Superseded by [ADR 0026](./0026-authoritative-sqlite-state-store.md)
+
+> **Historical record:** This ADR documents the earlier decision to retain JSON
+> stores. ADR 0026 later replaced that decision with authoritative SQLite for
+> daemon-owned state. The body below is preserved as the rationale at the time,
+> not as current implementation guidance.
 **Date:** 2026-06-16
 **Related:** ADR 0002 (project ownership; share-nothing peering), ADR 0010 /
 ADR 0011 (authoritative attribution + runner-owned state)

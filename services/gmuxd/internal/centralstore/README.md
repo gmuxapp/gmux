@@ -1,41 +1,24 @@
-# Central store schema and ordering primitives
+# Central store schema and domain operations
 
-This package is an isolated SQLite implementation slice related to ADR 0026. It
-is **not** wired into gmuxd and is **not an authoritative domain kernel yet**.
-The current public surface provides schema-backed session fact/version
-primitives, a conditional dead-session acknowledgement tracer, an atomic
-nonproduction runner-registration and runner-observation operations, bootstrap
-project-catalog construction, and collision-safe placement ordering primitives.
-The sibling `sessioncoord` package provides a test-only subscribe-first
-coordinator and runtime-only generation registry; neither package is wired to
-production.
+This package implements the authoritative SQLite store for daemon-owned state described by ADR 0026. Production opens it during gmuxd bootstrap and uses it through the singleton `sessioncoord.Coordinator`; the central snapshot composer and wire converter query it for REST and SSE projections.
 
-Important scope limits:
+SQLite owns durable local session rows, project definitions and rules, placement/order, and manual peers. It does not own live runner liveness, peer snapshots, adapter transcripts, or scrollback bytes:
 
-- `ReplaceProjectCatalog` is bootstrap-only. It returns
-  `ErrCatalogHasPlacements` once any local or Local-peer placement exists,
-  because this slice does not own the match inputs needed to rematch subjects
-  authoritatively after rule changes.
-- Direct caller-selected placement is an ordering primitive, not proof of
-  derived project membership.
-- `AcknowledgeDeadSession` is an isolated, nonproduction tracer. SQLite cannot
-  determine runner liveness: a lifecycle coordinator must establish that no
-  runner is live immediately before calling it.
-- `RegisterRunner` atomically merges a caller-proven runner observation with
-  durable history and derived owned-project placement. It performs no runner
-  I/O. Immediately before calling it, the singleton lifecycle coordinator must
-  hold lifecycle serialization, validate that its reserved runtime generation
-  is still current, and supply `NewGeneration` provenance for replacement,
-  resume, or restart observations. Generation is deliberately not persisted.
-  The operation is nonproduction until that coordinator owns registration,
-  resume/restart, dismissal, and event ordering. Production integration,
-  recursive dismissal, reconciliation batching, and lifecycle liveness checks
-  remain future work. Callers must not fill those gaps with raw
-  access to the private generated queries. `ApplyRunnerObservation` uses the
-  coordinator's observed row-version token, preserves daemon-owned history,
-  and advances activity only for runner activity/death transitions.
-- Peer snapshots, tokens, waits/notifications, adapter batching/takeover, and
-  dynamic CWD reporting remain outside this slice.
+- `sessioncoord.Registry` provides the runtime liveness/generation overlay.
+- live runners supply runner-authoritative common facts through registration and observation;
+- peer sessions/projects remain ephemeral connection projections;
+- adapters own conversations and return bounded reconciliation decisions;
+- runner-owned scrollback remains a file cache.
+
+Domain operations preserve cross-entity invariants transactionally. Callers must use operations such as runner registration, recursive dismissal, reconciliation deletion, catalog replacement, and reorder rather than importing the private generated query package. Runner, adapter, socket, and process I/O occurs outside database transactions and is serialized/fenced by `sessioncoord` where required.
+
+Important boundaries:
+
+- SQLite cannot establish runner liveness by itself. Lifecycle operations that require a dead session rely on coordinator serialization and registry exclusion.
+- `RegisterRunner` merges a validated runner observation with durable history and derived placement. Runtime generation is deliberately not persisted.
+- Dismissal is recursive and hidden-not-forgotten: it stamps `dismissed_at` and removes placement while retaining session identity and provenance.
+- Reconciliation deletion, unlike dismissal, permanently removes rows judged no longer resumable and repairs surviving child relationships.
+- Project compatibility JSON is an API boundary, not the persistence schema. Relational project entries, rules, references, and placements are authoritative.
 
 From the repository root:
 
@@ -43,7 +26,7 @@ From the repository root:
 # Regenerate checked-in private sqlc code with the module-pinned tool.
 moon run gmuxd:generate-centralstore
 
-# Fail when the checked-in generated code drifts from a fresh regeneration.
+# Fail when checked-in generated code drifts from fresh generation.
 moon run gmuxd:check-centralstore-generated
 
 # Validate the CGO-free package for release platforms.
@@ -54,23 +37,6 @@ cd services/gmuxd
 go test -race ./internal/centralstore
 ```
 
-The `check-centralstore-generated` and `check-centralstore-cross-build` tasks
-are not yet reachable from the CI task graph; wiring them into CI belongs to
-the operational integration slice.
+Migrations under `migrations/` are immutable schema source. The released v1 baseline checksum is pinned by `TestReleasedV1MigrationChecksum`; change the schema only by adding a numbered migration. Upgrade tests retain sessions, projects, placements, and manual-peer secrets, verify integrity and foreign keys, and pin idempotent reopen behavior.
 
-Migrations under `migrations/` are immutable schema source. The released v1
-baseline checksum is pinned by `TestReleasedV1MigrationChecksum`; change the
-schema only by adding a new numbered migration. Upgrade tests build a
-representative v1 database, retain sessions/projects/placements/manual-peer
-secrets through v2, verify integrity and foreign keys, and pin idempotent
-reopen behavior.
-
-Goose atomicity is **per migration**, not across the whole pending set. If v2
-commits and v3 fails, the database remains at v2; the failing migration rolls
-back its own transaction. Before applying any pending migration to an existing
-non-empty database, startup retains a timestamped owner-only `VACUUM INTO`
-backup under `backups/`, and migration diagnostics include that path. Fresh
-creation does not need a backup. Stable query SQL and checked-in generated
-files live under `internal/db`; transaction orchestration uses generated
-`Queries.WithTx`, and Go structurally prevents imports of those primitives
-from outside `centralstore`.
+Goose atomicity is per migration, not across the whole pending set. Before applying pending migrations to an existing non-empty database, startup retains a timestamped owner-only `VACUUM INTO` backup under `backups/`. Fresh creation needs no backup. Stable SQL and generated files live under `internal/db`; Go's internal-package boundary prevents callers outside `centralstore` from using those primitives directly.

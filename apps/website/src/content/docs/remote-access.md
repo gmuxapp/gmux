@@ -20,10 +20,10 @@ The steps below cover the same process in detail.
 If you haven't used Tailscale before:
 
 1. [Create an account](https://login.tailscale.com/start) (free for personal use, up to 100 devices).
-2. [Install Tailscale](https://tailscale.com/download) on the machine running gmux **and** on the device you want to connect from.
-3. Sign in on both devices with the same account.
+2. [Install Tailscale](https://tailscale.com/download) and sign in on the device you will connect from.
+3. Run `gmux remote` on the gmux host and complete its registration flow for gmuxd's embedded Tailscale node.
 
-If you already use Tailscale, just make sure both devices are on the same tailnet.
+The gmux host does not need the system Tailscale daemon: gmuxd uses embedded `tsnet`. If the host already runs system Tailscale, it can coexist with gmuxd's separately registered node.
 
 ### 2. Enable HTTPS and MagicDNS
 

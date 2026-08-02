@@ -84,7 +84,7 @@ Claude Code stores conversations (it calls them session transcripts) as JSONL fi
 
 Note the double dash in `-home-mg--local-share-chezmoi` — that's because `/home/mg/.local` has a dot that also becomes a dash.
 
-gmuxd's Claude adapter watches these directories to discover past conversations and populate resumable entries. Each line in the file is a JSON object with a `type` field (`user`, `assistant`, `system`, `custom-title`, etc.). Live status and attribution do **not** come from these files — the hook binds the exact transcript path at `SessionStart`, so multiple sessions in one directory attribute correctly and immediately.
+gmuxd's Claude adapter watches these directories to keep the conversation index (URL resolution and search) current and to notice deleted conversations; watching never creates sidebar sessions on its own. Each line in the file is a JSON object with a `type` field (`user`, `assistant`, `system`, `custom-title`, etc.). Live status and attribution do **not** come from these files — the hook binds the exact transcript path at `SessionStart`, so multiple sessions in one directory attribute correctly and immediately.
 
 ## Limitations
 

@@ -64,7 +64,7 @@ gmux only reads these directories — agent hooks are injected per launch, never
 
 | Path | Purpose |
 |------|---------|
-| `~/.local/state/gmux/gmuxd.log` | Daemon log when started via `gmux daemon start` (truncated on each start) |
-| `$TMPDIR/gmuxd.log` (usually `/tmp/gmuxd.log`) | Daemon stderr when gmuxd is auto-started by a `gmux` command |
+| `~/.local/state/gmux/gmuxd.log` | Daemon log for both explicit start and CLI autostart; appended and size-bounded |
+| `~/.local/state/gmux/gmuxd.log.1` | Previous bounded log after rotation |
 
-`gmux daemon log-path` prints the state-dir log path.
+`gmux daemon log-path` prints the active log path.

@@ -29,23 +29,13 @@ The feature installs `gmux` and `gmuxd` into the container and starts the daemon
 3. Host connects to the container's gmuxd over the Docker bridge network
 4. Container sessions stream into the host dashboard via the standard peer protocol
 
-The container's sessions appear in the sidebar with a container icon and an `@<peer>` suffix (the peer is named after the host folder, e.g. `my-project`). Discovered containers also show up in **Settings → Hosts** with `Source: devcontainer`. Launching from that project routes new sessions to the correct container.
+The container's sessions appear in the sidebar with a container icon; on the CLI they are addressed as `<id>@<peer>` (the peer is named after the host folder, e.g. `my-project`). Discovered containers also show up in **Settings → Hosts** with `Source: devcontainer`.
 
 When the container stops, its sessions disappear from the dashboard. When it starts again, the host re-discovers it and the sessions come back — conversation history lives inside the container, so nothing is lost.
 
-:::note[2.0 upgrade]
-Host and container must run the same major version: a 2.0 host cannot connect to a 1.x container daemon. After upgrading the host, rebuild your devcontainers so the feature installs a matching gmux.
+:::note[Version compatibility]
+Host and container must run the same major gmux version. After updating the host, rebuild your devcontainers so the feature installs a matching gmux.
 :::
-
-## Pin a version
-
-By default the feature installs the latest release. To pin:
-
-```json
-"ghcr.io/gmuxapp/features/gmux": {
-  "version": "1.0.0"
-}
-```
 
 ## Pre-provisioned auth token
 

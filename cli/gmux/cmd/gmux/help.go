@@ -217,7 +217,8 @@ timeout. A local signal prints '[Wait interrupted; agent remains active]' and ex
 
   gmux kill <id>
 
-Sends SIGTERM to the session's process. The session stays listed
+Sends SIGHUP to the session's child process group, waits up to two seconds,
+then escalates to SIGKILL. The session stays listed
 ('gmux ls') with its exit code, and its output remains readable.
 `,
 

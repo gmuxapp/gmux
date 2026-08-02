@@ -19,7 +19,7 @@ Settings and theme changes take effect on browser refresh (no daemon restart nee
 
 Not everything lives in config files. gmux keeps daemon-owned state in `~/.local/state/gmux/`:
 
-- **Peers** are added at runtime via *Settings → Hosts → Connect to host* and stored in the daemon’s SQLite database (`state.db`) — they are **not** configured in `host.toml` (the pre-2.0 `[[peers]]` key is ignored with a warning).
+- **Peers** are added at runtime via *Settings → Hosts → Connect to host* and stored in the daemon’s SQLite database (`state.db`) — they are **not** configured in `host.toml`.
 - **Projects** are managed via *Settings → Projects* and stored in `state.db`.
 - The **host auth token** lives in `auth-token` (seedable with `GMUXD_TOKEN`); `gmux auth` prints it along with a login/pairing URL.
 
@@ -30,4 +30,4 @@ See [Multi-machine](/multi-machine/) and [File paths](/reference/file-paths/) fo
 - [File paths](/reference/file-paths/) — config files, sockets, runtime state, logs
 - [CLI commands](/reference/cli/) — `gmux` and `gmuxd` usage
 - [Environment variables](/reference/environment/) — variables that affect gmux and variables set inside sessions
-- [Projects](/reference/projects-json/) — project model and match rules
+- [Using the UI: Projects](/using-the-ui/#projects) — project matching and peer-project setup

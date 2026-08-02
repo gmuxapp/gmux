@@ -105,7 +105,7 @@ gmux tail <id> -n 50       # the raw screen: terminal text, any session
 gmux ls            # all local sessions, alive first, newest first
 gmux ls --all      # include sessions on paired peer hosts (ids print as <id>@<peer>)
 gmux ls --json     # machine-readable, for parsing in scripts
-gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
+gmux kill <id>     # SIGHUP child group; SIGKILL after a 2s grace period
 ```
 
 When parsing JSON, use `.ref` as the session argument — never `.id`. It is the

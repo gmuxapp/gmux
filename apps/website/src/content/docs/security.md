@@ -115,7 +115,7 @@ For container deployments, the `GMUXD_TOKEN` environment variable can seed the t
 
 The file remains the primary storage. Environment variables are inherited by child processes, visible in `/proc/*/environ`, and tend to appear in CI logs and Docker inspect output. CLI flags show up in `ps` and shell history. A file with `0600` permissions is the smallest attack surface for a long-lived secret. The env var is a provisioning convenience for containers, not a replacement for the file.
 
-The [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory has ready-to-run Docker Compose setups showing how to handle auth in common deployment scenarios: [Tailscale](/running-in-docker/#tailscale-recommended), [WireGuard](/running-in-docker/#wireguard), and [Traefik with OIDC](/running-in-docker/#reverse-proxy-with-oidc-traefik--pocketid).
+The [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory has ready-to-run Docker Compose setups showing how to handle auth in common deployment scenarios: [Tailscale](/running-in-docker/#tailscale-recommended), [WireGuard](/running-in-docker/#wireguard), and [Traefik with OIDC](/running-in-docker/#reverse-proxy-with-oidc-traefik-pocketid).
 
 **For easy access from other devices**, use [Tailscale remote access](/remote-access). It gives you HTTPS with automatic certificates and cryptographic identity verification; access still requires the host's token (run `gmux auth` to get its connect URL).
 

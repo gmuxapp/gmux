@@ -21,7 +21,7 @@ One per session. It:
 
 One per machine. It:
 
-- Discovers live runner sockets (`~/.local/state/gmux/run/sessions/*.sock`) — runners register themselves on startup; a periodic socket scan is the fallback (legacy socket dirs from pre-2.0 runners are scanned for one release)
+- Discovers live runner sockets (`~/.local/state/gmux/run/sessions/*.sock`) — runners register themselves on startup; a periodic socket scan is the fallback
 - Subscribes to runner events for live updates
 - Maintains a conversations index fed by adapter-owned conversation sources (e.g. pi's JSONL conversation files), used for discovery and resume
 - Serves the REST API, SSE event stream, and WebSocket proxy
@@ -96,9 +96,10 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `GET /v1/frontend-config` | User settings + theme (from JSONC files) |
 | `POST /v1/launch` | Launch a new session |
 | `POST /v1/sessions/{id}/kill` | Kill a session |
-| `POST /v1/sessions/{id}/dismiss` | Kill + remove |
+| `POST /v1/sessions/{id}/dismiss` | Stop and dismiss the session and every session it launched |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
-| `POST /v1/sessions/{id}/{input,read,scrollback,wait,...}` | Other session actions (input injection, tail, wait-for-idle, …) |
+| `GET /v1/sessions/{id}/scrollback` | Plain-text terminal tail (works for dead sessions) |
+| `POST /v1/sessions/{id}/{input,read,wait,...}` | Other session actions (input injection, mark read, wait-for-idle, …) |
 | `POST /v1/sessions/{id}/prompt` | Semantic agent prompt: mode `prompt`/`follow_up`/`steer`, transparent resume, admission + fused wait (ADR 0027; local sessions only) |
 | `POST /v1/sessions/{id}/cancel` | Semantic agent interrupt; live active session only, never resumes (ADR 0027) |
 | `GET /v1/conversations/{adapter}/{slug}` | Conversation lookup for resume |

@@ -5,14 +5,15 @@ tableOfContents:
   maxHeadingLevel: 3
 ---
 
-gmux 2.0 is a breaking release. Most changes are one-time: the daemon migrates its own state automatically, and the CLI tells you the new form of any removed command. This page lists every breaking change — what changed, who is affected, and the exact migration steps.
+gmux 2.0 is a breaking release. It starts with a clean SQLite state store; it does **not** import 1.x projects, peers, or dead-session metadata. The CLI tells you the new form of removed commands. This page lists every breaking change and the required migration steps.
 
 **The short version:**
 
 1. Upgrade every machine (and rebuild devcontainers) **together** — 2.0 hosts can't peer with 1.x hosts.
 2. Update scripts and muscle memory to the verb-first CLI: `gmux -- <cmd>` to run, `gmux open` for the UI, `gmux ls/attach/send/wait/kill` instead of flags.
-3. Re-authorize your tailnet hosts: peers now require the host's token (**Settings → Hosts → Add token**, using `gmux auth` on each host).
-4. If you parse gmux JSON: `kind` → `adapter`, `session_file` → `conversation_file`.
+3. Re-add each remote host with its connect URL (**Settings → Hosts → Connect to host**, using `gmux auth` on that host), then add the projects you want under **Settings → Projects → From other hosts**.
+4. Recreate local projects. Running 1.x sessions can re-register, but dead history, project order, references, and connected hosts do not carry over.
+5. If you parse gmux JSON: `kind` → `adapter`, `session_file` → `conversation_file`.
 
 ---
 
@@ -86,7 +87,7 @@ Before, passing the Tailscale allow list granted the full API. Now tailnet ident
 
 Before, gmux machines on your tailnet appeared as hosts automatically. Now peers are explicit: run `gmux auth` on the host, paste its connect URL into **Settings → Hosts → Connect to host**.
 
-**Automatic migration on first 2.0 start:** hosts you had project references on are imported from the old discovery cache as **Auth needed** rows — click **Add token** on each to bring it back online (references keep resolving throughout). Unreferenced machines are dropped; re-add them on demand. The legacy cache is deleted. 2.0 uses a clean SQLite database (`state.db`); old JSON state files are ignored.
+There is no host/reference importer. On first 2.0 start, the daemon creates a clean SQLite database (`state.db`) and ignores the old discovery cache and JSON state. Re-add every wanted host with **Connect to host**, then add its projects under **Settings → Projects → From other hosts**. Recreate local projects as well.
 
 ### Removed `host.toml` keys
 
@@ -153,13 +154,12 @@ pi, Claude Code, and Codex now report status/titles/attribution through injected
 
 ### Sessions and retention
 
-- **Dead sessions persist across daemon restarts** (as rows in the SQLite database `state.db`), and **dismiss is now permanent** — restarting the daemon no longer resurfaces dismissed sessions.
-- gmux no longer surfaces conversations it never saw by scanning `~/.claude`/`~/.codex`/`~/.pi` into resumable sidebar entries; those files still power URL resolution and resume of known sessions.
-- Retention caps apply: conversation-less dead sessions age out (30 days / 200 max), dead-session scrollback is capped at 256 MB aggregate. Configure these limits in the `[sessions]` section of `host.toml`.
+- **Dead sessions persist across daemon restarts** as rows in SQLite. Dismissal hides the selected session and its launch descendants and removes their project placement; retained rows and conversation identity are not hard-deleted.
+- gmux no longer surfaces conversations it never saw by scanning `~/.claude`/`~/.codex`/`~/.pi` into resumable sidebar entries; those files still power lookup and reconciliation of known sessions.
 
 ### Per-session sockets moved
 
-1.6 put runner sockets in shared `/tmp/gmux-sessions`; 2.0 uses `~/.local/state/gmux/run/sessions` (per-user, 0700). Tooling should read `$GMUX_SOCKET` instead of constructing paths. Legacy directories are scanned for one release so pre-upgrade runners survive; the shim disappears in v2.1. `GMUX_SOCKET_DIR` still overrides.
+1.6 put runner sockets in shared `/tmp/gmux-sessions`; 2.0 uses `~/.local/state/gmux/run/sessions` (per-user, 0700). Tooling should read `$GMUX_SOCKET` instead of constructing paths. Sessions that were running under 1.6 are not carried into the 2.0 daemon — restart them after upgrading. `GMUX_SOCKET_DIR` still overrides.
 
 ### Fresh login environment
 
@@ -171,7 +171,7 @@ Containers are only auto-discovered when they carry the `devcontainer.local_fold
 
 ### Project model
 
-Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026). The `hosts` match-rule field is dropped; cross-host projects are peer **reference items** (`{slug, peer, node_id}`). The REST API (`GET /v1/projects`, `PUT /v1/projects`) uses the same JSON shape. See [Project model](/reference/projects-json/).
+Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026). The `hosts` match-rule field is dropped. Configure projects on the host that owns their sessions, then add wanted network-host projects from **Settings → Projects → From other hosts**.
 
 ---
 
@@ -179,7 +179,7 @@ Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026)
 
 Not breaking, but 1.x docs and muscle memory point at moved things:
 
-- **Home screen** is now a pure activity dashboard (Waiting / Active / recency buckets). Host cards and quick-launch buttons are gone.
+- **Home screen** is now a pure output-recency dashboard (Today, Yesterday, recent weekdays, then dates). Status changes a session's indicator, not its section. Host cards and quick-launch buttons are gone.
 - **Project management** moved from the sidebar's "Manage projects" modal to **Settings → Projects** (gear button).
 - **Hosts roster** lives in **Settings → Hosts**, with explicit Online / Connecting… / Auth needed / Offline statuses.
 - **Mobile toolbar** reworked: dedicated ↑ ↓ and word-jump keys are always present; ctrl/alt arm-and-highlight instead of relabeling keys; paste moved off the toolbar (paste keybind or long-press).
