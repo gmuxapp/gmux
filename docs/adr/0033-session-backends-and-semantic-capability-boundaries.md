@@ -226,8 +226,9 @@ gmux agent prompt --new --model anthropic/claude-fable-5:low@pi 'review this bra
 launches, carried by `--model` and replacing the separate `--adapter` flag
 as those verbs mature (the positional argument remains the session address,
 per ADR 0027/0031). The harness names the identity (decision 1); the drive
-mode is not part of the spec — gmux selects it per the harness's available
-modes. Every component is optional shorthand in practice: the **resolver**
+mode is not part of the spec and is not a preference: a driven launch uses
+the mode in which the harness supports driven launch per the capability
+matrix (decision 9) — ACP for claude/codex, terminal for pi. Every component is optional shorthand in practice: the **resolver**
 — unique whole-token shorthand matching over the usable catalogs, recency
 tiebreak, and the `preferred_harnesses` semantics — is deliberately **not
 specified here** and is reserved for a follow-up ADR. This ADR fixes only
