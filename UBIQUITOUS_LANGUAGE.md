@@ -13,6 +13,9 @@ This file defines current v2 terminology. Historical ADRs may use superseded `st
 | **Conversation ID** | Stable adapter-reported identity extracted by `DescribeConversation`; indexed with adapter as `(adapter, conversationID)`. | Tool ID |
 | **Conversation Ref** | Opaque adapter-scoped locator persisted in `conversation_file` for compatibility. Only the adapter interprets it. | File path as identity |
 | **Launch parent** | Immutable session ID of the session that launched this one. Records provenance independently of presentation promotion. | UI parent only |
+| **Harness** | The agent tool a session runs — pi, claude, codex. Names the session identity in the canonical spec `model:effort@harness`; one adapter per harness. | Backend, adapter (as identity) |
+| **Drive mode** | How gmux hosts and drives a harness: terminal (PTY) or ACP. Capabilities attach to the (harness, mode) pair; for driven launches the mode is capability-determined, never a preference. | Backend, session kind |
+| **In-scope models** | The model list a harness's own picker offers, as configured in the harness itself and reported by its adapter. The shorthand-resolution corpus and web model picker source. | gmux-side model catalog, allowlist in gmux config |
 
 ## Session lifecycle
 

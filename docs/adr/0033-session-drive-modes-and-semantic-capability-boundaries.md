@@ -1,4 +1,4 @@
-# ADR 0033: session backends and semantic capability boundaries
+# ADR 0033: session drive modes and semantic capability boundaries
 
 **Status:** Accepted
 **Date:** 2026-08-02
@@ -78,8 +78,8 @@ failure cited in the #438/#439 post-mortems has a structural fix here.
 
 A session's identity is its **harness** — pi, claude, codex — plus its gmux
 session id and the harness's native conversation. There is one adapter per
-harness. What varies is the **drive mode**: the backend through which gmux
-hosts and drives that harness. Two backends exist:
+harness. What varies is the **drive mode**: how gmux hosts and drives that
+harness. Two drive modes exist:
 
 - **Terminal mode** — the existing PTY session: a real process on a durable
   PTY, attachable, raw-sendable, tailable, with whatever *observational*
@@ -443,9 +443,9 @@ naming convention instead of a (harness, mode) fact, and turn mode
 conversion into a cross-identity migration with no principled owner for the
 shared conversation.
 
-### Headless one-shot modes (`claude -p`, `codex exec`) as the semantic backend
+### Headless one-shot modes (`claude -p`, `codex exec`) as the semantic transport
 
-Rejected as the backend. One-shot invocations discard the durable session:
+Rejected as the transport. One-shot invocations discard the durable session:
 no follow-up queue, no steering, no mid-turn observation, no
 permission-request surface, and a fresh process per prompt. ACP is the
 structured, session-holding version of the same idea and is what these

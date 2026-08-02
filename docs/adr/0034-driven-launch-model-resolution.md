@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08-02
-**Related:** ADR 0027 (semantic agent CLI), ADR 0029 (agent sessions abstract runner residency), ADR 0033 (session backends, capability boundaries, and canonical session spec)
+**Related:** ADR 0027 (semantic agent CLI), ADR 0029 (agent sessions abstract runner residency), ADR 0033 (session drive modes, capability boundaries, and canonical session spec)
 
 ## Context
 

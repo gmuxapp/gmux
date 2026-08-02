@@ -84,7 +84,7 @@ The initial tracer is deliberately **local-only and pi-only**. Commands check
 the capability they use; complete adapter support is a release/documentation
 policy, not a composite `AgentAdapter` marker. Peer forwarding and Claude/Codex
 support are follow-ups. *(Amended 2026-08-02 by
-[ADR 0033](0033-session-backends-and-semantic-capability-boundaries.md):
+[ADR 0033](0033-session-drive-modes-and-semantic-capability-boundaries.md):
 the Claude/Codex follow-up is the ACP drive mode, not this terminal path —
 their terminal-mode sessions stay interactive-only and refuse semantic
 verbs, steer permanently.)*
