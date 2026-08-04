@@ -11,7 +11,7 @@ func regWithParent(id, parent, cwd string, at UnixMillis) RunnerRegistration {
 	r := registration(id, "shell", cwd, true, at)
 	if parent != "" {
 		p := SessionID(parent)
-		r.LaunchParentID = &p
+		r.ParentSessionID = &p
 	}
 	return r
 }
@@ -63,8 +63,8 @@ func TestDismissSessionTreeRecursive(t *testing.T) {
 	}
 	// Hidden, not forgotten: row, provenance, and history retained.
 	after := mustSession(t, s, "c")
-	if after.LaunchParentID == nil || *after.LaunchParentID != "p" {
-		t.Fatalf("launch provenance lost: %#v", after.LaunchParentID)
+	if after.ParentSessionID == nil || *after.ParentSessionID != "p" {
+		t.Fatalf("launch provenance lost: %#v", after.ParentSessionID)
 	}
 	if after.CreatedAt != before.CreatedAt || after.Version != before.Version+1 {
 		t.Fatalf("history lost: before=%#v after=%#v", before, after)
@@ -226,7 +226,7 @@ func TestUndismissalResurfacesAsRootWhenParentDismissed(t *testing.T) {
 	if p == nil || p.scope != "r" || p.pos != 1 { // appended after surviving root "x"
 		t.Fatalf("child must resurface as appended root: %#v", p)
 	}
-	if v := mustSession(t, s, "c"); v.LaunchParentID == nil || *v.LaunchParentID != "p" {
+	if v := mustSession(t, s, "c"); v.ParentSessionID == nil || *v.ParentSessionID != "p" {
 		t.Fatalf("provenance must survive undismissal: %#v", v)
 	}
 }
@@ -254,7 +254,7 @@ func TestUndismissalResurfacesUnderVisibleParent(t *testing.T) {
 }
 
 // Parent deletion promotes surviving direct children to genuine roots by
-// clearing launch_parent_id only. The sticky promoted_to_root bit is
+// clearing parent_session_id only. The sticky promoted_to_root bit is
 // user-authored presentation state and is neither set nor cleared by
 // deletion; grandchildren keep their own provenance.
 func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
@@ -284,8 +284,8 @@ func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	c1 := mustSession(t, s, "c1")
 	c2 := mustSession(t, s, "c2")
 	g := mustSession(t, s, "g")
-	if c1.LaunchParentID != nil || c2.LaunchParentID != nil {
-		t.Fatalf("children parents not cleared: %#v %#v", c1.LaunchParentID, c2.LaunchParentID)
+	if c1.ParentSessionID != nil || c2.ParentSessionID != nil {
+		t.Fatalf("children parents not cleared: %#v %#v", c1.ParentSessionID, c2.ParentSessionID)
 	}
 	if !c1.PromotedToRoot {
 		t.Fatal("existing sticky promotion must survive parent deletion")
@@ -293,8 +293,8 @@ func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	if c2.PromotedToRoot {
 		t.Fatal("deletion must not fabricate a sticky promotion")
 	}
-	if g.LaunchParentID == nil || *g.LaunchParentID != "c2" {
-		t.Fatalf("grandchild provenance must survive: %#v", g.LaunchParentID)
+	if g.ParentSessionID == nil || *g.ParentSessionID != "c2" {
+		t.Fatalf("grandchild provenance must survive: %#v", g.ParentSessionID)
 	}
 	// Root scope repaired densely across all affected scopes; grandchild
 	// stays grouped under its (now root) parent.

@@ -54,7 +54,7 @@ func newRoundTripFixture(t *testing.T) *roundTripFixture {
 	insert(centralstore.NewSession{ID: "18wnzse2", Adapter: "claude", CWD: "/work", CreatedAt: 2, Slug: "fix-auth"})
 	insert(centralstore.NewSession{ID: "10cel6cx", Adapter: "shell", CWD: "/work", CreatedAt: 3})
 	parent := centralstore.SessionID("1mw5c5n9")
-	insert(centralstore.NewSession{ID: "10yeqnxg", Adapter: "shell", CWD: "/work", CreatedAt: 4, LaunchParentID: &parent})
+	insert(centralstore.NewSession{ID: "10yeqnxg", Adapter: "shell", CWD: "/work", CreatedAt: 4, ParentSessionID: &parent})
 	if _, err := s.UpsertLocalPeerPlacement(ctx, centralstore.LocalPeerSubject{PeerKey: "box", SessionID: "cont-1"}, proj); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestGoldenRoundTripPartialRequest(t *testing.T) {
 func TestGoldenRoundTripChildScope(t *testing.T) {
 	f := newRoundTripFixture(t)
 	parent := centralstore.SessionID("1mw5c5n9")
-	if _, _, err := f.store.InsertSession(f.ctx, centralstore.NewSession{ID: "1dy2rn04", Adapter: "shell", CWD: "/work", CreatedAt: 5, LaunchParentID: &parent}); err != nil {
+	if _, _, err := f.store.InsertSession(f.ctx, centralstore.NewSession{ID: "1dy2rn04", Adapter: "shell", CWD: "/work", CreatedAt: 5, ParentSessionID: &parent}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.store.PlaceLocalSession(f.ctx, "1dy2rn04", f.proj); err != nil {

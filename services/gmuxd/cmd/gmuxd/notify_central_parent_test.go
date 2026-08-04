@@ -22,7 +22,7 @@ func notifyRow(adapterName string, active bool, parent string, promoted bool) ce
 	row := centralstore.Session{Adapter: adapterName, Active: active, PromotedToRoot: promoted}
 	if parent != "" {
 		id := centralstore.SessionID(parent)
-		row.LaunchParentID = &id
+		row.ParentSessionID = &id
 	}
 	return row
 }

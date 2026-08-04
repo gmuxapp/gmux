@@ -544,7 +544,7 @@ func aliasTestSession(id centralstore.SessionID, version centralstore.RowVersion
 		ID: id, Version: version, Title: title,
 		Command: []string{"cmd", "arg"}, Remotes: map[string]string{"origin": "url"},
 		StartedAt: &started, ExitedAt: &exited, LastActivityAt: &activity, DismissedAt: &dismissed,
-		ExitCode: &exitCode, TerminalCols: &cols, TerminalRows: &rows, LaunchParentID: &parent,
+		ExitCode: &exitCode, TerminalCols: &cols, TerminalRows: &rows, ParentSessionID: &parent,
 	}
 }
 
@@ -559,7 +559,7 @@ func corruptAliasSession(s *centralstore.Session) {
 	*s.ExitCode = 15
 	*s.TerminalCols = 16
 	*s.TerminalRows = 17
-	*s.LaunchParentID = "mutated-parent"
+	*s.ParentSessionID = "mutated-parent"
 }
 
 // TestOutcomeBusEventProjectionSnapshotOwned reproduces both event alias
@@ -672,7 +672,7 @@ func TestCloneOutcomeSessionOwnsEveryReferenceField(t *testing.T) {
 	allowed := map[string]bool{
 		"Command": true, "Remotes": true, "StartedAt": true, "ExitedAt": true,
 		"LastActivityAt": true, "DismissedAt": true, "ExitCode": true,
-		"TerminalCols": true, "TerminalRows": true, "LaunchParentID": true,
+		"TerminalCols": true, "TerminalRows": true, "ParentSessionID": true,
 	}
 	typ := reflect.TypeOf(centralstore.Session{})
 	for i := range typ.NumField() {

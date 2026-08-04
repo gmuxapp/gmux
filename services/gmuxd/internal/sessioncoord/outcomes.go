@@ -240,7 +240,7 @@ func cloneOutcomeSession(s *centralstore.Session) *centralstore.Session {
 	clone.ExitCode = cloneOutcomePtr(s.ExitCode)
 	clone.TerminalCols = cloneOutcomePtr(s.TerminalCols)
 	clone.TerminalRows = cloneOutcomePtr(s.TerminalRows)
-	clone.LaunchParentID = cloneOutcomePtr(s.LaunchParentID)
+	clone.ParentSessionID = cloneOutcomePtr(s.ParentSessionID)
 	return &clone
 }
 

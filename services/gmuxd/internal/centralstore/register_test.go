@@ -103,7 +103,7 @@ func TestRegisterRunnerSameIDPreservesHistoryAndNoop(t *testing.T) {
 	cat := registrationCatalog(t, s)
 	parent := SessionID("original-parent")
 	first := registration("same", "shell", "/one", false, 10)
-	first.LaunchParentID = &parent
+	first.ParentSessionID = &parent
 	first.Facts.ExitedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(12))}
 	first.Facts.ExitCode = NullablePatch[int]{Set: ptr(3)}
 	got, _, err := s.RegisterRunner(ctx, first)
@@ -118,12 +118,13 @@ func TestRegisterRunnerSameIDPreservesHistoryAndNoop(t *testing.T) {
 
 	otherParent := SessionID("replacement-parent")
 	resume := registration("same", "shell", "/one", true, 99)
-	resume.LaunchParentID = &otherParent
+	resume.ParentSessionID = &otherParent
 	got, result, err := s.RegisterRunner(ctx, resume)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CreatedAt != 10 || got.LaunchParentID == nil || *got.LaunchParentID != parent || !got.PromotedToRoot || got.ExitedAt != nil || got.ExitCode != nil {
+	if got.CreatedAt != 10 || got.ParentSessionID == nil || *got.ParentSessionID != parent ||
+		!got.PromotedToRoot || got.ExitedAt != nil || got.ExitCode != nil {
 		t.Fatalf("history not preserved/live exit not cleared: %#v", got)
 	}
 	if result.SessionVersion != 3 || !result.SessionsDirty || result.WorldDirty {
@@ -515,7 +516,7 @@ func TestRegisterRunnerChildBeforeParentRegroups(t *testing.T) {
 	cat := registrationCatalog(t, s)
 	parent := SessionID("parent")
 	child := registration("child", "shell", "/one", true, 1)
-	child.LaunchParentID = &parent
+	child.ParentSessionID = &parent
 	if _, _, err := s.RegisterRunner(ctx, child); err != nil {
 		t.Fatal(err)
 	}
@@ -539,14 +540,14 @@ func TestRegisterRunnerMissingParentCycleRejectsExactly(t *testing.T) {
 	registrationCatalog(t, s)
 	b := SessionID("b")
 	a := registration("a", "shell", "/one", true, 1)
-	a.LaunchParentID = &b
+	a.ParentSessionID = &b
 	before, _, err := s.RegisterRunner(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	aID := SessionID("a")
 	cycle := registration("b", "shell", "/one", true, 2)
-	cycle.LaunchParentID = &aID
+	cycle.ParentSessionID = &aID
 	if _, _, err = s.RegisterRunner(ctx, cycle); err == nil {
 		t.Fatal("missing-parent cycle registration succeeded")
 	}
@@ -565,7 +566,7 @@ func TestRegisterRunnerDifferentProjectParentAndChildRemainRoots(t *testing.T) {
 	cat := registrationCatalog(t, s)
 	parent := SessionID("parent")
 	child := registration("child", "shell", "/two", true, 1)
-	child.LaunchParentID = &parent
+	child.ParentSessionID = &parent
 	if _, _, err := s.RegisterRunner(ctx, child); err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +588,7 @@ func TestRegisterRunnerMultipleChildrenBeforeParentKeepOrder(t *testing.T) {
 	parent := SessionID("parent")
 	for i, id := range []string{"first", "second", "third"} {
 		child := registration(id, "shell", "/one", true, UnixMillis(i+1))
-		child.LaunchParentID = &parent
+		child.ParentSessionID = &parent
 		if _, _, err := s.RegisterRunner(ctx, child); err != nil {
 			t.Fatal(err)
 		}
@@ -835,7 +836,7 @@ func TestTakeoverSlugAllocationInteractingEvictionsNeverLeaveClearedSurvivor(t *
 			}
 
 			bReg := registration("loser-b", "pi", "/work", false, 3)
-			bReg.LaunchParentID = &a.ID
+			bReg.ParentSessionID = &a.ID
 			bReg.Facts.Slug = &bBase
 			bReg.Facts.ExitedAt.Set = ptr(UnixMillis(4))
 			b, _, err := s.RegisterRunner(ctx, bReg)
@@ -886,7 +887,7 @@ func TestTakeoverSlugAllocationTopologicalEvictions(t *testing.T) {
 			registerLoser := func(id, slug string, parent *SessionID, at UnixMillis) {
 				t.Helper()
 				reg := registration(id, "pi", "/work", false, at)
-				reg.LaunchParentID = parent
+				reg.ParentSessionID = parent
 				reg.Facts.Slug = &slug
 				reg.Facts.ExitedAt.Set = ptr(at + 1)
 				row, _, err := s.RegisterRunner(ctx, reg)
@@ -942,10 +943,10 @@ func TestOrderTakeoverEvictionsRejectsCorruptParentCycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.database.ExecContext(ctx, `DROP TRIGGER local_sessions_launch_parent_immutable_update`); err != nil {
+	if _, err := s.database.ExecContext(ctx, `DROP TRIGGER local_sessions_parent_no_cycle_update`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launch_parent_id = CASE id WHEN 'cycle-a' THEN 'cycle-b' ELSE 'cycle-a' END`); err != nil {
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET parent_session_id = CASE id WHEN 'cycle-a' THEN 'cycle-b' ELSE 'cycle-a' END`); err != nil {
 		t.Fatal(err)
 	}
 	_, err := orderTakeoverEvictions(ctx, s.queries, []TakeoverEviction{{ID: "cycle-a", Version: 1}, {ID: "cycle-b", Version: 1}})

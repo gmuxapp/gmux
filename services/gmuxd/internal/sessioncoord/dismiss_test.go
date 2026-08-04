@@ -20,7 +20,7 @@ func treeSessions(exitless ...centralstore.SessionID) []centralstore.Session {
 		s := centralstore.Session{ID: id, Adapter: "shell", Version: 1}
 		if parent != "" {
 			p := parent
-			s.LaunchParentID = &p
+			s.ParentSessionID = &p
 		}
 		if !noExit[id] {
 			at := centralstore.UnixMillis(100)

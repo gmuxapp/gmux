@@ -14,35 +14,36 @@ type CentralstoreMetadatum struct {
 }
 
 type LocalSession struct {
-	ID               string
-	RowVersion       int64
-	Adapter          string
-	ConversationRef  sql.NullString
-	CommandJson      string
-	Cwd              string
-	WorkspaceRoot    sql.NullString
-	RemotesJson      string
-	Slug             sql.NullString
-	SlugBase         sql.NullString
-	ShellTitle       sql.NullString
-	AdapterTitle     sql.NullString
-	Subtitle         sql.NullString
-	Active           int64
-	Interrupted      int64
-	Unread           int64
-	HasError         int64
-	StatusReported   int64
-	CreatedAtMs      int64
-	StartedAtMs      sql.NullInt64
-	ExitedAtMs       sql.NullInt64
-	LastActivityAtMs sql.NullInt64
-	DismissedAtMs    sql.NullInt64
-	ExitCode         sql.NullInt64
-	TerminalCols     sql.NullInt64
-	TerminalRows     sql.NullInt64
-	LaunchParentID   sql.NullString
-	PromotedToRoot   int64
-	DriveMode        string
+	ID                    string
+	RowVersion            int64
+	Adapter               string
+	ConversationRef       sql.NullString
+	CommandJson           string
+	Cwd                   string
+	WorkspaceRoot         sql.NullString
+	RemotesJson           string
+	Slug                  sql.NullString
+	SlugBase              sql.NullString
+	ShellTitle            sql.NullString
+	AdapterTitle          sql.NullString
+	Subtitle              sql.NullString
+	Active                int64
+	Interrupted           int64
+	Unread                int64
+	HasError              int64
+	StatusReported        int64
+	CreatedAtMs           int64
+	StartedAtMs           sql.NullInt64
+	ExitedAtMs            sql.NullInt64
+	LastActivityAtMs      sql.NullInt64
+	DismissedAtMs         sql.NullInt64
+	ExitCode              sql.NullInt64
+	TerminalCols          sql.NullInt64
+	TerminalRows          sql.NullInt64
+	ParentSessionID       sql.NullString
+	PromotedToRoot        int64
+	DriveMode             string
+	LaunchedFromSessionID sql.NullString
 }
 
 type ManualPeer struct {

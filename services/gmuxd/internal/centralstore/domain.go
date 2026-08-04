@@ -56,7 +56,7 @@ type Session struct {
 	StartedAt, ExitedAt, LastActivityAt, DismissedAt *UnixMillis
 	ExitCode                                         *int
 	TerminalCols, TerminalRows                       *uint16
-	LaunchParentID                                   *SessionID
+	ParentSessionID                                  *SessionID
 	PromotedToRoot                                   bool
 }
 
@@ -81,7 +81,7 @@ type NewSession struct {
 	LastActivityAt             *UnixMillis
 	ExitCode                   *int
 	TerminalCols, TerminalRows *uint16
-	LaunchParentID             *SessionID
+	ParentSessionID            *SessionID
 }
 
 // NullablePatch has three states: zero means unchanged, Set stores a value,
@@ -266,7 +266,7 @@ func validateNewSession(v NewSession) error {
 	if v.CreatedAt < 0 {
 		return errors.New("centralstore: created timestamp must be non-negative")
 	}
-	if v.LaunchParentID != nil && (*v.LaunchParentID == "" || *v.LaunchParentID == v.ID) {
+	if v.ParentSessionID != nil && (*v.ParentSessionID == "" || *v.ParentSessionID == v.ID) {
 		return errors.New("centralstore: invalid launch parent")
 	}
 	for name, x := range map[string]*UnixMillis{"started timestamp": v.StartedAt, "exited timestamp": v.ExitedAt, "activity timestamp": v.LastActivityAt} {
@@ -381,9 +381,9 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	if (out.TerminalCols == nil) != (out.TerminalRows == nil) {
 		return Session{}, errors.New("centralstore: corrupt terminal pair")
 	}
-	if v.LaunchParentID.Valid {
-		x := SessionID(v.LaunchParentID.String)
-		out.LaunchParentID = &x
+	if v.ParentSessionID.Valid {
+		x := SessionID(v.ParentSessionID.String)
+		out.ParentSessionID = &x
 	}
 	out.Title = deriveTitle(out)
 	return out, nil
@@ -412,12 +412,13 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 		return Session{}, MutationResult{}, err
 	}
 	v.SlugBase, v.Slug = candidate.SlugBase, candidate.Slug
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, DriveMode: normalizeDriveMode(v.DriveMode), ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
-		if v.LaunchParentID == nil {
+	parent := func() sql.NullString {
+		if v.ParentSessionID == nil {
 			return sql.NullString{}
 		}
-		return nullString(string(*v.LaunchParentID))
-	}()})
+		return nullString(string(*v.ParentSessionID))
+	}()
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, DriveMode: normalizeDriveMode(v.DriveMode), ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ParentSessionID: parent, LaunchedFromSessionID: parent})
 	if err != nil {
 		return Session{}, MutationResult{}, fmt.Errorf("centralstore: insert session: %w", err)
 	}
@@ -1113,7 +1114,7 @@ func placements(ctx context.Context, q *db.Queries) ([]*placementRec, error) {
 		}
 		r := &placementRec{id: x.ID, project: x.ProjectEntryID, local: x.LocalSessionID.String, peer: x.LocalPeerKey.String, session: x.PeerSessionID.String, parent: x.PeerParentSessionID.String, scope: x.SiblingScope, pos: x.Position, created: x.LocalCreatedAtMs, promoted: x.LocalPromotedToRoot == 1, oldProject: x.ProjectEntryID, oldScope: x.SiblingScope, oldPos: x.Position}
 		if r.local != "" {
-			r.parent = x.LaunchParentID.String
+			r.parent = x.ParentSessionID.String
 		}
 		out = append(out, r)
 	}
@@ -1405,7 +1406,7 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 			return MutationResult{}, e
 		}
 		if target == nil {
-			target = &placementRec{project: int64(project), local: string(sub.LocalSessionID), parent: facts.LaunchParentID.String, created: facts.CreatedAtMs, promoted: facts.PromotedToRoot == 1, isNew: true}
+			target = &placementRec{project: int64(project), local: string(sub.LocalSessionID), parent: facts.ParentSessionID.String, created: facts.CreatedAtMs, promoted: facts.PromotedToRoot == 1, isNew: true}
 			all = append(all, target)
 		}
 	} else {

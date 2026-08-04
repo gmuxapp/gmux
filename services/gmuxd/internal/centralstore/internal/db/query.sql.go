@@ -31,12 +31,12 @@ func (q *Queries) AcknowledgeSessionAtVersion(ctx context.Context, arg Acknowled
 
 const clearDirectChildParents = `-- name: ClearDirectChildParents :execrows
 UPDATE local_sessions
-SET launch_parent_id = NULL, row_version = row_version + 1
-WHERE launch_parent_id = ?
+SET parent_session_id = NULL, row_version = row_version + 1
+WHERE parent_session_id = ?
 `
 
-func (q *Queries) ClearDirectChildParents(ctx context.Context, launchParentID sql.NullString) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearDirectChildParents, launchParentID)
+func (q *Queries) ClearDirectChildParents(ctx context.Context, parentSessionID sql.NullString) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearDirectChildParents, parentSessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -237,7 +237,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -270,9 +270,10 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.ExitCode,
 		&i.TerminalCols,
 		&i.TerminalRows,
-		&i.LaunchParentID,
+		&i.ParentSessionID,
 		&i.PromotedToRoot,
 		&i.DriveMode,
+		&i.LaunchedFromSessionID,
 	)
 	return i, err
 }
@@ -435,38 +436,39 @@ INSERT INTO local_sessions (
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
     active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
-    launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode
+    parent_session_id, launched_from_session_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id
 `
 
 type InsertSessionParams struct {
-	ID               string
-	Adapter          string
-	DriveMode        string
-	ConversationRef  sql.NullString
-	CommandJson      string
-	Cwd              string
-	WorkspaceRoot    sql.NullString
-	RemotesJson      string
-	Slug             sql.NullString
-	SlugBase         sql.NullString
-	ShellTitle       sql.NullString
-	AdapterTitle     sql.NullString
-	Subtitle         sql.NullString
-	Active           int64
-	Interrupted      int64
-	Unread           int64
-	HasError         int64
-	StatusReported   int64
-	CreatedAtMs      int64
-	StartedAtMs      sql.NullInt64
-	ExitedAtMs       sql.NullInt64
-	LastActivityAtMs sql.NullInt64
-	ExitCode         sql.NullInt64
-	TerminalCols     sql.NullInt64
-	TerminalRows     sql.NullInt64
-	LaunchParentID   sql.NullString
+	ID                    string
+	Adapter               string
+	DriveMode             string
+	ConversationRef       sql.NullString
+	CommandJson           string
+	Cwd                   string
+	WorkspaceRoot         sql.NullString
+	RemotesJson           string
+	Slug                  sql.NullString
+	SlugBase              sql.NullString
+	ShellTitle            sql.NullString
+	AdapterTitle          sql.NullString
+	Subtitle              sql.NullString
+	Active                int64
+	Interrupted           int64
+	Unread                int64
+	HasError              int64
+	StatusReported        int64
+	CreatedAtMs           int64
+	StartedAtMs           sql.NullInt64
+	ExitedAtMs            sql.NullInt64
+	LastActivityAtMs      sql.NullInt64
+	ExitCode              sql.NullInt64
+	TerminalCols          sql.NullInt64
+	TerminalRows          sql.NullInt64
+	ParentSessionID       sql.NullString
+	LaunchedFromSessionID sql.NullString
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (LocalSession, error) {
@@ -496,7 +498,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		arg.ExitCode,
 		arg.TerminalCols,
 		arg.TerminalRows,
-		arg.LaunchParentID,
+		arg.ParentSessionID,
+		arg.LaunchedFromSessionID,
 	)
 	var i LocalSession
 	err := row.Scan(
@@ -526,9 +529,10 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.ExitCode,
 		&i.TerminalCols,
 		&i.TerminalRows,
-		&i.LaunchParentID,
+		&i.ParentSessionID,
 		&i.PromotedToRoot,
 		&i.DriveMode,
+		&i.LaunchedFromSessionID,
 	)
 	return i, err
 }
@@ -574,7 +578,7 @@ SELECT p.id, p.project_entry_id, p.local_session_id, p.local_peer_key,
        p.peer_session_id, p.peer_parent_session_id, p.sibling_scope, p.position,
        COALESCE(s.created_at_ms, 0) AS local_created_at_ms,
        COALESCE(s.promoted_to_root, 0) AS local_promoted_to_root,
-       s.launch_parent_id
+       s.parent_session_id
 FROM project_placements p
 LEFT JOIN local_sessions s ON s.id = p.local_session_id
 ORDER BY p.project_entry_id, p.sibling_scope, p.position, p.id
@@ -591,7 +595,7 @@ type ListPlacementsRow struct {
 	Position            int64
 	LocalCreatedAtMs    int64
 	LocalPromotedToRoot int64
-	LaunchParentID      sql.NullString
+	ParentSessionID     sql.NullString
 }
 
 func (q *Queries) ListPlacements(ctx context.Context) ([]ListPlacementsRow, error) {
@@ -614,7 +618,7 @@ func (q *Queries) ListPlacements(ctx context.Context) ([]ListPlacementsRow, erro
 			&i.Position,
 			&i.LocalCreatedAtMs,
 			&i.LocalPromotedToRoot,
-			&i.LaunchParentID,
+			&i.ParentSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -700,7 +704,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -739,9 +743,10 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.ExitCode,
 			&i.TerminalCols,
 			&i.TerminalRows,
-			&i.LaunchParentID,
+			&i.ParentSessionID,
 			&i.PromotedToRoot,
 			&i.DriveMode,
+			&i.LaunchedFromSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -757,20 +762,20 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 }
 
 const localSessionPlacementFacts = `-- name: LocalSessionPlacementFacts :one
-SELECT created_at_ms, promoted_to_root, launch_parent_id
+SELECT created_at_ms, promoted_to_root, parent_session_id
 FROM local_sessions WHERE id = ?
 `
 
 type LocalSessionPlacementFactsRow struct {
-	CreatedAtMs    int64
-	PromotedToRoot int64
-	LaunchParentID sql.NullString
+	CreatedAtMs     int64
+	PromotedToRoot  int64
+	ParentSessionID sql.NullString
 }
 
 func (q *Queries) LocalSessionPlacementFacts(ctx context.Context, id string) (LocalSessionPlacementFactsRow, error) {
 	row := q.db.QueryRowContext(ctx, localSessionPlacementFacts, id)
 	var i LocalSessionPlacementFactsRow
-	err := row.Scan(&i.CreatedAtMs, &i.PromotedToRoot, &i.LaunchParentID)
+	err := row.Scan(&i.CreatedAtMs, &i.PromotedToRoot, &i.ParentSessionID)
 	return i, err
 }
 
