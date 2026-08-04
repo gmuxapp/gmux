@@ -63,7 +63,16 @@ func Watch(ctx context.Context, root, suffix string, emit func(Event)) error {
 		}
 	}
 
-	tw := &treeWatcher{w: w, suffix: suffix, emit: emit, watched: map[string]bool{}}
+	root = filepath.Clean(root)
+	tw := &treeWatcher{w: w, root: root, suffix: suffix, emit: emit, watched: map[string]bool{}}
+
+	// Keep watching the root's parent so removal of root itself does not leave
+	// us with no watch from which to observe its recreation.
+	if parent := filepath.Dir(root); parent != root {
+		if err := w.Add(parent); err != nil {
+			log.Printf("filewatch: watch root parent %s: %v", parent, err)
+		}
+	}
 	tw.addTree(root)
 
 	for {
@@ -89,6 +98,7 @@ func Watch(ctx context.Context, root, suffix string, emit func(Event)) error {
 // treeWatcher is owned by a single Watch goroutine; no locking needed.
 type treeWatcher struct {
 	w       *fsnotify.Watcher
+	root    string
 	suffix  string
 	emit    func(Event)
 	watched map[string]bool
@@ -119,6 +129,21 @@ func (t *treeWatcher) addTree(root string) {
 }
 
 func (t *treeWatcher) handle(ev fsnotify.Event) {
+	// The parent watch exists only to observe root being recreated; ignore its
+	// unrelated events.
+	if !pathWithin(t.root, ev.Name) {
+		return
+	}
+
+	// Removing or renaming a watched directory removes its kernel watch. Prune
+	// it and all watched descendants so a later Create can install fresh ones.
+	if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
+		if t.watched[ev.Name] {
+			t.forgetTree(ev.Name)
+			return
+		}
+	}
+
 	// A newly-created directory: watch it and catch up any files that already
 	// landed inside (recurse for `mkdir -p a/b/c`).
 	if ev.Has(fsnotify.Create) {
@@ -146,4 +171,17 @@ func (t *treeWatcher) handle(ev fsnotify.Event) {
 	case ev.Has(fsnotify.Create), ev.Has(fsnotify.Write):
 		t.emit(Event{Path: ev.Name})
 	}
+}
+
+func (t *treeWatcher) forgetTree(root string) {
+	for dir := range t.watched {
+		if pathWithin(root, dir) {
+			delete(t.watched, dir)
+		}
+	}
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
