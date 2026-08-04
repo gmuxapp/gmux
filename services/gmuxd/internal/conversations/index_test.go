@@ -59,6 +59,26 @@ func TestUpsert_UpdateInPlace(t *testing.T) {
 	}
 }
 
+func TestUpsert_TransientEmptySlugPreservesDisplayMetadata(t *testing.T) {
+	idx := New()
+	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth", Adapter: "pi", Title: "Fix auth"})
+
+	key := idx.Upsert(Info{ConversationID: "abc-123", Adapter: "pi"})
+	if key != "fix-auth" {
+		t.Fatalf("transient empty update key = %q, want fix-auth", key)
+	}
+	info, ok := idx.Lookup("pi", key)
+	if !ok || info.Slug != "fix-auth" || info.Title != "Fix auth" {
+		t.Fatalf("transient empty update lost display metadata: %+v, ok=%v", info, ok)
+	}
+
+	key = idx.Upsert(Info{ConversationID: "abc-123", Slug: "auth-restored", Adapter: "pi", Title: "Auth restored"})
+	info, ok = idx.Lookup("pi", key)
+	if key != "auth-restored" || !ok || info.Slug != "auth-restored" || info.Title != "Auth restored" {
+		t.Fatalf("restored update not applied: key=%q info=%+v ok=%v", key, info, ok)
+	}
+}
+
 func TestUpsert_SlugCollision(t *testing.T) {
 	idx := New()
 	s1 := idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Adapter: "claude"})
