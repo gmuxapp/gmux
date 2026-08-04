@@ -1,12 +1,11 @@
 import type { Session } from './types'
 
 /** Resolve one potential task-family edge without trusting the rest of the
- * ancestry. Both endpoints must be semantic agents; unresolved provenance is
- * not a presentation edge. Promotion breaks only the presentation edge without
- * erasing parent_session_id provenance. */
+ * ancestry. The parent must be a semantic agent; its child may be any session.
+ * Unresolved provenance is not a presentation edge. Promotion breaks only the
+ * presentation edge without erasing parent_session_id provenance. */
 function potentialFamilyParent(session: Session, byId: ReadonlyMap<string, Session>): Session | undefined {
-  if (session.semantic_agent !== true
-    || session.promoted_to_root === true
+  if (session.promoted_to_root === true
     || !session.parent_session_id
     || session.parent_session_id === session.id) return undefined
   const parent = byId.get(session.parent_session_id)

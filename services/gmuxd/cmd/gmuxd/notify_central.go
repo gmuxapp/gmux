@@ -158,7 +158,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 		delete(r.suppressedInactive, id)
 	} else if transitionedInactive {
 		delete(r.suppressedInactive, id)
-		if cur.SemanticAgent && !cur.Promoted && cur.ParentID != "" {
+		if !cur.Promoted && cur.ParentID != "" {
 			parent, parentExists := r.prevState[cur.ParentID]
 			r.suppressedInactive[id] = parentExists && parent.SemanticAgent && parent.Active
 		}
