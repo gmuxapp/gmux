@@ -38,7 +38,7 @@ func TestSessionFamilyMutationHTTPRoundTrip(t *testing.T) {
 		t.Helper()
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-		handleCentralSessionAction(recorder, request, boot, fanout, nil, nil, nil, "")
+		handleCentralSessionAction(recorder, request, boot, fanout, nil, nil, nil, "", nil)
 		return recorder
 	}
 
@@ -126,7 +126,7 @@ func TestSessionReparentHTTPValidation(t *testing.T) {
 	boot := &Bootstrap{Store: store, Coordinator: coord, Composer: central.New(store, nil, nil)}
 	request := func(id, body string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
-		handleCentralSessionAction(recorder, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+id+"/reparent", strings.NewReader(body)), boot, newSSEFanout(), nil, nil, nil, "")
+		handleCentralSessionAction(recorder, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+id+"/reparent", strings.NewReader(body)), boot, newSSEFanout(), nil, nil, nil, "", nil)
 		return recorder
 	}
 	if response := request("a", `{"parent_session_id":"a"}`); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "self_parent") {

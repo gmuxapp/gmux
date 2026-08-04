@@ -43,6 +43,7 @@ type Session struct {
 	Remotes                                                   map[string]string
 	Slug, SlugBase, ShellTitle, AdapterTitle, Subtitle, Title string
 	Active, Unread, Error, Interrupted                        bool
+	UnreadToken                                               string
 	// StatusReported records whether the CURRENT runner generation ever
 	// reported an active/error status for this row (runner-authoritative,
 	// generation-scoped; the production model's Status != nil, which
@@ -56,7 +57,7 @@ type Session struct {
 	StartedAt, ExitedAt, LastActivityAt, DismissedAt *UnixMillis
 	ExitCode                                         *int
 	TerminalCols, TerminalRows                       *uint16
-	ParentSessionID                                  *SessionID
+	ParentSessionID, LaunchedFromSessionID           *SessionID
 	PromotedToRoot                                   bool
 }
 
@@ -73,6 +74,7 @@ type NewSession struct {
 	Slug, SlugBase, ShellTitle, AdapterTitle string
 	Subtitle                                 string
 	Active, Unread, Error, Interrupted       bool
+	UnreadToken                              string
 	// StatusReported marks the status facts as runner-reported. Implied
 	// (and forced true at insert) when Active, Error or Interrupted is set.
 	StatusReported             bool
@@ -98,6 +100,7 @@ type CommonFactsPatch struct {
 	Command                                                                       *[]string
 	Remotes                                                                       *map[string]string
 	Active, Unread, Error, Interrupted                                            *bool
+	UnreadToken                                                                   *string
 	StartedAt, ExitedAt, LastActivityAt                                           NullablePatch[UnixMillis]
 	ExitCode                                                                      NullablePatch[int]
 	TerminalSize                                                                  NullablePatch[TerminalSize]
@@ -111,7 +114,8 @@ type MutationResult struct {
 }
 
 var (
-	ErrStaleVersion = errors.New("centralstore: stale row version")
+	ErrStaleVersion       = errors.New("centralstore: stale row version")
+	ErrUnreadTokenChanged = errors.New("centralstore: unread token changed")
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
 	ErrSessionNotFound    = errors.New("centralstore: session not found")
@@ -313,6 +317,7 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	out.Active = v.Active == 1
 	out.Interrupted = v.Interrupted == 1
 	out.Unread = v.Unread == 1
+	out.UnreadToken = v.UnreadToken
 	out.Error = v.HasError == 1
 	out.PromotedToRoot = v.PromotedToRoot == 1
 	out.StatusReported = v.StatusReported == 1
@@ -387,6 +392,10 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 		x := SessionID(v.ParentSessionID.String)
 		out.ParentSessionID = &x
 	}
+	if v.LaunchedFromSessionID.Valid {
+		x := SessionID(v.LaunchedFromSessionID.String)
+		out.LaunchedFromSessionID = &x
+	}
 	out.Title = deriveTitle(out)
 	return out, nil
 }
@@ -420,7 +429,7 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 		}
 		return nullString(string(*v.ParentSessionID))
 	}()
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, DriveMode: normalizeDriveMode(v.DriveMode), ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ParentSessionID: parent, LaunchedFromSessionID: parent})
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, DriveMode: normalizeDriveMode(v.DriveMode), ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), UnreadToken: v.UnreadToken, HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ParentSessionID: parent, LaunchedFromSessionID: parent})
 	if err != nil {
 		return Session{}, MutationResult{}, fmt.Errorf("centralstore: insert session: %w", err)
 	}
@@ -503,7 +512,7 @@ func (s *Store) ApplyRunnerObservation(ctx context.Context, o RunnerObservation)
 		ConversationRef: o.Facts.ConversationRef, CWD: o.Facts.CWD, WorkspaceRoot: o.Facts.WorkspaceRoot,
 		Slug: o.Facts.Slug, ShellTitle: o.Facts.ShellTitle, AdapterTitle: o.Facts.AdapterTitle,
 		Subtitle: o.Facts.Subtitle, Command: o.Facts.Command, Remotes: o.Facts.Remotes,
-		Active: o.Facts.Active, Unread: o.Facts.Unread, Error: o.Facts.Error, Interrupted: o.Facts.Interrupted,
+		Active: o.Facts.Active, Unread: o.Facts.Unread, UnreadToken: o.Facts.UnreadToken, Error: o.Facts.Error, Interrupted: o.Facts.Interrupted,
 		StartedAt: o.Facts.StartedAt, ExitedAt: o.Facts.ExitedAt, ExitCode: o.Facts.ExitCode,
 		TerminalSize: o.Facts.TerminalSize,
 	}
@@ -574,6 +583,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if p.Unread != nil {
 		v.Unread = *p.Unread
 	}
+	if p.UnreadToken != nil {
+		v.UnreadToken = *p.UnreadToken
+	}
 	if p.Error != nil {
 		v.Error = *p.Error
 	}
@@ -582,11 +594,11 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	// acknowledgement path uses its own query and never sets it).
 	v.StatusReported = v.StatusReported || p.Active != nil || p.Error != nil || p.Interrupted != nil
 	// last_output_at semantics (wire name; column keeps last_activity_at_ms):
-	// bumped on (and only on) the unread false→true transition — the moment
-	// the session produced output the user hasn't seen. Deliberately NOT
-	// bumped by active/error transitions or exit; see store.Session
-	// LastOutputAt docstring for the rationale (activity-feed sort key).
-	if runnerObservedAt != nil && !before.Unread && v.Unread {
+	// bumped when a new unread result token arrives, including a completion
+	// while an older result remains unread. Deliberately NOT bumped by plain
+	// active/error transitions or exit.
+	newUnreadResult := v.Unread && (!before.Unread || (p.UnreadToken != nil && before.UnreadToken != v.UnreadToken))
+	if runnerObservedAt != nil && newUnreadResult {
 		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
 			x := *runnerObservedAt
 			v.LastActivityAt = &x
@@ -641,7 +653,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if err != nil {
 		return MutationResult{}, err
 	}
-	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
+	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), UnreadToken: v.UnreadToken, HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -659,6 +671,16 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 // must establish that no runner is live immediately before calling this
 // conditional operation.
 func (s *Store) AcknowledgeDeadSession(ctx context.Context, id SessionID, observed RowVersion) (MutationResult, error) {
+	return s.acknowledgeDeadSession(ctx, id, observed, nil)
+}
+
+// AcknowledgeDeadSessionToken conditionally consumes exactly one observed
+// unread result token. A delayed read cannot clear a newer retained result.
+func (s *Store) AcknowledgeDeadSessionToken(ctx context.Context, id SessionID, observed RowVersion, token string) (MutationResult, error) {
+	return s.acknowledgeDeadSession(ctx, id, observed, &token)
+}
+
+func (s *Store) acknowledgeDeadSession(ctx context.Context, id SessionID, observed RowVersion, token *string) (MutationResult, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return MutationResult{}, err
@@ -679,13 +701,21 @@ func (s *Store) AcknowledgeDeadSession(ctx context.Context, id SessionID, observ
 	if current.Version != observed {
 		return MutationResult{SessionVersion: current.Version}, ErrStaleVersion
 	}
+	if token != nil && current.UnreadToken != *token {
+		return MutationResult{SessionVersion: current.Version}, ErrUnreadTokenChanged
+	}
 	if !current.Unread && !current.Error {
 		if err = tx.Commit(); err != nil {
 			return MutationResult{}, err
 		}
 		return MutationResult{SessionVersion: observed}, nil
 	}
-	n, err := q.AcknowledgeSessionAtVersion(ctx, db.AcknowledgeSessionAtVersionParams{ID: string(id), RowVersion: int64(observed)})
+	var n int64
+	if token == nil {
+		n, err = q.AcknowledgeSessionAtVersion(ctx, db.AcknowledgeSessionAtVersionParams{ID: string(id), RowVersion: int64(observed)})
+	} else {
+		n, err = q.AcknowledgeSessionTokenAtVersion(ctx, db.AcknowledgeSessionTokenAtVersionParams{ID: string(id), RowVersion: int64(observed), UnreadToken: *token})
+	}
 	if err != nil {
 		return MutationResult{}, err
 	}

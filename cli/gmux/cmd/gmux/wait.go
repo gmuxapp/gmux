@@ -255,7 +255,14 @@ func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTi
 		if timeoutSecs > 0 && waitInvocationExpired(ctx) {
 			return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
 		}
-		return reportWaitResult(env.Data, predicate, quiet, stdout)
+		code := reportWaitResult(env.Data, predicate, quiet, stdout)
+		if code == waitExitOK {
+			if err := consumeSession(sess); err != nil {
+				fmt.Fprintf(os.Stderr, "gmux: wait could not mark %s read: %v\n", displayID(sess), err)
+				return waitExitError
+			}
+		}
+		return code
 	case http.StatusRequestTimeout:
 		if predicate {
 			fmt.Fprintf(os.Stderr, "gmux: the session's output did not match within %ds\n", timeoutSecs)

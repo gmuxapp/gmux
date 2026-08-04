@@ -29,6 +29,26 @@ func (q *Queries) AcknowledgeSessionAtVersion(ctx context.Context, arg Acknowled
 	return result.RowsAffected()
 }
 
+const acknowledgeSessionTokenAtVersion = `-- name: AcknowledgeSessionTokenAtVersion :execrows
+UPDATE local_sessions
+SET unread = 0, has_error = 0, row_version = row_version + 1
+WHERE id = ? AND row_version = ? AND unread_token = ? AND (unread <> 0 OR has_error <> 0)
+`
+
+type AcknowledgeSessionTokenAtVersionParams struct {
+	ID          string
+	RowVersion  int64
+	UnreadToken string
+}
+
+func (q *Queries) AcknowledgeSessionTokenAtVersion(ctx context.Context, arg AcknowledgeSessionTokenAtVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acknowledgeSessionTokenAtVersion, arg.ID, arg.RowVersion, arg.UnreadToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearDirectChildParents = `-- name: ClearDirectChildParents :execrows
 UPDATE local_sessions
 SET parent_session_id = NULL, row_version = row_version + 1
@@ -237,7 +257,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id, unread_token FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -274,6 +294,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.PromotedToRoot,
 		&i.DriveMode,
 		&i.LaunchedFromSessionID,
+		&i.UnreadToken,
 	)
 	return i, err
 }
@@ -434,11 +455,11 @@ const insertSession = `-- name: InsertSession :one
 INSERT INTO local_sessions (
     id, adapter, drive_mode, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
-    active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
+    active, interrupted, unread, unread_token, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     parent_session_id, launched_from_session_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id, unread_token
 `
 
 type InsertSessionParams struct {
@@ -458,6 +479,7 @@ type InsertSessionParams struct {
 	Active                int64
 	Interrupted           int64
 	Unread                int64
+	UnreadToken           string
 	HasError              int64
 	StatusReported        int64
 	CreatedAtMs           int64
@@ -489,6 +511,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		arg.Active,
 		arg.Interrupted,
 		arg.Unread,
+		arg.UnreadToken,
 		arg.HasError,
 		arg.StatusReported,
 		arg.CreatedAtMs,
@@ -533,6 +556,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.PromotedToRoot,
 		&i.DriveMode,
 		&i.LaunchedFromSessionID,
+		&i.UnreadToken,
 	)
 	return i, err
 }
@@ -704,7 +728,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, parent_session_id, promoted_to_root, drive_mode, launched_from_session_id, unread_token FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -747,6 +771,7 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.PromotedToRoot,
 			&i.DriveMode,
 			&i.LaunchedFromSessionID,
+			&i.UnreadToken,
 		); err != nil {
 			return nil, err
 		}
@@ -948,7 +973,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
     workspace_root = ?, remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?,
-    adapter_title = ?, subtitle = ?, active = ?, interrupted = ?, unread = ?, has_error = ?,
+    adapter_title = ?, subtitle = ?, active = ?, interrupted = ?, unread = ?, unread_token = ?, has_error = ?,
     status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
     last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?
@@ -969,6 +994,7 @@ type UpdateCommonFactsParams struct {
 	Active           int64
 	Interrupted      int64
 	Unread           int64
+	UnreadToken      string
 	HasError         int64
 	StatusReported   int64
 	StartedAtMs      sql.NullInt64
@@ -997,6 +1023,7 @@ func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsPa
 		arg.Active,
 		arg.Interrupted,
 		arg.Unread,
+		arg.UnreadToken,
 		arg.HasError,
 		arg.StatusReported,
 		arg.StartedAtMs,
@@ -1083,7 +1110,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
     remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
-    active = ?, interrupted = ?, unread = ?, has_error = ?, status_reported = ?,
+    active = ?, interrupted = ?, unread = ?, unread_token = ?, has_error = ?, status_reported = ?,
     started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
     terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
 WHERE id = ? AND row_version = ?
@@ -1103,6 +1130,7 @@ type UpdateRunnerRegistrationParams struct {
 	Active           int64
 	Interrupted      int64
 	Unread           int64
+	UnreadToken      string
 	HasError         int64
 	StatusReported   int64
 	StartedAtMs      sql.NullInt64
@@ -1130,6 +1158,7 @@ func (q *Queries) UpdateRunnerRegistration(ctx context.Context, arg UpdateRunner
 		arg.Active,
 		arg.Interrupted,
 		arg.Unread,
+		arg.UnreadToken,
 		arg.HasError,
 		arg.StatusReported,
 		arg.StartedAtMs,

@@ -2,12 +2,15 @@ package main
 
 import (
 	"errors"
+	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 func TestInheritLaunchParentOnlyForFreshUnboundLaunch(t *testing.T) {
@@ -92,27 +95,82 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 	}
 }
 
-// TestFinalizeSessionStateLeavesUpgradedTurnAlone: a session whose
-// turns are mark-delimited (lifetimeTurnOpen == false) must get only
-// the exit event — its last mark-derived Status is the truth. A shell
-// killed mid-command stays Active=true and resolves as "died"; one
-// that exited at its prompt already reads idle.
-func TestFinalizeSessionStateLeavesUpgradedTurnAlone(t *testing.T) {
+// TestFinalizeSessionStateOSCCommandCrashSetsUnread reproduces an OSC C
+// command-start followed by child exit before D. The mark-derived Active bit
+// remains authoritative (wait resolves as died), while process completion is
+// still universally unread and its meta event precedes exit.
+func TestFinalizeSessionStateOSCCommandCrashSetsUnread(t *testing.T) {
 	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell"})
-	st.SetStatus(&adapter.Status{Active: true}) // mid-command
+	marks := adapter.NewPromptMarkTracker(func(active bool) {
+		st.SetStatus(&adapter.Status{Active: active})
+	})
+	marks.Feed([]byte("\x1b]133;C\a"))
+	if !marks.SawMark() {
+		t.Fatal("OSC C did not upgrade the terminal turn source")
+	}
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
 
-	finalizeSessionState(st, false, 0)
+	finalizeSessionState(st, false, 7)
 
-	got := collectEvents(t, ch, 1)
-	if got[0].Type != "exit" {
-		t.Fatalf("first event = %q, want exit (and nothing before it)", got[0].Type)
+	got := collectEvents(t, ch, 2)
+	if got[0].Type != "meta" || got[1].Type != "exit" {
+		t.Fatalf("events = %+v, want unread meta before exit", got)
 	}
 	if s := st.StatusSnapshot(); s == nil || !s.Active {
-		t.Errorf("Status = %+v, want the mark-derived Active=true preserved", s)
+		t.Errorf("Status = %+v, want OSC-derived Active=true preserved", s)
 	}
-	if st.UnreadSnapshot() {
-		t.Error("unread set on a mid-turn death; nothing completed")
+	if !st.UnreadSnapshot() {
+		t.Error("OSC C → crash completion did not set unread")
+	}
+}
+
+func TestRunnerOSCCommandCrashBeforeDCompletesUnread(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "runner.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell", SocketPath: socketPath})
+	srv, err := ptyserver.New(ptyserver.Config{
+		Command: []string{"/bin/sh", "-c", `printf '\033]133;C\a'; exit 7`},
+		Cwd:     "/tmp", Listener: ln, SocketPath: socketPath, Adapter: adapters.NewShell(), State: st,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	select {
+	case <-srv.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner child did not exit")
+	}
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner PTY did not drain")
+	}
+	if srv.LifetimeTurnOpen() {
+		t.Fatal("OSC C did not replace the lifetime turn")
+	}
+	finalizeSessionState(st, srv.LifetimeTurnOpen(), srv.ExitCode())
+	if status := st.StatusSnapshot(); status == nil || !status.Active {
+		t.Fatalf("crash status = %+v, want OSC-derived active retained", status)
+	}
+	if !st.UnreadSnapshot() || st.ExitCode == nil || *st.ExitCode != 7 {
+		t.Fatalf("crash state unread=%v exit=%v", st.UnreadSnapshot(), st.ExitCode)
+	}
+}
+
+func TestFinalizeSessionStateInterruptedExitDoesNotCreateUnread(t *testing.T) {
+	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "pi"})
+	st.SetStatus(&adapter.Status{Interrupted: true})
+	ch := st.Subscribe()
+	defer st.Unsubscribe(ch)
+
+	finalizeSessionState(st, false, 130)
+	got := collectEvents(t, ch, 1)
+	if got[0].Type != "exit" || st.UnreadSnapshot() {
+		t.Fatalf("interrupted exit = events %+v unread=%v", got, st.UnreadSnapshot())
 	}
 }

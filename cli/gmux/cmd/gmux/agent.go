@@ -686,7 +686,11 @@ func cmdAgentCancel(ref string) int {
 // activity is live, the daemon reconciles persisted history with source frames
 // by user-boundary position. The response marker prevents an older daemon's
 // incompatible conversation shape from being printed as exchanges.
-func cmdAgentLogs(ref string, n int, _ ...any) int {
+func cmdAgentLogs(ref string, n int, writers ...io.Writer) int {
+	stdout := io.Writer(os.Stdout)
+	if len(writers) > 0 && writers[0] != nil {
+		stdout = writers[0]
+	}
 	sess, ok := resolveAgentSession(ref, "logs")
 	if !ok {
 		return waitExitError
@@ -723,8 +727,12 @@ func cmdAgentLogs(ref string, n int, _ ...any) int {
 		fmt.Fprintf(os.Stderr, "gmux: the daemon reported a conversation for %s but sent no content\n", displayID(sess))
 		return waitExitError
 	}
-	if _, err := os.Stdout.Write(raw); err != nil {
+	if _, err := stdout.Write(raw); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return waitExitError
+	}
+	if err := consumeSession(sess); err != nil {
+		fmt.Fprintf(os.Stderr, "gmux: agent logs could not mark %s read: %v\n", displayID(sess), err)
 		return waitExitError
 	}
 	return waitExitOK

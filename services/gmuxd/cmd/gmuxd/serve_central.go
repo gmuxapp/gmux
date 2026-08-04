@@ -207,16 +207,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				peerManager.ReconnectAll()
 			}
 		},
-		OnClientFocused: func(string) {
-			if notifier != nil {
-				notifier.CancelAllPending()
-			}
-		},
-		OnSessionSelected: func(_ string, sessionID string) {
-			if notifier != nil {
-				notifier.CancelForSession(sessionID)
-			}
-		},
 	})
 
 	var boot *Bootstrap
@@ -767,7 +757,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
 		})
 		mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
-			handleCentralSessionAction(w, r, boot, fanout, converter, peerManager, sessionDirs, gmuxBin)
+			handleCentralSessionAction(w, r, boot, fanout, converter, peerManager, sessionDirs, gmuxBin, notifier)
 		})
 		mux.HandleFunc("/ws/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
 			sessionID := r.PathValue("sessionID")
@@ -828,9 +818,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				switch msg.Type {
 				case "client-state":
 					presenceTable.Update(clientID, presence.ClientState{Visibility: msg.Visibility, Focused: msg.Focused, SelectedSessionID: msg.SelectedSessionID, LastInteraction: msg.LastInteraction})
-					if msg.SelectedSessionID != "" {
-						_ = boot.Coordinator.AcknowledgeDead(context.Background(), centralstore.SessionID(msg.SelectedSessionID))
-					}
 				case "notif-permission":
 					presenceTable.SetPermission(clientID, msg.Permission)
 				}
@@ -1011,7 +998,7 @@ func (s centralSizer) GetTerminalSize(sessionID string) (uint16, uint16, bool) {
 	return sess.TerminalCols, sess.TerminalRows, true
 }
 
-func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bootstrap, fanout *sseFanout, converter *wire.Converter, peerManager *peering.Manager, sessionDirs *sessionmeta.Store, gmuxBin string) {
+func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bootstrap, fanout *sseFanout, converter *wire.Converter, peerManager *peering.Manager, sessionDirs *sessionmeta.Store, gmuxBin string, notifier *centralNotifyRouter) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 3 {
 		http.NotFound(w, r)
@@ -1213,9 +1200,12 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 			return
 		}
-		if err := boot.Coordinator.AcknowledgeDead(r.Context(), sid); err != nil && !errors.Is(err, centralstore.ErrSessionNotFound) {
+		if err := acknowledgeSession(r.Context(), boot, sid); err != nil && !errors.Is(err, centralstore.ErrSessionNotFound) {
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
+		}
+		if notifier != nil {
+			notifier.CancelForSession(sessionID)
 		}
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "input":

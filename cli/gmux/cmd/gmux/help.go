@@ -32,6 +32,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux tail <id> [-n N]             print the last N lines of terminal output
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
   gmux wait <id>... [--timeout|-t N] block until turns end; print reports
+  gmux read <id>...                  mark retained results consumed
   gmux kill <id>                    terminate a session
   gmux session --help               promote, demote, or reparent sessions
 
@@ -139,6 +140,16 @@ For an agent session you usually want a semantic view instead:
 
 ('gmux tail --raw' and its -e/-r aliases are gone: tail is raw by
 definition, and the conversation view moved to 'gmux agent logs'.)
+`,
+
+	"read": `gmux read: mark session results consumed
+
+  gmux read <id>...
+  gmux read --family <root-id>
+
+The family form marks the root and all transitive launch descendants read. Use
+it once to clear retained child-session unread piles created by older gmux
+versions whose wait command did not consume results.
 `,
 
 	"send": `gmux send: type raw text and keys into a session's terminal

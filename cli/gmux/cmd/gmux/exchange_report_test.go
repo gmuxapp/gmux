@@ -177,10 +177,37 @@ func TestAgentLogsRequiresExchangeScopeMarker(t *testing.T) {
 				if code != 0 || stdout != "[USER]: stored\n" || stderr != "" {
 					t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 				}
+				d.mu.Lock()
+				read := false
+				for _, req := range d.requests {
+					read = read || strings.HasSuffix(req.path, "/read")
+				}
+				d.mu.Unlock()
+				if !read {
+					t.Fatal("agent logs did not acknowledge unread")
+				}
 			} else if code != 1 || stdout != "" || !strings.Contains(stderr, "version skew") {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestAgentLogsOutputFailurePreservesUnread(t *testing.T) {
+	d := startStubDaemon(t, localSession())
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(conversationScopeHeader, "exchanges")
+		_, _ = w.Write([]byte("[AGENT]: result\n"))
+	})
+	if code := cmdAgentLogs("1va8lvdv", 1, failingOutputWriter{}); code == 0 {
+		t.Fatal("agent logs succeeded despite output failure")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, req := range d.requests {
+		if strings.HasSuffix(req.path, "/read") {
+			t.Fatalf("failed agent logs consumed unread: %+v", d.requests)
+		}
 	}
 }
 

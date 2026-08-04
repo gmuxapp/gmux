@@ -537,6 +537,10 @@ func cmdSession(cmd *command) int {
 // peer-live, and peer-dead uniformly (scrollback requests are
 // forwarded to the owning gmuxd for peer sessions).
 func cmdTail(ref string, n int) int {
+	return cmdTailTo(ref, n, os.Stdout)
+}
+
+func cmdTailTo(ref string, n int, stdout io.Writer) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -547,11 +551,32 @@ func cmdTail(ref string, n int) int {
 		return code
 	}
 	data = stripANSI(data)
-	if _, err := os.Stdout.Write(data); err != nil {
+	if _, err := stdout.Write(data); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
+	if err := consumeSession(sess); err != nil {
+		fmt.Fprintf(os.Stderr, "gmux: tail could not mark %s read: %v\n", displayID(sess), err)
+		return 1
+	}
 	return 0
+}
+
+// consumeSession marks a successfully observed session result read. It routes
+// through gmuxd so local/peer and live/dead ownership use one contract.
+func consumeSession(sess cliSession) error {
+	client := gmuxdClient()
+	endpoint := fmt.Sprintf("%s/v1/sessions/%s/read", gmuxdBaseURL(), sess.ID)
+	resp, err := client.Post(endpoint, "application/json", http.NoBody)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s: %s", resp.Status, extractMessage(body))
+	}
+	return nil
 }
 
 // errorCode extracts the machine-readable code from a gmuxd error

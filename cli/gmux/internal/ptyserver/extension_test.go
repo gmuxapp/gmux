@@ -462,7 +462,7 @@ func TestApplyTurnEnd(t *testing.T) {
 	}{
 		{"completed", true, false, false},
 		{"interrupted", false, false, true},
-		{"error", false, true, false},
+		{"error", true, true, false},
 	}
 	for _, tc := range cases {
 		st := session.New(session.Config{ID: "s1", Adapter: "pi"})

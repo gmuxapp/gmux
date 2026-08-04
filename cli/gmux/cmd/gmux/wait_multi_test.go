@@ -77,6 +77,15 @@ func TestWaitSingleKeepsHeaderlessOutput(t *testing.T) {
 	if code != 0 || strings.Contains(stdout, "=== ") || !strings.Contains(stdout, "[AGENT]: done") {
 		t.Fatalf("exit=%d stdout=%q", code, stdout)
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	read := false
+	for _, req := range d.requests {
+		read = read || strings.HasSuffix(req.path, "/read")
+	}
+	if !read {
+		t.Fatal("successful wait did not acknowledge unread")
+	}
 }
 
 func TestWaitMultiExitAggregation(t *testing.T) {
@@ -183,6 +192,13 @@ func TestWaitMultiReceivesAuthoritativeTimeoutWithinWholeDeadline(t *testing.T) 
 	}
 	if strings.Contains(stdout, "session state unknown") {
 		t.Fatalf("authoritative timeout report was replaced by local fallback: %q", stdout)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, req := range d.requests {
+		if strings.HasSuffix(req.path, "/read") {
+			t.Fatalf("timed-out wait consumed unread: %+v", d.requests)
+		}
 	}
 }
 

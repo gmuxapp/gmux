@@ -473,6 +473,12 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt string, 
 			"write pty: "+err.Error()+" (delivery is indeterminate: some bytes may have reached the agent)")
 		return
 	}
+	// Successfully delivered prompt/follow-up/steer input consumes the previous
+	// result. Interrupt is control, not consumption: canceling current work does
+	// not prove the caller read an earlier result.
+	if action != adapter.ActionInterrupt {
+		s.state.SetUnread(false)
+	}
 	// 204 means the bytes reached the PTY transport — nothing more. Whether
 	// the agent accepted them (inactive→active) or completed the turn is
 	// observed elsewhere, from status events.

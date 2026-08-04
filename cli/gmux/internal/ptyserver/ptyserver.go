@@ -968,6 +968,9 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
+	// Reading is an explicit consumption boundary. Unlike WebSocket attach it
+	// carries no terminal stream; it only clears the runner-owned unread bit.
+	mux.HandleFunc("POST /read", s.handleRead)
 	// Semantic agent actions, permanently separate from raw /input (ADR 0027).
 	mux.HandleFunc("POST /prompt", s.handlePrompt)
 	mux.HandleFunc("POST /cancel", s.handleCancel)
@@ -1249,7 +1252,9 @@ func (s *Server) applyTurnEnd(ev hookEvent) {
 		Error:       outcome == "error",
 		Interrupted: outcome == "interrupted",
 	})
-	if closed && outcome == "completed" {
+	if closed && (outcome == "completed" || outcome == "error") {
+		// A failed close still produced a result nobody has consumed. Only an
+		// intentional interruption has no unread completion outcome.
 		s.state.SetUnread(true)
 	}
 }
@@ -1267,6 +1272,11 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.ptmx.Write(body); err != nil {
 		http.Error(w, "write pty: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Successful input means the caller consumed the previous result before
+	// supplying more work, regardless of whether these bytes start a turn.
+	if s.state != nil {
+		s.state.SetUnread(false)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1347,6 +1357,23 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 //
 // The expectation is mandatory here -- an unconditional reap is not a thing
 // this endpoint offers.
+func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
+	want := r.Header.Get(ExpectIncarnationHeader)
+	if want == "" {
+		http.Error(w, "read requires "+ExpectIncarnationHeader, http.StatusBadRequest)
+		return
+	}
+	if want != s.incarnation {
+		log.Printf("ptyserver: refusing /read meant for incarnation %s; this runner is %s", want, s.incarnation)
+		http.Error(w, "incarnation mismatch: this pathname is owned by a different runner", http.StatusConflict)
+		return
+	}
+	if s.state != nil {
+		s.state.SetUnread(false)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleReap(w http.ResponseWriter, r *http.Request) {
 	want := r.Header.Get(ExpectIncarnationHeader)
 	if want == "" {

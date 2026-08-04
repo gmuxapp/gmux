@@ -136,8 +136,8 @@ func TestClaudeStopFailureIsTerminalError(t *testing.T) {
 	if s == nil || s.Active || !s.Error || s.Interrupted {
 		t.Fatalf("StopFailure → %+v, want an inactive terminal error", s)
 	}
-	if st.UnreadSnapshot() {
-		t.Fatal("a failed turn is not unread output")
+	if !st.UnreadSnapshot() {
+		t.Fatal("a failed turn produced an unconsumed result and must be unread")
 	}
 
 	claudeEvent(t, srv, "SessionEnd")
@@ -227,7 +227,7 @@ func TestTurnEndOutcomesOverTheHookWire(t *testing.T) {
 	}{
 		{"completed", false, false, true},
 		{"interrupted", false, true, false},
-		{"error", true, false, false},
+		{"error", true, false, true},
 	} {
 		st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 		srv := &Server{state: st}

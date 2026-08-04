@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +20,10 @@ type stubDaemon struct {
 	sessions        []cliSession
 }
 type recordedRequest struct{ method, path, query, body string }
+
+type failingOutputWriter struct{}
+
+func (failingOutputWriter) Write([]byte) (int, error) { return 0, errors.New("output failed") }
 
 func startStubDaemon(t *testing.T, sessions []cliSession) *stubDaemon {
 	t.Helper()
