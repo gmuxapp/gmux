@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,6 +43,13 @@ func TestProductionContainerE2E(t *testing.T) {
 	if !filepath.IsAbs(bin) {
 		t.Fatal("GMUXD_E2E_BINARY must be absolute")
 	}
+	gmuxBin := os.Getenv("GMUX_E2E_BINARY")
+	if !filepath.IsAbs(gmuxBin) {
+		t.Fatal("GMUX_E2E_BINARY must be absolute")
+	}
+	t.Run("real_cli_registration_and_crash_cleanup", func(t *testing.T) {
+		scenarioRealCLIRegistrationAndCrashCleanup(t, bin, gmuxBin)
+	})
 	t.Run("unread_restart_sse_sqlite", func(t *testing.T) { scenarioUnreadRestart(t, bin) })
 	t.Run("daemon_down_runner_death", func(t *testing.T) { scenarioDaemonDown(t, bin) })
 	t.Run("death_before_apply_crash_repair", func(t *testing.T) { scenarioDeathBarrier(t, bin) })
@@ -269,6 +277,87 @@ func request(t *testing.T, e *prodEnv, method, path, body string) []byte {
 func waitVerdict(t *testing.T, e *prodEnv, id string) string {
 	t.Helper()
 	return string(request(t, e, http.MethodPost, "/v1/sessions/"+id+"/wait?timeout=1", ""))
+}
+
+func scenarioRealCLIRegistrationAndCrashCleanup(t *testing.T, daemonBin, gmuxBin string) {
+	e := newProdEnv(t)
+	d := startDaemon(t, daemonBin, e)
+	defer d.kill()
+
+	const marker = "gmux-container-smoke-marker"
+	markerFile := filepath.Join(e.root, "payload-executed")
+	cmd := exec.Command(gmuxBin, "--", "/bin/sh", "-c", "printf '%s\\n' '"+marker+"' > \"$GMUX_SMOKE_MARKER_FILE\"; exec sleep 60")
+	cmd.Dir = e.home
+	cmd.Env = append(e.vars(), "GMUX_SMOKE_MARKER_FILE="+markerFile)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start real gmux: %v", err)
+	}
+	joined := false
+	defer func() {
+		if !joined {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+
+	var got map[string]any
+	waitFor(t, "real gmux registration", func() bool {
+		for _, candidate := range sessions(t, e) {
+			command, _ := json.Marshal(candidate["command"])
+			if strings.Contains(string(command), marker) {
+				got = candidate
+				return candidate["alive"] == true
+			}
+		}
+		return false
+	})
+	id, _ := got["id"].(string)
+	socketPath, _ := got["socket_path"].(string)
+	if id == "" || socketPath == "" {
+		t.Fatalf("registered session omitted identity/socket fields: %#v", got)
+	}
+	if got["adapter"] != "shell" || got["cwd"] != e.home {
+		t.Fatalf("unexpected real-runner session fields: %#v", got)
+	}
+	waitFor(t, "payload marker file", func() bool {
+		data, err := os.ReadFile(markerFile)
+		return err == nil && strings.TrimSpace(string(data)) == marker
+	})
+	if _, err := os.Stat(socketPath); err != nil {
+		t.Fatalf("registered runner socket %q: %v", socketPath, err)
+	}
+
+	// Kill the isolated process group so the runner and its PTY child model a
+	// container/cgroup crash together, rather than leaving the fixture's sleep.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("SIGKILL real gmux process group: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("SIGKILLed gmux exited successfully")
+	}
+	joined = true
+	waitFor(t, "durable runner death", func() bool {
+		for _, candidate := range sessions(t, e) {
+			if candidate["id"] == id {
+				return candidate["alive"] == false
+			}
+		}
+		return false
+	})
+	if err := syscall.Kill(cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("gmux process %d still exists after Wait: %v", cmd.Process.Pid, err)
+	}
+	stopDaemon(t, d, e)
+	d = startDaemon(t, daemonBin, e)
+	waitFor(t, "startup crash cleanup", func() bool {
+		_, err := os.Stat(socketPath)
+		return os.IsNotExist(err)
+	})
+	if row := session(t, e, id); row["alive"] != false {
+		t.Fatalf("crashed session resurrected after cleanup restart: %#v", row)
+	}
+	stopDaemon(t, d, e)
 }
 
 func scenarioUnreadRestart(t *testing.T, bin string) {
