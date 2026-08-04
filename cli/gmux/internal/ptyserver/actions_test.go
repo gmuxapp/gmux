@@ -284,12 +284,21 @@ func TestSuccessfulRawInputConsumesUnread(t *testing.T) {
 func TestReadEndpointConsumesUnreadForExactRunner(t *testing.T) {
 	f := piFixture(t)
 	f.state.SetUnread(true)
-	code, ec := f.post(t, "/read", "")
+	first := f.state.UnreadToken
+	code, ec := f.post(t, "/read?token="+first, "")
 	if code != http.StatusNoContent || ec != "" || f.state.UnreadSnapshot() {
 		t.Fatalf("read = %d/%s unread=%v", code, ec, f.state.UnreadSnapshot())
 	}
 	f.state.SetUnread(true)
-	code, _ = f.postExpect(t, "another-runner", "/read", "")
+	second := f.state.UnreadToken
+	if first == second {
+		t.Fatal("completion reused an unread token")
+	}
+	code, _ = f.post(t, "/read?token="+first, "")
+	if code != http.StatusConflict || !f.state.UnreadSnapshot() {
+		t.Fatal("delayed first-token acknowledgement consumed the second result")
+	}
+	code, _ = f.postExpect(t, "another-runner", "/read?token="+second, "")
 	if code != http.StatusConflict || !f.state.UnreadSnapshot() {
 		t.Fatal("incarnation mismatch consumed unread")
 	}

@@ -241,6 +241,7 @@ func cloneOutcomeSession(s *centralstore.Session) *centralstore.Session {
 	clone.TerminalCols = cloneOutcomePtr(s.TerminalCols)
 	clone.TerminalRows = cloneOutcomePtr(s.TerminalRows)
 	clone.ParentSessionID = cloneOutcomePtr(s.ParentSessionID)
+	clone.LaunchedFromSessionID = cloneOutcomePtr(s.LaunchedFromSessionID)
 	return &clone
 }
 

@@ -1,6 +1,7 @@
 package ptyserver
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -28,8 +29,14 @@ func collectStatusEvents(t *testing.T, ch chan session.Event, want int, deadline
 				continue
 			}
 			status, ok := ev.Data.(*adapter.Status)
-			if !ok || status == nil {
-				t.Fatalf("status event with unexpected payload %#v", ev.Data)
+			if !ok {
+				raw, err := json.Marshal(ev.Data)
+				if err != nil || json.Unmarshal(raw, &status) != nil {
+					t.Fatalf("status event with unexpected payload %#v", ev.Data)
+				}
+			}
+			if status == nil {
+				t.Fatalf("status event with nil payload %#v", ev.Data)
 			}
 			got = append(got, status.Active)
 		case <-timeout:

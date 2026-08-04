@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ func notifyRow(adapterName string, active bool, parent string, promoted bool) ce
 	if parent != "" {
 		id := centralstore.SessionID(parent)
 		row.ParentSessionID = &id
+		row.LaunchedFromSessionID = &id
 	}
 	return row
 }
@@ -116,6 +118,23 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 				t.Fatalf("pending child notification = %v, want %v", got, tc.wantPending)
 			}
 		})
+	}
+}
+
+func TestCentralNotifyFusedCompletionUnreadUsesParentSuppression(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
+	r.handleOutcome(upsertOutcome("parent", notifyRow("pi", true, "", false)))
+	child := notifyRow("pi", true, "parent", false)
+	r.handleOutcome(upsertOutcome("child", child))
+
+	// Runner status edges commit inactive + unread + token atomically. The
+	// unread half must not schedule before suppression for the same edge.
+	child.Active = false
+	child.Unread = true
+	child.UnreadToken = "result-1"
+	r.handleOutcome(upsertOutcome("child", child))
+	if hasPendingNotification(r, "child") {
+		t.Fatal("fused completion unread escaped active direct-parent suppression")
 	}
 }
 
@@ -217,13 +236,41 @@ func TestCentralReadRouteCancelsFocusedInteractionAttention(t *testing.T) {
 	r := newParentNotifyTestRouter(t)
 	r.scheduleNotification(string(row.ID), "unread", "Child", "New output")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/child/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/child/read?token=", nil)
 	handleCentralSessionAction(rec, req, boot, newSSEFanout(), nil, nil, nil, "", r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if hasPendingNotification(r, "child") {
 		t.Fatal("successful /read did not cancel pending attention")
+	}
+}
+
+func TestCentralReadRouteRejectsDelayedAcknowledgementForNewerCompletion(t *testing.T) {
+	store, boot := openHarness(t, t.TempDir(), newHarnessFleet(0), nil)
+	defer store.Close()
+	exited := centralstore.UnixMillis(10)
+	row, _, err := store.InsertSession(context.Background(), centralstore.NewSession{
+		ID: "child", Adapter: "shell", Command: []string{"sh"}, Remotes: map[string]string{},
+		Unread: true, UnreadToken: "turn-2", CreatedAt: 1, ExitedAt: &exited,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newParentNotifyTestRouter(t)
+	router.scheduleNotification(string(row.ID), "unread", "Child", "New output")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/child/read?token=turn-1", nil)
+	handleCentralSessionAction(rec, req, boot, newSSEFanout(), nil, nil, nil, "", router)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"result_changed"`) {
+		t.Fatalf("read status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, ok, err := store.Session(context.Background(), row.ID)
+	if err != nil || !ok || !got.Unread || got.UnreadToken != "turn-2" {
+		t.Fatalf("newer completion changed: %+v ok=%v err=%v", got, ok, err)
+	}
+	if !hasPendingNotification(router, "child") {
+		t.Fatal("rejected old acknowledgement canceled newer attention")
 	}
 }
 

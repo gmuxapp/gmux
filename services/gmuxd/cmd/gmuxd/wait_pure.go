@@ -141,6 +141,9 @@ type waitConclusion struct {
 	// Cause names WHY an error outcome happened when the turn itself did not
 	// report the failure (today: runner_died).
 	Cause string
+	// UnreadToken binds a successful consumer acknowledgement to the
+	// exact result this verdict observed.
+	UnreadToken string
 }
 
 // classifyTurnClose maps a closed turn's status flags onto the public outcome

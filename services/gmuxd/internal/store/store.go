@@ -43,6 +43,7 @@ type Session struct {
 	Subtitle        string  `json:"subtitle,omitempty"`
 	Status          *Status `json:"status"`
 	Unread          bool    `json:"unread"`
+	UnreadToken     string  `json:"unread_token"`
 
 	// LastOutputAt timestamps the last time this session produced
 	// *unseen* output — the read→unread transition. Used by the UI as
@@ -161,6 +162,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Subtitle        string            `json:"subtitle,omitempty"`
 		Status          *Status           `json:"status"`
 		Unread          bool              `json:"unread"`
+		UnreadToken     string            `json:"unread_token"`
 		Resumable       bool              `json:"resumable,omitempty"`
 		SocketPath      string            `json:"socket_path,omitempty"`
 		TerminalCols    uint16            `json:"terminal_cols,omitempty"`
@@ -180,7 +182,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Alive: s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
 		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
-		Unread: s.Unread, Resumable: s.Resumable,
+		Unread: s.Unread, UnreadToken: s.UnreadToken, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
 		ConversationRef: s.ConversationRef,

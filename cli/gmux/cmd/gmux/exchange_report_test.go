@@ -193,6 +193,37 @@ func TestAgentLogsRequiresExchangeScopeMarker(t *testing.T) {
 	}
 }
 
+func TestAgentLogsDelayedAcknowledgementCannotClearNewerCompletion(t *testing.T) {
+	sessions := localSession()
+	sessions[0].UnreadToken = "turn-1"
+	d := startStubDaemon(t, sessions)
+	currentToken := "turn-1"
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/conversation"):
+			w.Header().Set(conversationScopeHeader, "exchanges")
+			_, _ = w.Write([]byte("[AGENT]: turn one\n"))
+			// N+1 completes after logs observed N's report and token but before
+			// the command sends its acknowledgement.
+			currentToken = "turn-2"
+		case strings.HasSuffix(r.URL.Path, "/read"):
+			if r.URL.Query().Get("token") != "turn-1" || currentToken != "turn-2" {
+				t.Fatalf("unexpected read schedule: %s current token=%s", r.URL.String(), currentToken)
+			}
+			writeErrEnvelope(w, http.StatusConflict, "result_changed", "newer result")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	var out bytes.Buffer
+	if code := cmdAgentLogs("1va8lvdv", 1, &out); code != waitExitOK || out.String() != "[AGENT]: turn one\n" {
+		t.Fatalf("exit=%d output=%q", code, out.String())
+	}
+	if currentToken != "turn-2" {
+		t.Fatal("delayed agent-logs acknowledgement cleared the newer result")
+	}
+}
+
 func TestAgentLogsOutputFailurePreservesUnread(t *testing.T) {
 	d := startStubDaemon(t, localSession())
 	d.on(func(w http.ResponseWriter, r *http.Request) {

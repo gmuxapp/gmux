@@ -1200,7 +1200,15 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 			return
 		}
-		if err := acknowledgeSession(r.Context(), boot, sid); err != nil && !errors.Is(err, centralstore.ErrSessionNotFound) {
+		if !r.URL.Query().Has("token") {
+			writeError(w, http.StatusBadRequest, "bad_request", "read requires a token")
+			return
+		}
+		if err := acknowledgeSession(r.Context(), boot, sid, r.URL.Query().Get("token")); err != nil && !errors.Is(err, centralstore.ErrSessionNotFound) {
+			if errors.Is(err, centralstore.ErrUnreadTokenChanged) || errors.Is(err, discovery.ErrRunnerUnreadTokenChanged) {
+				writeError(w, http.StatusConflict, "result_changed", "session produced a newer unread result")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
@@ -1403,6 +1411,7 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set(conversationScopeHeader, "exchanges")
+	w.Header().Set(unreadTokenHeader, sess.UnreadToken)
 	report := adapter.ExchangeReport{Exchanges: exchanges, Previous: previous, PreviousKnown: true, Outcome: outcome}
 	if outcome == adapter.ExchangeActive {
 		if frame := retainedTurnFrame(boot, sessionID); frame != nil && frame.Current != nil {
@@ -1467,6 +1476,7 @@ func scrollbackBrokerHandlerCentral(w http.ResponseWriter, r *http.Request, sess
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
+	w.Header().Set(unreadTokenHeader, sess.UnreadToken)
 	tailN := 0
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -1600,6 +1610,7 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 		seenAlive = seenAlive || cur.Alive
 		observe(legacy, nil)
 		if verdict, done := terminalReason(legacy, seenAlive); done {
+			verdict.UnreadToken = legacy.UnreadToken
 			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), anchorOrdinal)
 			return
 		}
@@ -1639,6 +1650,7 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			seenAlive = seenAlive || outcome.Alive
 			observe(legacy, &outcome)
 			if verdict, done := terminalReason(legacy, seenAlive); done {
+				verdict.UnreadToken = legacy.UnreadToken
 				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome), anchorOrdinal)
 				return
 			}
@@ -1652,6 +1664,7 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			seenAlive = seenAlive || cur.Alive
 			observe(legacy, nil)
 			if verdict, done := terminalReason(legacy, seenAlive); done {
+				verdict.UnreadToken = legacy.UnreadToken
 				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), anchorOrdinal)
 				return
 			}
@@ -1689,7 +1702,7 @@ var retainedTurnFrame = func(boot *Bootstrap, sessionID string) *sessioncoord.Tu
 }
 
 func writeWaitConclusion(w http.ResponseWriter, _ *http.Request, _ *Bootstrap, _ string, verdict waitConclusion, close *sessioncoord.TurnClose, anchorOrdinal uint64) {
-	data := map[string]any{"reason": verdict.Reason}
+	data := map[string]any{"reason": verdict.Reason, "unread_token": verdict.UnreadToken}
 	if anchorOrdinal != 0 {
 		data["anchor_ordinal"] = anchorOrdinal
 	}
@@ -1753,7 +1766,7 @@ func writeLateExchangeWait(w http.ResponseWriter, sess centralstore.Session, fra
 		previous = len(exchanges) - 1
 		exchanges = exchanges[len(exchanges)-1:]
 	}
-	data := map[string]any{"reason": "idle", "outcome": string(adapter.ExchangeSnapshot), "exchanges": exchanges, "previous_exchanges": previous}
+	data := map[string]any{"reason": "idle", "outcome": string(adapter.ExchangeSnapshot), "exchanges": exchanges, "previous_exchanges": previous, "unread_token": sess.UnreadToken}
 	if sess.StatusReported {
 		outcome := classifyTurnClose(sess.Error, sess.Interrupted)
 		data["outcome"] = outcome
@@ -1792,7 +1805,7 @@ func waitForOutputCentral(w http.ResponseWriter, r *http.Request, boot *Bootstra
 	for {
 		cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 		if ok && check(cur) {
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "matched"}})
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "matched", "unread_token": cur.UnreadToken}})
 			return
 		}
 		if ok {
@@ -1800,7 +1813,7 @@ func waitForOutputCentral(w http.ResponseWriter, r *http.Request, boot *Bootstra
 			seenAlive = seenAlive || cur.Alive
 			if !cur.Alive && hasRunEvidence(legacy, seenAlive) {
 				if check(cur) {
-					writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "matched"}})
+					writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "matched", "unread_token": cur.UnreadToken}})
 					return
 				}
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,6 +259,11 @@ func post(t *testing.T, e *prodEnv, path string, body string) {
 	t.Helper()
 	request(t, e, http.MethodPost, path, body)
 }
+func consumeResult(t *testing.T, e *prodEnv, id string) {
+	t.Helper()
+	token, _ := session(t, e, id)["unread_token"].(string)
+	post(t, e, "/v1/sessions/"+id+"/read?token="+url.QueryEscape(token), "")
+}
 func request(t *testing.T, e *prodEnv, method, path, body string) []byte {
 	t.Helper()
 	req, _ := http.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
@@ -368,7 +374,7 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 	waitFor(t, "dead unread", func() bool { s := session(t, e, r.id); return s["alive"] == false && s["unread"] == true })
 	// Selection/focus reports suppress delivery only. The web interaction
 	// boundary explicitly acknowledges through the same route as CLI readers.
-	post(t, e, "/v1/sessions/"+r.id+"/read", "")
+	consumeResult(t, e, r.id)
 	waitFor(t, "web interaction read ack", func() bool { return session(t, e, r.id)["unread"] == false })
 	stopDaemon(t, d, e)
 	r.close()
@@ -878,7 +884,7 @@ func scenarioAdminStress(t *testing.T, bin string) {
 		waitFor(t, "stress runner live", func() bool { return session(t, e, r.id)["alive"] == true })
 		r.exit(true)
 		waitFor(t, "stress runner dead", func() bool { return session(t, e, r.id)["alive"] == false })
-		post(t, e, "/v1/sessions/"+r.id+"/read", "")
+		consumeResult(t, e, r.id)
 		waitFor(t, "stress read durable", func() bool { return session(t, e, r.id)["unread"] == false })
 		r.close()
 		if i%2 == 0 {

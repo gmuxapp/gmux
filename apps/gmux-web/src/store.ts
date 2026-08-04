@@ -120,7 +120,7 @@ export function _setRawWorld(patch: Partial<RawWorld>) {
 //      silently drops the request can't pin a stale optimistic value.
 
 export type PendingMutation =
-  | { kind: 'mark-read'; id: string; at: number }
+  | { kind: 'mark-read'; id: string; token: string; at: number }
   | { kind: 'dismiss'; id: string; at: number }
 
 export const _pendingMutations = signal<PendingMutation[]>([])
@@ -138,7 +138,7 @@ export function applyPending(
   for (const m of pending) {
     switch (m.kind) {
       case 'mark-read':
-        sess = sess.map(s => s.id !== m.id ? s : ({
+        sess = sess.map(s => s.id !== m.id || (s.unread_token ?? '') !== m.token ? s : ({
           ...s,
           unread: false,
           status: s.status?.error ? { ...s.status, error: false } : s.status,
@@ -160,6 +160,7 @@ function isResolved(m: PendingMutation, rawSessions: Session[]): boolean {
     case 'mark-read': {
       const s = rawSessions.find(x => x.id === m.id)
       if (!s) return true
+      if ((s.unread_token ?? '') !== m.token) return true
       return !s.unread && !s.status?.error
     }
     case 'dismiss':
@@ -1093,6 +1094,7 @@ export function toUISession(s: ProtocolSession): Session {
     subtitle: s.subtitle ?? '',
     status: s.status ?? null,
     unread: s.unread ?? false,
+    unread_token: s.unread_token ?? '',
     resumable: s.resumable ?? false,
     conversation_file: s.conversation_file ?? undefined,
     last_output_at: s.last_output_at ?? undefined,
@@ -1253,30 +1255,35 @@ export function removeSession(id: string) {
   _rawSessions.value = _rawSessions.value.filter(s => s.id !== id)
 }
 
-export function markSessionRead(id: string) {
-  // Optimistic mark-as-read. The server's next session update overwrites
-  // raw with the authoritative state and `isResolved` clears the
-  // mutation; if the server stays silent the TTL drops it eventually.
-  addPending({ kind: 'mark-read', id, at: Date.now() })
-  fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
+export function markSessionRead(id: string, observedToken?: string) {
+  const raw = _rawSessions.peek().find(s => s.id === id)
+  const token = observedToken ?? raw?.unread_token ?? ''
+  // Optimism is token-bound too: a newer completion must immediately escape
+  // an older pending overlay even before the delayed /read returns.
+  addPending({ kind: 'mark-read', id, token, at: Date.now() })
+  fetch(`/v1/sessions/${id}/read?token=${encodeURIComponent(token)}`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
 }
+
+type ReadObservation = { id: string; token: string }
 
 export function createViewConsumptionTracker() {
   let establishedSelection: string | null = null
-  const unreadID = (id: string | null, sess: Session | null): string | null =>
-    id && sess && (sess.unread || sess.status?.error) ? id : null
+  const unreadObservation = (id: string | null, sess: Session | null): ReadObservation | null =>
+    id && sess && (sess.unread || sess.status?.error)
+      ? { id, token: sess.unread_token ?? '' }
+      : null
   return {
-    selection(id: string | null, sess: Session | null): string | null {
+    selection(id: string | null, sess: Session | null): ReadObservation | null {
       if (!id || !sess) {
         establishedSelection = null
         return null
       }
       if (id === establishedSelection) return null
       establishedSelection = id
-      return unreadID(id, sess)
+      return unreadObservation(id, sess)
     },
-    interaction(id: string | null, sess: Session | null): string | null {
-      return unreadID(id, sess)
+    interaction(id: string | null, sess: Session | null): ReadObservation | null {
+      return unreadObservation(id, sess)
     },
   }
 }
@@ -1853,14 +1860,14 @@ export function initStore(): () => void {
   // interaction. Presence still suppresses delivery while focused+visible.
   const viewConsumption = createViewConsumptionTracker()
   const disposeMarkRead = effect(() => {
-    const id = viewConsumption.selection(selectedId.value, selected.value)
-    if (id) markSessionRead(id)
+    const observed = viewConsumption.selection(selectedId.value, selected.value)
+    if (observed) markSessionRead(observed.id, observed.token)
   })
   cleanups.push(disposeMarkRead)
 
   const consumeSelectedOnInteraction = () => {
-    const id = viewConsumption.interaction(selectedId.peek(), selected.peek())
-    if (id) markSessionRead(id)
+    const observed = viewConsumption.interaction(selectedId.peek(), selected.peek())
+    if (observed) markSessionRead(observed.id, observed.token)
   }
   if (typeof document !== 'undefined') {
     // Capture so terminal/keybinding handlers cannot stop the interaction

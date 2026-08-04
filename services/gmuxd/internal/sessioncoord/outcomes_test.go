@@ -539,12 +539,12 @@ func TestOutcomeBusSeedDeduplicatesReflectedCommit(t *testing.T) {
 func aliasTestSession(id centralstore.SessionID, version centralstore.RowVersion, title string) centralstore.Session {
 	started, exited, activity, dismissed := centralstore.UnixMillis(1), centralstore.UnixMillis(2), centralstore.UnixMillis(3), centralstore.UnixMillis(4)
 	exitCode, cols, rows := 5, uint16(80), uint16(24)
-	parent := centralstore.SessionID("parent")
+	parent, launchedFrom := centralstore.SessionID("parent"), centralstore.SessionID("launcher")
 	return centralstore.Session{
 		ID: id, Version: version, Title: title,
 		Command: []string{"cmd", "arg"}, Remotes: map[string]string{"origin": "url"},
 		StartedAt: &started, ExitedAt: &exited, LastActivityAt: &activity, DismissedAt: &dismissed,
-		ExitCode: &exitCode, TerminalCols: &cols, TerminalRows: &rows, ParentSessionID: &parent,
+		ExitCode: &exitCode, TerminalCols: &cols, TerminalRows: &rows, ParentSessionID: &parent, LaunchedFromSessionID: &launchedFrom,
 	}
 }
 
@@ -560,6 +560,7 @@ func corruptAliasSession(s *centralstore.Session) {
 	*s.TerminalCols = 16
 	*s.TerminalRows = 17
 	*s.ParentSessionID = "mutated-parent"
+	*s.LaunchedFromSessionID = "mutated-launcher"
 }
 
 // TestOutcomeBusEventProjectionSnapshotOwned reproduces both event alias
@@ -673,6 +674,7 @@ func TestCloneOutcomeSessionOwnsEveryReferenceField(t *testing.T) {
 		"Command": true, "Remotes": true, "StartedAt": true, "ExitedAt": true,
 		"LastActivityAt": true, "DismissedAt": true, "ExitCode": true,
 		"TerminalCols": true, "TerminalRows": true, "ParentSessionID": true,
+		"LaunchedFromSessionID": true,
 	}
 	typ := reflect.TypeOf(centralstore.Session{})
 	for i := range typ.NumField() {
@@ -684,7 +686,7 @@ func TestCloneOutcomeSessionOwnsEveryReferenceField(t *testing.T) {
 			}
 		}
 	}
-	if len(allowed) != 10 {
+	if len(allowed) != 11 {
 		t.Fatalf("reference-field inventory changed: %v", allowed)
 	}
 	original := aliasTestSession("1xke0d7j", 1, "real")

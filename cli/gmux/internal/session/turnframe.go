@@ -92,7 +92,9 @@ const maxLiveInstructions = 64
 // wire-compatible with a consumer that only knows about status.
 type turnEdge struct {
 	*adapter.Status
-	Frame *TurnFrame `json:"turn_frame,omitempty"`
+	Frame       *TurnFrame `json:"turn_frame,omitempty"`
+	Unread      *bool      `json:"unread,omitempty"`
+	UnreadToken *string    `json:"unread_token,omitempty"`
 }
 
 // OpenTurn records an adapter-asserted turn start and marks the session active.
@@ -205,6 +207,14 @@ func (s *State) NoteIteration(turnSeq uint64) {
 // still publishes the frame — alone, since there is no status transition to pair
 // it with.
 func (s *State) CloseTurnFrame(close TurnClose, status *adapter.Status) bool {
+	return s.CloseTurnFrameUnread(close, status, false)
+}
+
+// CloseTurnFrameUnread publishes unread and the terminal status as one edge
+// when this close produced a consumable result. A waiter resolving on that edge
+// receives the exact token it must acknowledge, while notification suppression
+// is decided before the unread fact can schedule delivery.
+func (s *State) CloseTurnFrameUnread(close TurnClose, status *adapter.Status, unread bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Whatever was armed can no longer enter this loop.
@@ -221,10 +231,19 @@ func (s *State) CloseTurnFrame(close TurnClose, status *adapter.Status) bool {
 		s.emitFrameLocked(frame)
 		return false
 	}
+	if unread {
+		s.markUnreadResultStateLocked()
+	}
 	prev := s.Status
 	s.Status = status
 	s.noteStatusWriteLocked(prev, status)
-	s.emitTurnEdgeLocked(status, frame)
+	if unread {
+		value := true
+		token := s.UnreadToken
+		s.emit(Event{Type: "status", Data: turnEdge{Status: status, Frame: frame, Unread: &value, UnreadToken: &token}})
+	} else {
+		s.emitTurnEdgeLocked(status, frame)
+	}
 	return true
 }
 

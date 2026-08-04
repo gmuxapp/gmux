@@ -760,28 +760,55 @@ describe('markSessionRead', () => {
     expect(sessions.value[1].unread).toBe(true)
   })
 
-  it('posts to the server', () => {
-    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true })]
+  it('posts the observed unread generation to the server', () => {
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true, unread_token: 'token-7' })]
     markSessionRead('1vshk4fu')
-    expect(fetch).toHaveBeenCalledWith('/v1/sessions/1vshk4fu/read', { method: 'POST' })
+    expect(fetch).toHaveBeenCalledWith('/v1/sessions/1vshk4fu/read?token=token-7', { method: 'POST' })
+  })
+
+  it('does not let a delayed view acknowledgement mask a newer completion', () => {
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true, unread_token: 'token-7' })]
+    markSessionRead('1vshk4fu')
+    expect(sessions.value[0].unread).toBe(false)
+    _rawSessions.value = [makeSession({ id: '1vshk4fu', unread: true, unread_token: 'token-8' })]
+    expect(sessions.value[0].unread).toBe(true)
+    expect(fetch).toHaveBeenCalledWith('/v1/sessions/1vshk4fu/read?token=token-7', { method: 'POST' })
   })
 })
 
 describe('focused view consumption', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
   it('sets completion unread while open and clears only on the next interaction', () => {
     const tracker = createViewConsumptionTracker()
     const open = makeSession({ id: 'child', unread: false })
     expect(tracker.selection('child', open)).toBeNull()
 
-    const completed = makeSession({ id: 'child', unread: true, alive: false })
+    const completed = makeSession({ id: 'child', unread: true, unread_token: 'turn-1', alive: false })
     // Snapshot update for the same open session must not consume it.
     expect(tracker.selection('child', completed)).toBeNull()
-    expect(tracker.interaction('child', completed)).toBe('child')
+    expect(tracker.interaction('child', completed)).toEqual({ id: 'child', token: 'turn-1' })
+  })
+
+  it('retains the exact viewed completion across a delayed acknowledgement', () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+    const tracker = createViewConsumptionTracker()
+    const turn1 = makeSession({ id: 'child', unread: true, unread_token: 'turn-1' })
+    const observed = tracker.interaction('child', turn1)
+    expect(observed).toEqual({ id: 'child', token: 'turn-1' })
+
+    // N+1 arrives after the interaction observed N but before /read is issued.
+    _rawSessions.value = [makeSession({ id: 'child', unread: true, unread_token: 'turn-2' })]
+    if (observed) markSessionRead(observed.id, observed.token)
+
+    expect(fetch).toHaveBeenCalledWith('/v1/sessions/child/read?token=turn-1', { method: 'POST' })
+    expect(sessions.value[0].unread).toBe(true)
   })
 
   it('consumes unread that already exists when entering a session', () => {
     const tracker = createViewConsumptionTracker()
-    expect(tracker.selection('child', makeSession({ id: 'child', unread: true }))).toBe('child')
+    expect(tracker.selection('child', makeSession({ id: 'child', unread: true, unread_token: 'turn-1' })))
+      .toEqual({ id: 'child', token: 'turn-1' })
   })
 })
 
@@ -1567,7 +1594,7 @@ describe('pending mutations overlay', () => {
         makeSession({ id: 'a', unread: true, status: { active: false, error: true } }),
         makeSession({ id: 'b', unread: true }),
       ]
-      const m: PendingMutation = { kind: 'mark-read', id: 'a', at: 0 }
+      const m: PendingMutation = { kind: 'mark-read', id: 'a', token: '', at: 0 }
       const out = applyPending(sess, [m])
       expect(out[0].unread).toBe(false)
       expect(out[0].status?.error).toBe(false)
@@ -1584,7 +1611,7 @@ describe('pending mutations overlay', () => {
     it('stacks multiple mutations in order', () => {
       const sess = [makeSession({ id: 'a', unread: true }), makeSession({ id: 'b' })]
       const out = applyPending(sess, [
-        { kind: 'mark-read', id: 'a', at: 0 },
+        { kind: 'mark-read', id: 'a', token: '', at: 0 },
         { kind: 'dismiss', id: 'b', at: 0 },
       ])
       expect(out.map(s => s.id)).toEqual(['a'])

@@ -44,6 +44,36 @@ func TestTailIsAlwaysRaw(t *testing.T) {
 	}
 }
 
+func TestTailDelayedAcknowledgementCannotClearNewerCompletion(t *testing.T) {
+	sessions := localSession()
+	sessions[0].UnreadToken = "turn-1"
+	d := startStubDaemon(t, sessions)
+	currentToken := "turn-1"
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/scrollback"):
+			_, _ = w.Write([]byte("turn one\n"))
+			// N+1 completes after tail observed N's bytes and token but before
+			// the command sends its acknowledgement.
+			currentToken = "turn-2"
+		case strings.HasSuffix(r.URL.Path, "/read"):
+			if r.URL.Query().Get("token") != "turn-1" || currentToken != "turn-2" {
+				t.Fatalf("unexpected read schedule: %s current token=%s", r.URL.String(), currentToken)
+			}
+			writeErrEnvelope(w, http.StatusConflict, "result_changed", "newer result")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	var out strings.Builder
+	if code := cmdTailTo("1va8lvdv", 10, &out); code != 0 || out.String() != "turn one\n" {
+		t.Fatalf("exit=%d output=%q", code, out.String())
+	}
+	if currentToken != "turn-2" {
+		t.Fatal("delayed tail acknowledgement cleared the newer result")
+	}
+}
+
 func TestTailOutputFailurePreservesUnread(t *testing.T) {
 	d := startStubDaemon(t, localSession())
 	d.on(func(w http.ResponseWriter, r *http.Request) {

@@ -719,14 +719,21 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // it sees observes the closed turn, and the store's exit handling
 // persists the final Status rather than a stale mid-turn one.
 func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode int) {
-	if lifetimeTurnOpen {
-		state.SetStatus(&adapter.Status{Active: false, Error: exitCode != 0})
-	}
 	status := state.StatusSnapshot()
-	if status == nil || !status.Interrupted {
-		state.SetUnread(true)
+	if status != nil && status.Interrupted {
+		state.SetExited(exitCode)
+		return
 	}
-	state.SetExited(exitCode)
+	if lifetimeTurnOpen {
+		// Fuse the token with the idle edge that can resolve a waiter and decide
+		// direct-parent suppression, then publish the plain exit.
+		state.SetStatusUnreadResult(&adapter.Status{Active: false, Error: exitCode != 0})
+		state.SetExited(exitCode)
+		return
+	}
+	// Hook/OSC sessions may die while still active. Fuse unread with exit so
+	// completion suppression is committed before attention can be delivered.
+	state.SetExitedUnreadResult(exitCode)
 }
 
 // sessionEditorEnv returns EDITOR/VISUAL entries pointing at `gmux

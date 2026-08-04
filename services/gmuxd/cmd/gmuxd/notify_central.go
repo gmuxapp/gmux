@@ -40,6 +40,7 @@ type notifySessionSnapshot struct {
 	Active      bool
 	Interrupted bool
 	Unread      bool
+	UnreadToken string
 	Alive       bool
 	Title       string
 	Start       string
@@ -118,6 +119,7 @@ func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 		snap.Active = o.Alive && o.Session.StatusReported && o.Session.Active
 		snap.Interrupted = o.Session.StatusReported && o.Session.Interrupted
 		snap.Unread = o.Session.Unread
+		snap.UnreadToken = o.Session.UnreadToken
 		snap.Title = o.Session.Title
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
 		if o.Session.LaunchedFromSessionID != nil {
@@ -184,7 +186,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start))
 	}
-	if !prev.Unread && cur.Unread {
+	if cur.Unread && (!prev.Unread || prev.UnreadToken != cur.UnreadToken) {
 		r.scheduleNotification(id, "unread", cur.Title, "New output")
 	}
 }

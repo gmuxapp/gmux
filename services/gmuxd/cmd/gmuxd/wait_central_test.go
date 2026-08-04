@@ -267,7 +267,7 @@ func TestCentralWaitHandlerAlreadyIdleDeadArrivalNoPhantomAndTimeout(t *testing.
 		s      wire.Session
 		want   int
 		reason string
-	}{{"already idle", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}}, 200, "idle"}, {"dead arrival", wire.Session{ID: "s", Alive: false, StartedAt: "x"}, 200, "died"}, {"no phantom death timeout", wire.Session{ID: "s", Alive: false}, 408, ""}} {
+	}{{"already idle", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}, UnreadToken: "result-1"}, 200, "idle"}, {"dead arrival", wire.Session{ID: "s", Alive: false, StartedAt: "x"}, 200, "died"}, {"no phantom death timeout", wire.Session{ID: "s", Alive: false}, 408, ""}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := wf(tc.s)
 			rec := httptest.NewRecorder()
@@ -278,6 +278,9 @@ func TestCentralWaitHandlerAlreadyIdleDeadArrivalNoPhantomAndTimeout(t *testing.
 			}
 			if tc.reason != "" && !strings.Contains(rec.Body.String(), tc.reason) {
 				t.Fatalf("body=%s", rec.Body.String())
+			}
+			if tc.name == "already idle" && !strings.Contains(rec.Body.String(), `"unread_token":"result-1"`) {
+				t.Fatalf("wait response lost observed unread token: %s", rec.Body.String())
 			}
 		})
 	}

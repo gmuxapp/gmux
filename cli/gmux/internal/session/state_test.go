@@ -8,6 +8,19 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
+func TestUnreadResultTokenAdvancesWhileAlreadyUnread(t *testing.T) {
+	s := New(Config{ID: "s"})
+	s.MarkUnreadResult()
+	first := s.UnreadToken
+	s.MarkUnreadResult()
+	if first == "" || s.UnreadToken == first || !s.UnreadSnapshot() {
+		t.Fatalf("tokens first=%q second=%q unread=%v", first, s.UnreadToken, s.UnreadSnapshot())
+	}
+	if s.AcknowledgeUnread(first) || !s.UnreadSnapshot() {
+		t.Fatal("old token acknowledged a newer result")
+	}
+}
+
 func TestNewState(t *testing.T) {
 	s := New(Config{
 		ID:         "1c54cqk8",

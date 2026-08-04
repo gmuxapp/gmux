@@ -12,13 +12,13 @@ import (
 // acknowledgeSession clears unread at its current owner. Live runner facts are
 // runner-owned; retained dead facts are store-owned. The retry closes the
 // handoff race where a runner exits between the registry read and /read.
-func acknowledgeSession(ctx context.Context, boot *Bootstrap, id centralstore.SessionID) error {
+func acknowledgeSession(ctx context.Context, boot *Bootstrap, id centralstore.SessionID, token string) error {
 	for range 3 {
 		runtime, live := registryRuntime(boot.Registry, id)
 		if !live {
-			return boot.Coordinator.AcknowledgeDead(ctx, id)
+			return boot.Coordinator.AcknowledgeDeadToken(ctx, id, token)
 		}
-		err := discovery.AcknowledgeUnread(ctx, runtime.Endpoint, runtime.Incarnation)
+		err := discovery.AcknowledgeUnread(ctx, runtime.Endpoint, runtime.Incarnation, token)
 		if err == nil {
 			return nil
 		}

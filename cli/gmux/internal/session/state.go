@@ -3,7 +3,10 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,9 +45,10 @@ type State struct {
 	AdapterTitle string `json:"adapter_title,omitempty"`
 
 	// Other display fields
-	Subtitle string          `json:"subtitle,omitempty"`
-	Status   *adapter.Status `json:"status"`
-	Unread   bool            `json:"unread"`
+	Subtitle    string          `json:"subtitle,omitempty"`
+	Status      *adapter.Status `json:"status"`
+	Unread      bool            `json:"unread"`
+	UnreadToken string          `json:"unread_token,omitempty"`
 
 	// Slug is an adapter-provided stable identifier for URL routing.
 	Slug string `json:"slug,omitempty"`
@@ -190,21 +194,90 @@ func (s *State) SetRunning(pid int) {
 func (s *State) SetExited(exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setExitedLocked(exitCode, false)
+}
+
+// SetExitedUnreadResult publishes process completion and its fresh result token
+// in one event. The daemon therefore decides parent suppression before it can
+// deliver attention for that same completion.
+func (s *State) SetExitedUnreadResult(exitCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setExitedLocked(exitCode, true)
+}
+
+func (s *State) setExitedLocked(exitCode int, unread bool) {
+	if unread {
+		s.markUnreadResultStateLocked()
+	}
 	s.Alive = false
 	s.ExitCode = &exitCode
 	s.ExitedAt = time.Now().UTC().Format(time.RFC3339)
-	s.emit(Event{Type: "exit", Data: map[string]any{"exit_code": exitCode, "exited_at": s.ExitedAt}})
+	data := map[string]any{"exit_code": exitCode, "exited_at": s.ExitedAt}
+	if unread {
+		data["unread"] = true
+		data["unread_token"] = s.UnreadToken
+	}
+	s.emit(Event{Type: "exit", Data: data})
 }
 
 // SetUnread marks the session as having unseen output (or clears it).
 func (s *State) SetUnread(unread bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setUnreadLocked(unread)
+}
+
+func (s *State) setUnreadLocked(unread bool) {
 	if s.Unread == unread {
 		return
 	}
-	s.Unread = unread
-	s.emit(Event{Type: "meta", Data: map[string]any{"unread": unread}})
+	if unread {
+		s.markUnreadResultLocked()
+		return
+	}
+	s.Unread = false
+	s.emit(Event{Type: "meta", Data: map[string]any{"unread": false, "unread_token": s.UnreadToken}})
+}
+
+// MarkUnreadResult records a newly completed result even when an older result
+// is still unread. Every completion receives a fresh opaque identity.
+func (s *State) MarkUnreadResult() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.markUnreadResultLocked()
+}
+
+func (s *State) markUnreadResultLocked() {
+	s.markUnreadResultStateLocked()
+	s.emit(Event{Type: "meta", Data: map[string]any{"unread": true, "unread_token": s.UnreadToken}})
+}
+
+// markUnreadResultStateLocked advances the state without publishing a separate
+// event. Completion edges use it when unread must be fused with status/exit.
+func (s *State) markUnreadResultStateLocked() {
+	s.Unread = true
+	s.UnreadToken = newUnreadToken()
+}
+
+// AcknowledgeUnread clears only the unread result generation the caller
+// actually observed. A delayed acknowledgement for N can never erase N+1.
+func (s *State) AcknowledgeUnread(expected string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.UnreadToken != expected {
+		return false
+	}
+	s.setUnreadLocked(false)
+	return true
+}
+
+func newUnreadToken() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err == nil {
+		return hex.EncodeToString(buf[:])
+	}
+	return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
 }
 
 // activityThrottle is the minimum interval between activity events.
@@ -228,10 +301,27 @@ func (s *State) EmitActivity() {
 func (s *State) SetStatus(status *adapter.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setStatusLocked(status)
+	s.emit(Event{Type: "status", Data: status})
+}
+
+// SetStatusUnreadResult fuses a terminal status edge with the unread generation
+// it completed. A subscriber can observe both or neither, never an attention
+// fact before direct-parent suppression has been decided for the completion.
+func (s *State) SetStatusUnreadResult(status *adapter.Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.markUnreadResultStateLocked()
+	s.setStatusLocked(status)
+	unread := true
+	token := s.UnreadToken
+	s.emit(Event{Type: "status", Data: turnEdge{Status: status, Unread: &unread, UnreadToken: &token}})
+}
+
+func (s *State) setStatusLocked(status *adapter.Status) {
 	prev := s.Status
 	s.Status = status
 	s.noteStatusWriteLocked(prev, status)
-	s.emit(Event{Type: "status", Data: status})
 }
 
 // SetAdapterTitle sets the high-priority title from the adapter (agent hook / conversation file).

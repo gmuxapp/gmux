@@ -161,7 +161,7 @@ func TestPTYSurfacesRefusedOnACPSession(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			handleCentralSessionAction(rec, tc.req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux")
+			handleCentralSessionAction(rec, tc.req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux", nil)
 			got := parseRecorded(t, rec)
 			if got.code != http.StatusUnprocessableEntity || got.errCode() != codeNoTerminal {
 				t.Fatalf("code=%d body=%v, want 422/%s", got.code, got.body, codeNoTerminal)
@@ -262,7 +262,7 @@ func TestInputRefusesOnStoreFailure(t *testing.T) {
 	boot := &Bootstrap{Store: st, Registry: sessioncoord.NewRegistry()}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/b1/input", strings.NewReader("keys"))
-	handleCentralSessionAction(rec, req, boot, newSSEFanout(), &wire.Converter{}, nil, sessionmeta.New(t.TempDir()), "/usr/bin/gmux")
+	handleCentralSessionAction(rec, req, boot, newSSEFanout(), &wire.Converter{}, nil, sessionmeta.New(t.TempDir()), "/usr/bin/gmux", nil)
 	got := parseRecorded(t, rec)
 	if got.code != http.StatusInternalServerError || got.errCode() != "internal" {
 		t.Fatalf("code=%d body=%v, want 500/internal", got.code, got.body)

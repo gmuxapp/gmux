@@ -257,7 +257,7 @@ func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTi
 		}
 		code := reportWaitResult(env.Data, predicate, quiet, stdout)
 		if code == waitExitOK {
-			if err := consumeSession(sess); err != nil {
+			if err := consumeSession(sess, env.Data.UnreadToken); err != nil {
 				fmt.Fprintf(os.Stderr, "gmux: wait could not mark %s read: %v\n", displayID(sess), err)
 				return waitExitError
 			}
@@ -346,6 +346,7 @@ type waitResult struct {
 	Trigger          string             `json:"trigger"` // compatibility with pre-exchange runner frames
 	Output           string             `json:"output"`
 	TerminalPartial  bool               `json:"terminal_partial"`
+	UnreadToken      string             `json:"unread_token"`
 	// Truncated says the adapter capped Output at the source. stdout still
 	// carries what there is (silently dropping the tail would be worse), and the
 	// fact goes to stderr where the account belongs.

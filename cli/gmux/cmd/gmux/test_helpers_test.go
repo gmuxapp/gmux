@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -51,6 +52,14 @@ func startStubDaemon(t *testing.T, sessions []cliSession) *stubDaemon {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": d.sessions})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		token := ""
+		for _, sess := range d.sessions {
+			if strings.Contains(r.URL.Path, "/"+sess.ID+"/") {
+				token = sess.UnreadToken
+				break
+			}
+		}
+		w.Header().Set(unreadTokenHeader, token)
 		body, _ := io.ReadAll(r.Body)
 		d.mu.Lock()
 		d.requests = append(d.requests, recordedRequest{r.Method, r.URL.Path, r.URL.RawQuery, string(body)})

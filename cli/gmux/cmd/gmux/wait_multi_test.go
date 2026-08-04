@@ -88,6 +88,36 @@ func TestWaitSingleKeepsHeaderlessOutput(t *testing.T) {
 	}
 }
 
+func TestWaitDelayedAcknowledgementCannotClearNewerCompletion(t *testing.T) {
+	d := startStubDaemon(t, waitTestSessions()[:1])
+	currentToken := "turn-1"
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/wait") {
+			writeEnvelope(w, http.StatusOK, map[string]any{
+				"reason": "idle", "outcome": waitOutcomeCompleted,
+				"output": "turn one", "unread_token": "turn-1",
+			})
+			// Deterministic interleaving: N+1 completes after wait observed N but
+			// before its acknowledgement reaches /read.
+			currentToken = "turn-2"
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/read") {
+			if r.URL.Query().Get("token") == "turn-1" && currentToken == "turn-2" {
+				writeErrEnvelope(w, http.StatusConflict, "result_changed", "newer result")
+				return
+			}
+			t.Fatalf("unexpected read schedule: %s current token=%s", r.URL.String(), currentToken)
+		}
+	})
+	if code := cmdWait([]string{"alpha"}, 0, "", "", false); code != waitExitOK {
+		t.Fatalf("wait exit=%d, want observed turn success with newer result retained", code)
+	}
+	if currentToken != "turn-2" {
+		t.Fatal("delayed wait acknowledgement cleared the newer token")
+	}
+}
+
 func TestWaitMultiExitAggregation(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

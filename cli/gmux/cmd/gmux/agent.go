@@ -727,11 +727,16 @@ func cmdAgentLogs(ref string, n int, writers ...io.Writer) int {
 		fmt.Fprintf(os.Stderr, "gmux: the daemon reported a conversation for %s but sent no content\n", displayID(sess))
 		return waitExitError
 	}
+	tokens := resp.Header.Values(unreadTokenHeader)
+	if len(tokens) == 0 {
+		fmt.Fprintln(os.Stderr, "gmux: daemon response has no unread token; restart gmuxd to resolve version skew")
+		return waitExitError
+	}
 	if _, err := stdout.Write(raw); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
 	}
-	if err := consumeSession(sess); err != nil {
+	if err := consumeSession(sess, tokens[0]); err != nil {
 		fmt.Fprintf(os.Stderr, "gmux: agent logs could not mark %s read: %v\n", displayID(sess), err)
 		return waitExitError
 	}

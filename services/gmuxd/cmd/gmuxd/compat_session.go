@@ -10,6 +10,7 @@ type compatSession struct {
 	Command                                                           []string
 	Remotes                                                           map[string]string
 	Alive, Unread, Resumable                                          bool
+	UnreadToken                                                       string
 	Pid, ProjectIndex                                                 int
 	ExitCode                                                          *int
 	Status                                                            *compatStatus

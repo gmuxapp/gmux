@@ -66,6 +66,7 @@ type Session struct {
 	Subtitle        string            `json:"subtitle,omitempty"`
 	Status          *Status           `json:"status"`
 	Unread          bool              `json:"unread"`
+	UnreadToken     string            `json:"unread_token"`
 	Resumable       bool              `json:"resumable,omitempty"`
 	SocketPath      string            `json:"socket_path,omitempty"`
 	TerminalCols    uint16            `json:"terminal_cols,omitempty"`

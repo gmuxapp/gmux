@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
@@ -62,12 +63,10 @@ func collectEvents(t *testing.T, ch chan session.Event, n int) []session.Event {
 
 // TestFinalizeSessionStateClosesLifetimeTurnBeforeExit pins the
 // event ordering the daemon's wait machinery depends on (ADR 0023): a
-// lifetime-turn session's exit must emit the turn-close status and the
-// unread flag BEFORE the exit event. A subscriber that resolves on the
-// first terminal signal it sees must observe the closed turn, and the
-// store's exit handling must persist the final Status — emitting the
-// exit first would resolve waits as "died" and persist a stale
-// mid-turn Active=true.
+// lifetime-turn session's exit must emit the turn-close status and unread
+// generation in ONE event before exit. A subscriber that resolves on the
+// first terminal signal it sees must observe both the closed turn and its
+// result token; the store must also persist the final Status.
 func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 	st := session.New(session.Config{ID: "1uo92yti", Adapter: "shell"})
 	st.SetStatus(&adapter.Status{Active: true}) // launch state, pre-subscription
@@ -76,19 +75,25 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 
 	finalizeSessionState(st, true, 3)
 
-	got := collectEvents(t, ch, 3)
-	wantTypes := []string{"status", "meta", "exit"}
-	for i, ev := range got {
-		if ev.Type != wantTypes[i] {
-			t.Fatalf("event %d = %q, want %q (order: %v)", i, ev.Type, wantTypes[i], got)
-		}
+	got := collectEvents(t, ch, 2)
+	if got[0].Type != "status" || got[1].Type != "exit" {
+		t.Fatalf("events = %+v, want fused status/unread before exit", got)
 	}
-	status, ok := got[0].Data.(*adapter.Status)
-	if !ok || status == nil || status.Active {
-		t.Errorf("turn-close status = %#v, want Active=false", got[0].Data)
+	raw, err := json.Marshal(got[0].Data)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !status.Error {
-		t.Error("Error = false for exit code 3, want true (failed one-shot shows the error dot)")
+	var edge struct {
+		Active      bool   `json:"active"`
+		Error       bool   `json:"error"`
+		Unread      bool   `json:"unread"`
+		UnreadToken string `json:"unread_token"`
+	}
+	if err := json.Unmarshal(raw, &edge); err != nil {
+		t.Fatal(err)
+	}
+	if edge.Active || !edge.Error || !edge.Unread || edge.UnreadToken == "" {
+		t.Fatalf("fused completion edge = %+v", edge)
 	}
 	if !st.UnreadSnapshot() {
 		t.Error("unread not set; a completed lifetime turn is 'waiting on you'")
@@ -98,7 +103,7 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 // TestFinalizeSessionStateOSCCommandCrashSetsUnread reproduces an OSC C
 // command-start followed by child exit before D. The mark-derived Active bit
 // remains authoritative (wait resolves as died), while process completion is
-// still universally unread and its meta event precedes exit.
+// still universally unread and is fused into the exit event.
 func TestFinalizeSessionStateOSCCommandCrashSetsUnread(t *testing.T) {
 	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell"})
 	marks := adapter.NewPromptMarkTracker(func(active bool) {
@@ -113,9 +118,13 @@ func TestFinalizeSessionStateOSCCommandCrashSetsUnread(t *testing.T) {
 
 	finalizeSessionState(st, false, 7)
 
-	got := collectEvents(t, ch, 2)
-	if got[0].Type != "meta" || got[1].Type != "exit" {
-		t.Fatalf("events = %+v, want unread meta before exit", got)
+	got := collectEvents(t, ch, 1)
+	if got[0].Type != "exit" {
+		t.Fatalf("events = %+v, want fused unread exit", got)
+	}
+	data, ok := got[0].Data.(map[string]any)
+	if !ok || data["unread"] != true || data["unread_token"] == "" {
+		t.Fatalf("exit payload = %#v, want unread result token", got[0].Data)
 	}
 	if s := st.StatusSnapshot(); s == nil || !s.Active {
 		t.Errorf("Status = %+v, want OSC-derived Active=true preserved", s)

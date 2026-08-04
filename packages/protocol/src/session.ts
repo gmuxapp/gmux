@@ -39,6 +39,10 @@ export const SessionSchema = z.object({
   subtitle: z.string().optional(),
   status: SessionStatusSchema.optional().nullable(),
   unread: z.boolean().optional().default(false),
+  // Opaque runner-owned result identity. Read acknowledgements must name the
+  // token they actually observed so a delayed read cannot clear a newer
+  // completion, including across runner replacement.
+  unread_token: z.string().optional().default(''),
   resumable: z.boolean().optional().default(false),
   // Absolute path of the agent conversation file this session holds, as
   // reported by the agent hook (ADR 0011). Two live sessions sharing one
@@ -46,7 +50,7 @@ export const SessionSchema = z.object({
   // the UI surfaces that as an "open elsewhere" warning.
   conversation_file: z.string().optional(),
   // RFC3339 timestamp of the last time this session produced *unseen*
-  // output (read -> unread). Set by the owning daemon; the UI uses it
+  // result output (including a newer result while already unread). Set by the owning daemon; the UI uses it
   // as the activity-feed sort key so sessions float up when the agent
   // (or shell/editor) produces something you haven't looked at.
   // Deliberately NOT bumped by your own input (going active) or by exit/
