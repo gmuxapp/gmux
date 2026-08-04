@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
-import { familyRootId, isFamilyChild } from './family'
+import { familyIndex, familyRootId, isFamilyChild } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
 import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
 import { pushError } from './toasts'
@@ -878,19 +878,61 @@ export const backgroundActivity = computed((): DotState => {
  * session into at most one folder, so summing across folders needs no
  * dedup.
  *
+ * Family children have no folder row of their own — their presentation
+ * root stands in — so each folder-visible root also counts its alive
+ * unread descendants. Without this, an unread child is invisible: no
+ * logo blink, no hamburger badge.
+ *
  * Scoped to the tab's `?filter=` selectors: a tab pinned to a project
  * or host shouldn't blink for sessions outside its scope (another tab
  * or a notification covers those). Within the scope it's built from
  * folder-bucketed sessions so unstamped strays can't ping. */
 export const unreadCount = computed(() => {
   const sel = selectedId.value
+  const index = familyIndex(sessions.value)
+  const childUnread = new Map<string, number>()
+  for (const s of sessions.value) {
+    if (s.id === sel || !s.alive || !s.unread || !index.childIds.has(s.id)) continue
+    const rootId = index.rootById.get(s.id)?.id
+    if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
+  }
   let n = 0
   for (const f of foldersFrom(filteredSessions.value)) {
     for (const s of f.sessions) {
       if (s.id !== sel && s.alive && s.unread) n++
+      n += childUnread.get(s.id) ?? 0
     }
   }
   return n
+})
+
+const DOT_RANK: Record<DotState, number> = { none: 0, fading: 1, active: 2, unread: 3, working: 4, error: 5 }
+
+/** Family-aggregated dot state, keyed by presentation-root session id.
+ *
+ * A root's sidebar/dashboard row stands in for its whole family, so the
+ * row's dot must reflect the highest-precedence state among the root and
+ * every descendant (agents and processes alike) — otherwise a working or
+ * unread child is invisible outside the drawer.
+ *
+ * Selection muting happens per member before aggregation: the selected
+ * session's own error/unread is dropped ("you're already looking at it"),
+ * while its siblings' attention states still surface on the root row.
+ * Standalone sessions are their own root, so this map is the single
+ * dot-state source for every root-level row. */
+export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
+  const sel = selectedId.value
+  const am = activityMap.value
+  const index = familyIndex(sessions.value)
+  const map = new Map<string, DotState>()
+  for (const s of sessions.value) {
+    const rootId = index.rootById.get(s.id)?.id ?? s.id
+    let own = sessionDotState(s, am)
+    if (s.id === sel && (own === 'error' || own === 'unread')) own = 'none'
+    const prev = map.get(rootId)
+    if (prev === undefined || DOT_RANK[own] > DOT_RANK[prev]) map.set(rootId, own)
+  }
+  return map
 })
 
 // ── Home dashboard partitioning ─────────────────────────────────────────────

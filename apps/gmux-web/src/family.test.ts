@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { descendantTree, familyIndex, familyNavigation, familyRoot, hasFamily, isFamilyChild, projectFamily } from './family'
+import {
+  bucketedFamily, descendantTree, familyAgentCount, familyBucket, familyIndex, familyNavigation,
+  familyRoot, FAMILY_GROUP_CAPS, hasFamily, isFamilyChild, projectFamily,
+  type FamilyBucketGroup,
+} from './family'
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
@@ -98,8 +102,120 @@ describe('task-family projection', () => {
     expect(familyRoot(children[250], snapshot)).toBe(root)
     expect(hasFamily(root, snapshot)).toBe(true)
     expect(isFamilyChild(children[250], snapshot)).toBe(true)
+    // Bucketing works off the projected trees plus the shared index; it
+    // must not rescan the snapshot array per node.
+    expect(bucketedFamily(children[250], snapshot).groups.length).toBeGreaterThan(0)
     // One indexed pass over 1,000 rows; old per-candidate Map construction
     // performed hundreds of thousands of indexed reads here.
     expect(indexedReads).toBeLessThanOrEqual(snapshot.length + 1)
+  })
+})
+
+describe('bucketed drawer projection', () => {
+  const at = (minute: number) => `2026-08-04T10:${String(minute).padStart(2, '0')}:00Z`
+  const member = (id: string, extra: Partial<Parameters<typeof makeSession>[0]> = {}) => makeSession({
+    id, cwd: '/p', title: id, parent_session_id: 'root', semantic_agent: true,
+    created_at: at(0), last_output_at: at(1), ...extra,
+  })
+  const flat = (group: FamilyBucketGroup) => group.nodes.map(n => n.session.id)
+
+  it('caps groups at ∞/20/10/3', () => {
+    expect(FAMILY_GROUP_CAPS).toEqual({ attention: Infinity, working: 20, idle: 10, finished: 3 })
+  })
+
+  it('derives a session own bucket from the sessionDotState precedence', () => {
+    expect(familyBucket(member('e', { status: { active: true, error: true } }))).toBe('attention')
+    expect(familyBucket(member('u', { unread: true }))).toBe('attention')
+    expect(familyBucket(member('w', { status: { active: true } }))).toBe('working')
+    // Dot precedence (working > unread) carries over: still-active work
+    // isn't "waiting on you" yet even if output is unseen.
+    expect(familyBucket(member('wu', { status: { active: true }, unread: true }))).toBe('working')
+    expect(familyBucket(member('i'))).toBe('idle')
+    // Unread is not alive-gated: unseen output demands attention even
+    // after the session died.
+    expect(familyBucket(member('du', { alive: false, unread: true }))).toBe('attention')
+    // Error/working are alive-gated (as in sessionDotState); a dead,
+    // fully-viewed session is finished no matter how it ended.
+    expect(familyBucket(member('d', { alive: false, status: { active: true, error: true } }))).toBe('finished')
+  })
+
+  it('partitions a children list into attention/working/idle/finished order', () => {
+    const root = agent('root')
+    const sessions = [
+      root,
+      member('idle-1'),
+      member('dead-1', { alive: false }),
+      member('working-1', { status: { active: true } }),
+      member('unread-1', { unread: true }),
+    ]
+    const projection = bucketedFamily(sessions[0], sessions)
+    // Top level: the root tree is the single (idle-bucketed) node…
+    expect(projection.groups.map(g => g.bucket)).toEqual(['attention'])
+    const rootNode = projection.groups[0].nodes[0]
+    expect(rootNode.session.id).toBe('root')
+    // …whose children carry the four buckets in display order.
+    expect(rootNode.groups.map(g => g.bucket)).toEqual(['attention', 'working', 'idle', 'finished'])
+    expect(rootNode.groups.map(flat)).toEqual([['unread-1'], ['working-1'], ['idle-1'], ['dead-1']])
+    expect(projection.counts).toEqual({ attention: 1, working: 1, idle: 2, finished: 1, processes: 0 })
+  })
+
+  it('hoists a node to its subtree highest-urgency bucket', () => {
+    const root = agent('root')
+    const deadParent = member('dead-parent', { alive: false })
+    const workingGrandchild = member('grandchild', {
+      parent_session_id: 'dead-parent', status: { active: true },
+    })
+    const deadSibling = member('dead-sibling', { alive: false })
+    const projection = bucketedFamily(root, [root, deadParent, workingGrandchild, deadSibling])
+    const rootNode = projection.groups[0].nodes[0]
+    // The dead parent sorts as working — its subtree contains active work —
+    // while the plain dead sibling stays in finished.
+    expect(rootNode.groups.map(g => g.bucket)).toEqual(['working', 'finished'])
+    expect(rootNode.groups.map(flat)).toEqual([['dead-parent'], ['dead-sibling']])
+    // Counts stay status-truth: the hoisted parent still tallies as finished.
+    expect(projection.counts).toEqual({ attention: 0, working: 1, idle: 1, finished: 2, processes: 0 })
+  })
+
+  it('sorts within a bucket: agents before processes, recency, natural title', () => {
+    const root = agent('root')
+    const proc = (id: string, extra = {}) => member(id, { semantic_agent: undefined, adapter: 'shell', ...extra })
+    const sessions = [
+      root,
+      proc('proc-new', { last_output_at: at(50) }),
+      member('agent-old', { last_output_at: at(10) }),
+      member('swarm-10', { last_output_at: at(20) }),
+      member('swarm-9', { last_output_at: at(20) }),
+      member('swarm-100', { last_output_at: at(20) }),
+    ]
+    const rootNode = bucketedFamily(root, sessions).groups[0].nodes[0]
+    expect(rootNode.groups).toHaveLength(1)
+    // Recency beats title; equal recency reads in natural numeric order;
+    // the process sinks below every agent despite being the most recent.
+    expect(flat(rootNode.groups[0])).toEqual(['swarm-9', 'swarm-10', 'swarm-100', 'agent-old', 'proc-new'])
+    expect(rootNode.groups[0].nodes.map(n => n.process)).toEqual([false, false, false, false, true])
+  })
+
+  it('projects the ancestor spine and counts only the sibling-level trees', () => {
+    const root = agent('root')
+    const parent = member('parent')
+    const selected = member('selected', { parent_session_id: 'parent' })
+    const sibling = member('sibling', { parent_session_id: 'parent', alive: false })
+    const projection = bucketedFamily(selected, [root, parent, selected, sibling])
+    expect(projection.ancestors.map(s => s.id)).toEqual(['root', 'parent'])
+    expect(projection.groups.map(g => g.bucket)).toEqual(['idle', 'finished'])
+    // Ancestors are breadcrumb context, not counted rows.
+    expect(projection.counts).toEqual({ attention: 0, working: 0, idle: 1, finished: 1, processes: 0 })
+  })
+
+  it('counts alive agents for the pill, excluding processes and other families', () => {
+    const root = agent('root')
+    const child = member('child')
+    const dead = member('dead', { alive: false })
+    const proc = member('proc', { semantic_agent: undefined, adapter: 'shell' })
+    const stranger = agent('stranger')
+    const sessions = [root, child, dead, proc, stranger]
+    expect(familyAgentCount(child, sessions)).toBe(2)
+    expect(familyAgentCount(root, sessions)).toBe(2)
+    expect(familyAgentCount(stranger, sessions)).toBe(1)
   })
 })
