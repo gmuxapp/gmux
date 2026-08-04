@@ -17,8 +17,7 @@ suppression. Both rows must exist on the local daemon; self-parenting, ancestor
 cycles, and cross-peer reassignment are rejected transactionally.
 
 The daemon derives `semantic_agent` from the existing
-`adapter.ConversationSource` capability. This is the same semantic distinction
-used by notification suppression and covers the conversation-backed Pi,
+`adapter.ConversationSource` capability. It covers the conversation-backed Pi,
 Claude, and Codex adapters without a frontend adapter-name list. Shell remains
 false.
 
@@ -51,9 +50,31 @@ cap while long-dead noise sinks below the fold).
 
 Outside the panel a root row stands in for its whole family:
 `familyDotById` aggregates the highest-precedence member dot onto the
-presentation root, and `unreadCount` adds alive unread descendants to
-their folder-visible root (the count keeps its existing alive gate).
-Processes render with a `$` glyph in place of the dot.
+presentation root, and `unreadCount` adds unread descendants (alive or
+retained-dead) to their folder-visible root. Processes render with a `$` glyph
+in place of the dot.
+
+## Attention and consumption
+
+Unread is independent of family presentation: every completed agent turn or
+process command records unread until a consumer reads or acts on that session.
+Notification delivery is suppressed only when the direct launch parent is
+active at the committed completion instant. Agent activity is semantic turn
+activity; terminal activity currently comes from the runner's OSC 133 prompt
+cycle (active command to idle prompt). This parent check is one hop and one
+shot—later parent activity never retro-delivers a suppressed notification.
+
+`gmux wait` (on success), `gmux tail`, `gmux agent logs`, prompts, steering,
+raw sends, and web interaction consume unread. To remediate
+retained child piles created by versions where waits did not consume, run:
+
+```sh
+gmux read --family <root-id>
+```
+
+The focused-session notification check intentionally has no inactivity timer;
+a future idle-delivery policy can use the existing presence interaction stamp
+without changing unread semantics.
 
 ## Unresolved capability seam
 

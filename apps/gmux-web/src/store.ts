@@ -879,8 +879,8 @@ export const backgroundActivity = computed((): DotState => {
  * dedup.
  *
  * Family children have no folder row of their own — their presentation
- * root stands in — so each folder-visible root also counts its alive
- * unread descendants. Without this, an unread child is invisible: no
+ * root stands in — so each folder-visible root also counts its unread
+ * descendants, alive or retained-dead. Without this, an unread child is invisible: no
  * logo blink, no hamburger badge.
  *
  * Scoped to the tab's `?filter=` selectors: a tab pinned to a project
@@ -892,14 +892,14 @@ export const unreadCount = computed(() => {
   const index = familyIndex(sessions.value)
   const childUnread = new Map<string, number>()
   for (const s of sessions.value) {
-    if (s.id === sel || !s.alive || !s.unread || !index.childIds.has(s.id)) continue
+    if (s.id === sel || !s.unread || !index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
   }
   let n = 0
   for (const f of foldersFrom(filteredSessions.value)) {
     for (const s of f.sessions) {
-      if (s.id !== sel && s.alive && s.unread) n++
+      if (s.id !== sel && s.unread) n++
       n += childUnread.get(s.id) ?? 0
     }
   }
@@ -1259,6 +1259,26 @@ export function markSessionRead(id: string) {
   // mutation; if the server stays silent the TTL drops it eventually.
   addPending({ kind: 'mark-read', id, at: Date.now() })
   fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
+}
+
+export function createViewConsumptionTracker() {
+  let establishedSelection: string | null = null
+  const unreadID = (id: string | null, sess: Session | null): string | null =>
+    id && sess && (sess.unread || sess.status?.error) ? id : null
+  return {
+    selection(id: string | null, sess: Session | null): string | null {
+      if (!id || !sess) {
+        establishedSelection = null
+        return null
+      }
+      if (id === establishedSelection) return null
+      establishedSelection = id
+      return unreadID(id, sess)
+    },
+    interaction(id: string | null, sess: Session | null): string | null {
+      return unreadID(id, sess)
+    },
+  }
 }
 
 // ── Project mutations (used by manage-projects) ─────────────────────────────
@@ -1827,16 +1847,31 @@ export function initStore(): () => void {
   })
   cleanups.push(disposeUrlNorm)
 
-  // Mark-as-read effect: clear unread/error flags when viewing a session.
+  // Entering a session consumes what was already there. A completion that
+  // arrives while this same session remains open is different: unread must be
+  // observable first, and is consumed only by the next deliberate page
+  // interaction. Presence still suppresses delivery while focused+visible.
+  const viewConsumption = createViewConsumptionTracker()
   const disposeMarkRead = effect(() => {
-    const id = selectedId.value
-    const sess = selected.value
-    if (!id || !sess) return
-    if (sess.unread || sess.status?.error) {
-      markSessionRead(id)
-    }
+    const id = viewConsumption.selection(selectedId.value, selected.value)
+    if (id) markSessionRead(id)
   })
   cleanups.push(disposeMarkRead)
+
+  const consumeSelectedOnInteraction = () => {
+    const id = viewConsumption.interaction(selectedId.peek(), selected.peek())
+    if (id) markSessionRead(id)
+  }
+  if (typeof document !== 'undefined') {
+    // Capture so terminal/keybinding handlers cannot stop the interaction
+    // before it reaches this consumption boundary.
+    document.addEventListener('click', consumeSelectedOnInteraction, true)
+    document.addEventListener('keydown', consumeSelectedOnInteraction, true)
+    cleanups.push(() => {
+      document.removeEventListener('click', consumeSelectedOnInteraction, true)
+      document.removeEventListener('keydown', consumeSelectedOnInteraction, true)
+    })
+  }
 
   return () => cleanups.forEach(fn => { fn() })
 }
