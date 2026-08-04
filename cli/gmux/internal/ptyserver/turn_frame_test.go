@@ -203,6 +203,28 @@ func TestTurnFrameReplayedToSubscribers(t *testing.T) {
 	}
 }
 
+func TestExitMetadataReplayedToSubscribers(t *testing.T) {
+	st := session.New(session.Config{ID: "s1", Adapter: "shell"})
+	st.SetExited(23)
+	srv := &Server{state: st}
+	req := httptest.NewRequest("GET", "http://unix/events", nil)
+	ctx, cancel := contextWithImmediateCancel(req)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	srv.handleEvents(rec, req.WithContext(ctx))
+
+	var replay struct {
+		ExitCode int    `json:"exit_code"`
+		ExitedAt string `json:"exited_at"`
+	}
+	if err := json.Unmarshal([]byte(sseData(t, rec.Body.String(), "exit")), &replay); err != nil {
+		t.Fatalf("decode replayed exit: %v", err)
+	}
+	if replay.ExitCode != 23 || replay.ExitedAt == "" {
+		t.Fatalf("replayed exit = %+v", replay)
+	}
+}
+
 // contextWithImmediateCancel gives handleEvents a context that is already done,
 // so it writes its replay snapshot and returns instead of streaming forever.
 func contextWithImmediateCancel(req *http.Request) (context.Context, context.CancelFunc) {

@@ -204,14 +204,21 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.TerminalSize = centralstore.NullablePatch[centralstore.TerminalSize]{Set: &v}
 	case "exit":
 		var v struct {
-			ExitCode int `json:"exit_code"`
+			ExitCode int    `json:"exit_code"`
+			ExitedAt string `json:"exited_at"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
 		}
+		exitedAt := now
+		if v.ExitedAt != "" {
+			if t, err := time.Parse(time.RFC3339, v.ExitedAt); err == nil {
+				exitedAt = centralstore.UnixMillis(t.UnixMilli())
+			}
+		}
 		alive := false
 		f.ExitCode = centralstore.NullablePatch[int]{Set: &v.ExitCode}
-		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &now}
+		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &exitedAt}
 		return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Alive: &alive}, true
 	case "turn_frame":
 		// A frame update with no status transition to ride: a mid-turn injection,
@@ -283,6 +290,8 @@ type runnerMetaWire struct {
 	Alive           bool              `json:"alive"`
 	CreatedAt       string            `json:"created_at"`
 	StartedAt       string            `json:"started_at"`
+	ExitCode        *int              `json:"exit_code"`
+	ExitedAt        string            `json:"exited_at"`
 	PID             int               `json:"pid"`
 	RunnerVersion   string            `json:"runner_version"`
 	BinaryHash      string            `json:"binary_hash"`
@@ -323,6 +332,15 @@ func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
 		if t, perr := time.Parse(time.RFC3339, s.StartedAt); perr == nil {
 			at := centralstore.UnixMillis(t.UnixMilli())
 			f.StartedAt.Set = &at
+		}
+	}
+	if s.ExitCode != nil {
+		f.ExitCode.Set = s.ExitCode
+	}
+	if s.ExitedAt != "" {
+		if t, perr := time.Parse(time.RFC3339, s.ExitedAt); perr == nil {
+			at := centralstore.UnixMillis(t.UnixMilli())
+			f.ExitedAt.Set = &at
 		}
 	}
 	if s.TerminalCols > 0 && s.TerminalRows > 0 {

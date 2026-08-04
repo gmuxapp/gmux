@@ -193,7 +193,7 @@ func (s *State) SetExited(exitCode int) {
 	s.Alive = false
 	s.ExitCode = &exitCode
 	s.ExitedAt = time.Now().UTC().Format(time.RFC3339)
-	s.emit(Event{Type: "exit", Data: map[string]int{"exit_code": exitCode}})
+	s.emit(Event{Type: "exit", Data: map[string]any{"exit_code": exitCode, "exited_at": s.ExitedAt}})
 }
 
 // SetUnread marks the session as having unseen output (or clears it).
@@ -619,6 +619,18 @@ func (s *State) MarshalJSON() ([]byte, error) {
 		Title: s.titleLocked(),
 		Alias: (*Alias)(s),
 	})
+}
+
+// ExitSnapshot returns the runner-owned exit metadata for replay to a
+// reconnecting subscriber. A nil code means the session has not exited.
+func (s *State) ExitSnapshot() (*int, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ExitCode == nil {
+		return nil, ""
+	}
+	code := *s.ExitCode
+	return &code, s.ExitedAt
 }
 
 // Subscribe returns a channel that receives events.

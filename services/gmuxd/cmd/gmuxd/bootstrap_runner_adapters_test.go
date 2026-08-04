@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
 
@@ -84,6 +85,37 @@ func TestProductionRunnerMetaPreservesLaunchParent(t *testing.T) {
 	}
 	if meta.Registration.LaunchParentID == nil || *meta.Registration.LaunchParentID != "parent" {
 		t.Fatalf("launch parent lost at runner boundary: %#v", meta.Registration.LaunchParentID)
+	}
+}
+
+func TestProductionRunnerDeadMetadataSurvivesMetaAndReplay(t *testing.T) {
+	const exitedAt = "2026-01-02T03:04:05Z"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"id":"dead","adapter":"shell","alive":false,"created_at":"2026-01-01T00:00:00Z","exit_code":23,"exited_at":%q}`, exitedAt)
+	})
+	mux.HandleFunc("/events", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, "event: exit\ndata: {\"exit_code\":23,\"exited_at\":%q}\n\n", exitedAt)
+	})
+	ep := unixRunner(t, mux)
+	meta, err := (productionRunnerClient{}).Meta(context.Background(), ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantExitedAt := centralstore.UnixMillis(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli())
+	facts := meta.Registration.Facts
+	if facts.ExitCode.Set == nil || *facts.ExitCode.Set != 23 || facts.ExitedAt.Set == nil || *facts.ExitedAt.Set != wantExitedAt {
+		t.Fatalf("/meta exit facts lost: %+v", facts)
+	}
+
+	stream, err := (productionRunnerClient{}).Subscribe(context.Background(), ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	event := <-stream.Events()
+	if event.Alive == nil || *event.Alive || event.Facts.ExitCode.Set == nil || *event.Facts.ExitCode.Set != 23 || event.Facts.ExitedAt.Set == nil || *event.Facts.ExitedAt.Set != wantExitedAt {
+		t.Fatalf("SSE replay exit facts lost: %+v", event)
 	}
 }
 
