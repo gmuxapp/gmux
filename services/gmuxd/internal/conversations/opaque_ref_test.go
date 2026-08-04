@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -122,6 +123,31 @@ func TestScan_DescribeFailureNotIndexed(t *testing.T) {
 	}
 }
 
+func TestScan_DescribeFailurePreservesCachedResumeCommand(t *testing.T) {
+	a := &dbAdapter{rows: map[string]adapter.ConversationInfo{
+		"row:7": {ID: "conv-7", Slug: "seven", Cwd: "/home/u/proj", MessageCount: 2},
+	}}
+	idx := New()
+	if slug := idx.Scan(a, "row:7"); slug != "seven" {
+		t.Fatalf("initial Scan slug = %q, want seven", slug)
+	}
+
+	delete(a.rows, "row:7") // transient descriptor failure on the next upsert
+	if slug := idx.Scan(a, "row:7"); slug != "" {
+		t.Fatalf("failed rescan slug = %q, want empty", slug)
+	}
+	if cmd := idx.LookupResumeCommand("dbtool", "row:7"); len(cmd) != 3 || cmd[2] != "conv-7" {
+		t.Fatalf("failed rescan replaced stale-good command with %v", cmd)
+	}
+
+	if !idx.RemoveByRef("dbtool", "row:7") {
+		t.Fatal("RemoveByRef returned false after transient failure")
+	}
+	if cmd := idx.LookupResumeCommand("dbtool", "row:7"); len(cmd) != 0 {
+		t.Fatalf("RemoveByRef retained resume command %v", cmd)
+	}
+}
+
 // TestScan_NonResumableNotIndexed pins the caller side of the Resumer
 // contract: a conversation that describes cleanly but whose adapter returns
 // no resume command is not indexed and yields no slug. It also pins the
@@ -164,6 +190,42 @@ func TestScan_ResumableDescribesOnce(t *testing.T) {
 	}
 	if a.describes != 1 {
 		t.Errorf("DescribeConversation called %d times, want exactly 1", a.describes)
+	}
+}
+
+// TestLookupResumeCommandDoesNotRedescribe is the list-path scaling guard.
+// Conversation sources pay the descriptor I/O once when indexing; arbitrarily
+// many session renders are pure cache reads rather than transcript reads.
+func TestLookupResumeCommandDoesNotRedescribe(t *testing.T) {
+	const sessions = 1000
+	a := &dbAdapter{rows: make(map[string]adapter.ConversationInfo, sessions)}
+	idx := New()
+	for i := range sessions {
+		n := strconv.Itoa(i)
+		ref := "row:" + n
+		a.rows[ref] = adapter.ConversationInfo{ID: "conv-" + n, Slug: "session-" + n, Cwd: "/home/u/proj", MessageCount: 2}
+		idx.Scan(a, ref)
+	}
+	if a.describes != sessions {
+		t.Fatalf("indexing caused %d DescribeConversation calls, want %d", a.describes, sessions)
+	}
+
+	// This loop models conversion of 1000 distinct dead session rows.
+	for i := range sessions {
+		n := strconv.Itoa(i)
+		cmd := idx.LookupResumeCommand("dbtool", "row:"+n)
+		if len(cmd) != 3 || cmd[2] != "conv-"+n {
+			t.Fatalf("LookupResumeCommand(%d) = %v, want cached resume command", i, cmd)
+		}
+		cmd[0] = "mutated"
+	}
+	if a.describes != sessions {
+		t.Fatalf("rendering %d dead sessions caused descriptor I/O: calls=%d, want %d indexing calls", sessions, a.describes, sessions)
+	}
+
+	idx.RemoveByRef("dbtool", "row:7")
+	if cmd := idx.LookupResumeCommand("dbtool", "row:7"); len(cmd) != 0 {
+		t.Fatalf("removed ref retained resume command %v", cmd)
 	}
 }
 

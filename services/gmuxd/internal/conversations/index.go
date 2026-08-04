@@ -44,6 +44,10 @@ type Index struct {
 	byKey map[string]Info
 	// byConversationID maps "adapter/conversationID" → internal key for reverse lookup.
 	byConversationID map[string]string
+	// resumeByRef caches the adapter-derived resume command while the
+	// conversation source is indexing the ref. Rendering the session list is
+	// a hot read path and must not re-read every dead conversation transcript.
+	resumeByRef map[string][]string
 }
 
 // New creates an empty index.
@@ -51,6 +55,7 @@ func New() *Index {
 	return &Index{
 		byKey:            make(map[string]Info),
 		byConversationID: make(map[string]string),
+		resumeByRef:      make(map[string][]string),
 	}
 }
 
@@ -60,6 +65,26 @@ func indexKey(adapterName, slug string) string {
 
 func convKey(adapterName, conversationID string) string {
 	return adapterName + "/" + conversationID
+}
+
+func refKey(adapterName, ref string) string {
+	return adapterName + "/" + ref
+}
+
+// LookupResumeCommand returns the command derived when the conversation ref
+// was last observed by its source. Snapshot populates this cache synchronously
+// before the daemon starts serving, and source upserts keep it current. The
+// returned slice is a copy so callers cannot mutate index state.
+func (idx *Index) LookupResumeCommand(adapterName, ref string) []string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return append([]string(nil), idx.resumeByRef[refKey(adapterName, ref)]...)
+}
+
+func (idx *Index) setResumeCommand(adapterName, ref string, command []string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.resumeByRef[refKey(adapterName, ref)] = append([]string(nil), command...)
 }
 
 // Lookup returns the conversation info for an (adapter, key) pair.
@@ -190,8 +215,20 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 
 	convInfo, err := desc.DescribeConversation(ref)
 	if err != nil {
+		// Keep stale-good state on transient descriptor failures, matching the
+		// main metadata index. A source Remove event is the authoritative
+		// signal that clears both entries.
 		return ""
 	}
+
+	var cmd []string
+	if resumer, ok := a.(adapter.Resumer); ok {
+		cmd = resumer.ResumeCommand(convInfo)
+	}
+	// Cache before the metadata/index eligibility checks below. The wire
+	// command contract depends only on ConversationDescriber + Resumer, while
+	// the URL index additionally requires cwd/title metadata.
+	idx.setResumeCommand(a.Name(), ref, cmd)
 
 	if convInfo.Cwd == "" {
 		return ""
@@ -205,14 +242,10 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		key = adapter.Slugify(convInfo.ID)
 	}
 
-	var cmd []string
-	if resumer, ok := a.(adapter.Resumer); ok {
+	if _, ok := a.(adapter.Resumer); ok && len(cmd) == 0 {
 		// An empty command means the adapter considers this conversation
 		// non-resumable (empty/corrupted), so it stays out of the index.
-		cmd = resumer.ResumeCommand(convInfo)
-		if len(cmd) == 0 {
-			return ""
-		}
+		return ""
 	}
 
 	info := Info{
@@ -241,6 +274,9 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 		return false
 	}
 	delete(idx.byConversationID, tk)
+	if info, exists := idx.byKey[indexKey(adapterName, key)]; exists {
+		delete(idx.resumeByRef, refKey(adapterName, info.Ref))
+	}
 	delete(idx.byKey, indexKey(adapterName, key))
 	return true
 }
@@ -261,6 +297,7 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	delete(idx.resumeByRef, refKey(adapterName, ref))
 	for key, info := range idx.byKey {
 		if info.Adapter != adapterName || info.Ref != ref {
 			continue

@@ -234,10 +234,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		return h
 	}
 
-	converter := &wire.Converter{Titlers: make(map[string]func([]string) string), SemanticAgents: make(map[string]bool), ResumeCommand: func(adapterName, ref string) []string {
-		legacy := &compatSession{Adapter: adapterName, ConversationRef: ref}
-		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
-	}, IsLocalPeer: func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }}
+	converter := &wire.Converter{Titlers: make(map[string]func([]string) string), SemanticAgents: make(map[string]bool), ResumeCommand: convIndex.LookupResumeCommand, IsLocalPeer: func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }}
 	for _, a := range adapters.All {
 		if titler, ok := a.(adapter.CommandTitler); ok {
 			converter.Titlers[a.Name()] = titler.CommandTitle
