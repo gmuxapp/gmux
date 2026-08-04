@@ -1457,6 +1457,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A dead runner cannot emit another live exit edge. Replay its recorded
+	// exit metadata so a daemon that reconnects after process exit learns the
+	// original code and timestamp rather than treating the runner as merely
+	// unreachable.
+	if code, exitedAt := s.state.ExitSnapshot(); code != nil {
+		if data, err := json.Marshal(map[string]any{"exit_code": *code, "exited_at": exitedAt}); err == nil {
+			fmt.Fprintf(w, "event: exit\ndata: %s\n\n", data)
+		}
+	}
+
 	if file := s.state.ConversationRefSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
 			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)

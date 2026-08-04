@@ -154,7 +154,12 @@ func (idx *Index) Upsert(info Info) string {
 			return final
 		}
 		ik := indexKey(info.Adapter, existing)
+		previous := idx.byKey[ik]
 		info.Key = existing
+		info.Slug = previous.Slug
+		if info.Title == "" {
+			info.Title = previous.Title
+		}
 		idx.byKey[ik] = info
 		return existing
 	}

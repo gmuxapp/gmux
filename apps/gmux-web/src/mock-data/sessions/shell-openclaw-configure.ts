@@ -22,7 +22,7 @@ export default {
   status: { active: false },
   unread: false,
   project_slug: 'openclaw',
-  last_output_at: ago(38),
+  last_output_at: ago(8),
   socket_path: '/tmp/gmux-sessions/mock.sock',
   terminal: [
     `${GREEN}✓${RST} Configuration written to openclaw.toml`,
