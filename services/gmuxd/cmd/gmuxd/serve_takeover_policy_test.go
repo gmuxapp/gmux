@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,43 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
+
+func TestIncumbentCheckIsFirstStartupOperation(t *testing.T) {
+	base := t.TempDir()
+	for _, dir := range []string{"state", "config/gmux", "home", "run"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(base, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(base, "config"))
+	t.Setenv("GMUX_SOCKET_DIR", filepath.Join(base, "run"))
+	// If startup gets past the incumbent check, config loading must fail.
+	if err := os.WriteFile(filepath.Join(base, "config/gmux/host.toml"), []byte("not = [valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := unixipc.Listen(paths.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"version": version, "pid": 42}})
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	if code := serveCentral(io.Discard, false); code != 0 {
+		t.Fatalf("serve reached bootstrap after incumbent check: exit %d", code)
+	}
+	for _, name := range []string{"auth-token", "node-id", "state.db"} {
+		if _, err := os.Stat(filepath.Join(paths.StateDir(), name)); !os.IsNotExist(err) {
+			t.Fatalf("startup created %s before yielding: %v", name, err)
+		}
+	}
+}
 
 // TestServeRefusesToReplaceHealthySameVersionIncumbent pins the takeover
 // policy that ended the autostart incident: `gmux`'s daemon autostart spawns

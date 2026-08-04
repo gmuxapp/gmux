@@ -2,7 +2,6 @@ package unixipc
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -71,19 +70,46 @@ func TestListenReplacesStaleSocket(t *testing.T) {
 	}
 }
 
-func TestCleanupRemovesSocket(t *testing.T) {
+func TestListenerCloseRemovesOwnedSocket(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
 	ln, err := Listen(sockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln.Close()
-
-	Cleanup(sockPath)
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
-		t.Error("socket file should be removed after cleanup")
+		t.Error("socket file should be removed when its owner closes")
 	}
+}
+
+func TestOldListenerCleanupPreservesSuccessor(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+	old, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the historical socket-steal interleaving: the old listener is
+	// still alive, but its pathname is removed and rebound by a successor.
+	if err := os.Remove(sockPath); err != nil {
+		t.Fatal(err)
+	}
+	successor, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer successor.Close()
+
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("old-owner cleanup unlinked successor: %v", err)
+	}
+	conn.Close()
 }
 
 func TestClientConnectsToSocket(t *testing.T) {
@@ -194,8 +220,7 @@ func TestShutdownStopsDaemon(t *testing.T) {
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		go func() {
-			srv.Close()
-			Cleanup(sockPath)
+			_ = srv.Close() // closing the owned listener performs pinned cleanup
 		}()
 	})
 	go srv.Serve(ln)
@@ -218,17 +243,21 @@ func TestReplaceNoDaemon(t *testing.T) {
 	}
 }
 
-func TestReplaceStaleFile(t *testing.T) {
+func TestReplaceStaleFileDefersRemovalUntilListen(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
 	os.WriteFile(sockPath, []byte("stale"), 0o644)
 
 	if err := Replace(sockPath); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
-		t.Error("stale file should be removed")
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("Replace should not open a pre-bind removal race: %v", err)
 	}
+	ln, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
 }
 
 func startTestDaemon(t *testing.T, version string) (sockPath string, cleanup func()) {
@@ -299,7 +328,7 @@ func TestSocketDirectoryPermissions(t *testing.T) {
 	}
 }
 
-// Make sure we can't listen if another process already holds the socket.
+// Make sure a second listener can never unlink a live owner.
 func TestListenFailsIfSocketInUse(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
 
@@ -307,20 +336,72 @@ func TestListenFailsIfSocketInUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Don't close ln1 — simulate a running daemon.
+	defer ln1.Close()
 
-	// Listen should remove the socket file and rebind.
-	// This is expected behavior (Replace handles the graceful case).
-	ln2, err := Listen(sockPath)
-	if err != nil {
-		// On some systems this may fail if the old listener still holds it.
-		// That's okay: Replace() should be called first in production.
-		t.Logf("Listen returned error as expected when socket in use: %v", err)
-		ln1.Close()
-		return
+	if ln2, err := Listen(sockPath); err == nil {
+		ln2.Close()
+		t.Fatal("Listen replaced a live socket owner")
 	}
-	ln1.Close()
-	ln2.Close()
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("original listener pathname was disturbed: %v", err)
+	}
+	conn.Close()
+}
 
-	fmt.Println("Listen replaced socket file (OS allowed it)")
+func TestHealthIdentityRejectsInvalidContract(t *testing.T) {
+	for name, body := range map[string]string{
+		"malformed":       `not-json`,
+		"empty object":    `{}`,
+		"empty data":      `{"data":{}}`,
+		"missing pid":     `{"data":{"version":"1.0.0"}}`,
+		"missing version": `{"data":{"pid":42}}`,
+		"blank version":   `{"data":{"version":" ","pid":42}}`,
+		"invalid pid":     `{"data":{"version":"1.0.0","pid":0}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+			ln, err := Listen(sockPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})}
+			go srv.Serve(ln)
+			defer srv.Close()
+
+			if id, ok := HealthIdentity(sockPath); ok {
+				t.Fatalf("invalid health contract accepted as identity: %+v", id)
+			}
+			if !SocketOwned(sockPath) {
+				t.Fatal("invalid identity must not erase proof of a live socket owner")
+			}
+		})
+	}
+}
+
+func TestShutdownTimeoutIsFailureAndPreservesOwner(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+	ln, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // deliberately keep serving
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	if shutdownWithin(sockPath, 250*time.Millisecond) {
+		t.Fatal("shutdown deadline reported success while incumbent still owned socket")
+	}
+	if !SocketOwned(sockPath) {
+		t.Fatal("shutdown timeout disturbed the incumbent")
+	}
 }
