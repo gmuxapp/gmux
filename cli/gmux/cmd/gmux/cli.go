@@ -26,6 +26,7 @@ const (
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                   // gmux wait <id>...
 	modeAgent                  // gmux agent prompt|cancel|output <id>
+	modeSession                // gmux session promote|demote|reparent <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
 	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path|state ...>
@@ -79,6 +80,11 @@ type command struct {
 	agentModel  string  // --new only: model selector for the launch
 	agentName   string  // --new only: session display name for the launch
 
+	// session (modeSession)
+	sessionSub  string // promote|demote|reparent
+	parentRef   string // reparent target; empty with --clear
+	clearParent bool
+
 	// help
 	helpTopic string // "agent", "agent prompt", ... ("" = full usage)
 
@@ -104,12 +110,11 @@ type command struct {
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
 //
-// `agent` is a namespace group, not a new bare verb: it grows under
-// `gmux agent <verb>` exactly as decision 9 prescribes, which is why adding it
-// does not reopen the frozen top-level list — it extends it by one group.
+// `agent` and `session` are namespace groups, not bare action verbs. They grow
+// under `gmux <group> <verb>` without reopening the frozen action list.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "agent", "edit", "daemon", "auth", "remote", "version", "help",
+	"wait", "agent", "session", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -173,6 +178,8 @@ func parseCLI(args []string) (*command, error) {
 			switch {
 			case rest[0] == "agent":
 				return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
+			case rest[0] == "session":
+				return &command{mode: modeHelp, helpTopic: "session"}, nil
 			case rest[0] == "daemon":
 				return &command{mode: modeDaemon, daemonArgs: []string{"help"}}, nil
 			case helpTopicExists(rest[0]):
@@ -211,6 +218,12 @@ func parseCLI(args []string) (*command, error) {
 			// A mistake inside the namespace prints the namespace guide,
 			// not the top-level synopsis.
 			return nil, &usageError{topic: "agent", err: err}
+		}
+		return c, nil
+	case "session":
+		c, err := parseSession(rest)
+		if err != nil {
+			return nil, &usageError{topic: "session", err: err}
 		}
 		return c, nil
 	case "edit":
@@ -305,6 +318,49 @@ func dispatchVerb(topic string, args []string, parse func([]string) (*command, e
 		return nil, &usageError{topic: topic, err: err}
 	}
 	return c, nil
+}
+
+func parseSession(args []string) (*command, error) {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		return &command{mode: modeHelp, helpTopic: "session"}, nil
+	}
+	cmd := &command{mode: modeSession, sessionSub: args[0]}
+	switch cmd.sessionSub {
+	case "promote", "demote":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("session %s requires a session id", cmd.sessionSub)
+		}
+		cmd.ref = args[1]
+	case "reparent":
+		positional := make([]string, 0, 2)
+		for _, arg := range args[1:] {
+			switch {
+			case arg == "--clear":
+				if cmd.clearParent {
+					return nil, errors.New("session reparent: --clear specified more than once")
+				}
+				cmd.clearParent = true
+			case strings.HasPrefix(arg, "-"):
+				return nil, fmt.Errorf("session reparent: unknown flag %q", arg)
+			default:
+				positional = append(positional, arg)
+			}
+		}
+		if cmd.clearParent {
+			if len(positional) != 1 {
+				return nil, errors.New("session reparent --clear requires one session id and no parent id")
+			}
+			cmd.ref = positional[0]
+		} else {
+			if len(positional) != 2 {
+				return nil, errors.New("session reparent requires a session id and parent id (or --clear)")
+			}
+			cmd.ref, cmd.parentRef = positional[0], positional[1]
+		}
+	default:
+		return nil, fmt.Errorf("unknown session command %q (expected promote, demote, or reparent)", cmd.sessionSub)
+	}
+	return cmd, nil
 }
 
 func parseLs(args []string) (*command, error) {

@@ -74,6 +74,8 @@ func main() {
 		os.Exit(cmdWait(cmd.waitRefs, cmd.timeout, cmd.forText, cmd.forRegex, cmd.quiet))
 	case modeAgent:
 		os.Exit(cmdAgent(cmd))
+	case modeSession:
+		os.Exit(cmdSession(cmd))
 	case modeEdit:
 		runEdit(cmd.editFile)
 	case modeEditChild:
