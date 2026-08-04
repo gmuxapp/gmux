@@ -1,5 +1,22 @@
 import type { TerminalSize } from './terminal-io'
 
+export function terminalGridSize(
+  availW: number,
+  availH: number,
+  cellWidth: number,
+  cellHeight: number,
+  roundRows: (value: number) => number = Math.floor,
+): TerminalSize | null {
+  // A flex child can transiently collapse to zero while the desktop window is
+  // narrowed past the fixed sidebar. Do not turn that unmeasurable state into
+  // a real 2-column PTY resize: wait for the next usable layout measurement.
+  if (availW < cellWidth * 2 || availH < cellHeight) return null
+  return {
+    cols: Math.max(2, Math.floor(availW / cellWidth)),
+    rows: Math.max(1, roundRows(availH / cellHeight)),
+  }
+}
+
 export function sameSize(a: TerminalSize | null, b: TerminalSize | null): boolean {
   return a != null && b != null && a.cols === b.cols && a.rows === b.rows
 }
