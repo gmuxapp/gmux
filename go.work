@@ -9,5 +9,4 @@ use (
 	./packages/sessionenv
 	./packages/workspace
 	./services/gmuxd
-	./tests/e2e
 )

@@ -118,8 +118,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # No host Go/Node needed: the Dockerfile builds gmuxd inside the image.
-      # Runs the built production gmuxd binary and a fake runner inside a
+      # No host Go/Node needed: the Dockerfile builds gmuxd and gmux inside the image.
+      # Runs the built production binaries and synthetic runners inside a
       # networkless, private-tmpfs Docker container (host isolation is
       # enforced by the harness guard). This is the real acceptance gate,
       # including the original unread-on-restart bug. The extended 50-cycle
