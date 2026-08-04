@@ -82,6 +82,72 @@ func TestWatchCatchesUpNewSubdir(t *testing.T) {
 	waitFor(t, events, func(e Event) bool { return e.Path == path && !e.Removed })
 }
 
+// writeUntilObserved polls by writing path until the watcher reports it. This
+// avoids depending on a fixed delay for the Watch goroutine to install watches.
+func writeUntilObserved(t *testing.T, events <-chan Event, path string) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+
+	for {
+		select {
+		case e := <-events:
+			if e.Path == path && !e.Removed {
+				return
+			}
+		case <-poll.C:
+			write(t, path)
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for event for %s", path)
+		}
+	}
+}
+
+func TestWatchRewatchesRecreatedSubdir(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "sessions")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	events := make(chan Event, 256)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Watch(ctx, root, ".jsonl", func(e Event) { events <- e })
+
+	writeUntilObserved(t, events, filepath.Join(dir, "before.jsonl"))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUntilObserved(t, events, filepath.Join(dir, "after.jsonl"))
+}
+
+func TestWatchRewatchesRecreatedRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	events := make(chan Event, 256)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Watch(ctx, root, ".jsonl", func(e Event) { events <- e })
+
+	writeUntilObserved(t, events, filepath.Join(root, "before.jsonl"))
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUntilObserved(t, events, filepath.Join(root, "after.jsonl"))
+}
+
 func TestWatchStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
