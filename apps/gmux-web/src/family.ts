@@ -125,11 +125,6 @@ export function familyRootId(id: string | null, source: FamilySource): string | 
   return session ? familyRoot(session, index).id : id
 }
 
-export interface FamilyNavigation {
-  parent?: Session
-  root?: Session
-}
-
 /** True when the selected session belongs to a family with at least one real
  * presentation edge. Orphans and standalone semantic agents stay ordinary
  * roots and therefore do not get family controls. */
@@ -138,16 +133,22 @@ export function hasFamily(session: Session, source: FamilySource): boolean {
   return index.childIds.has(session.id) || (index.childrenByParent.get(session.id)?.length ?? 0) > 0
 }
 
-/** Header/drawer navigation for a genuinely nested family member. Root is
- * omitted when it would duplicate Parent. Promoted sessions and unresolved
- * provenance intentionally expose neither control. */
-export function familyNavigation(selected: Session, source: FamilySource): FamilyNavigation {
+/** Ancestor spine for the header breadcrumbs, root first, parent last (the
+ * selected session itself excluded). Empty for roots, promoted sessions and
+ * unresolved provenance — exactly the sessions that show a plain title. */
+export function familyAncestors(selected: Session, source: FamilySource): Session[] {
   const index = indexFor(source)
-  if (!index.childIds.has(selected.id)) return {}
-  const parent = index.byId.get(selected.parent_session_id!)
-  if (!parent) return {}
-  const root = familyRoot(selected, index)
-  return { parent, root: root.id !== parent.id ? root : undefined }
+  const reverse: Session[] = []
+  const seen = new Set<string>([selected.id])
+  let cursor = selected
+  while (index.childIds.has(cursor.id)) {
+    const parent = index.byId.get(cursor.parent_session_id!)
+    if (!parent || seen.has(parent.id)) break
+    reverse.push(parent)
+    seen.add(parent.id)
+    cursor = parent
+  }
+  return reverse.reverse()
 }
 
 export interface FamilyNode {
@@ -165,132 +166,6 @@ function byRecency(a: Session, b: Session): number {
  * itself: a process (shell command, watcher, …) owned by an agent. */
 export function isProcessSession(session: Session): boolean {
   return session.semantic_agent !== true
-}
-
-/** Count of alive semantic agents in the selected session's presentation
- * family, root included. Drives the header pill's `Agents · N` count;
- * processes are intentionally excluded so the label stays truthful. */
-export function familyAgentCount(selected: Session, source: FamilySource): number {
-  const index = indexFor(source)
-  const root = familyRoot(selected, index)
-  let count = 0
-  for (const session of index.byId.values()) {
-    if (session.alive
-      && !isProcessSession(session)
-      && (index.rootById.get(session.id) ?? session) === root) count++
-  }
-  return count
-}
-
-// ── Bucketed drawer projection (noise reduction) ────────────────────────────
-
-/** Drawer grouping vocabulary, in display order. `attention` is error or
- * unread — the reason the user opened the drawer; never capped. */
-export type FamilyBucket = 'attention' | 'working' | 'idle' | 'finished'
-
-const BUCKET_RANK: Record<FamilyBucket, number> = { attention: 0, working: 1, idle: 2, finished: 3 }
-
-/** Per-group visible-row caps before a `+N …` summary row takes over. */
-export const FAMILY_GROUP_CAPS: Record<FamilyBucket, number> = {
-  attention: Infinity,
-  working: 20,
-  idle: 10,
-  finished: 3,
-}
-
-/** A session's own bucket from its own facts (no subtree inheritance).
- * Follows the `sessionDotState` precedence exactly (error > working >
- * unread, with error/working alive-gated and unread not) so a row's dot
- * and its group never disagree. In particular a dead session whose final
- * output was never viewed is `attention`, not `finished` — unseen output
- * is unseen output regardless of liveness. */
-export function familyBucket(session: Session): FamilyBucket {
-  if (session.alive && session.status?.error) return 'attention'
-  if (session.alive && session.status?.active) return 'working'
-  if (session.unread) return 'attention'
-  return session.alive ? 'idle' : 'finished'
-}
-
-export interface FamilyBucketNode {
-  session: Session
-  /** Effective bucket: the highest-urgency bucket in this node's subtree.
-   * A dead parent with a working descendant sorts (and stays visible) as
-   * working — noise is only what is transitively noise. */
-  bucket: FamilyBucket
-  process: boolean
-  /** Children partitioned into bucket groups, in display order. */
-  groups: FamilyBucketGroup[]
-}
-
-export interface FamilyBucketGroup {
-  bucket: FamilyBucket
-  nodes: FamilyBucketNode[]
-}
-
-/** Status-truth totals for the heading counts line: agents tallied by their
- * own bucket (not the hoisted effective one), processes tallied separately. */
-export interface FamilyBucketCounts {
-  attention: number
-  working: number
-  idle: number
-  finished: number
-  processes: number
-}
-
-export interface BucketedFamilyProjection {
-  root: Session
-  ancestors: Session[]
-  groups: FamilyBucketGroup[]
-  counts: FamilyBucketCounts
-}
-
-const titleCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
-
-function compareBucketNodes(a: FamilyBucketNode, b: FamilyBucketNode): number {
-  // Bucket order, agents before processes, recency, then natural title so
-  // same-batch children (`swarm-425/426/…`) read ordered instead of shuffled.
-  const at = a.session.last_output_at || a.session.created_at
-  const bt = b.session.last_output_at || b.session.created_at
-  return BUCKET_RANK[a.bucket] - BUCKET_RANK[b.bucket]
-    || Number(a.process) - Number(b.process)
-    || (bt < at ? -1 : bt > at ? 1 : 0)
-    || titleCollator.compare(a.session.title, b.session.title)
-    || (a.session.id < b.session.id ? -1 : a.session.id > b.session.id ? 1 : 0)
-}
-
-function groupBucketNodes(nodes: FamilyBucketNode[]): FamilyBucketGroup[] {
-  const sorted = [...nodes].sort(compareBucketNodes)
-  const groups: FamilyBucketGroup[] = []
-  for (const node of sorted) {
-    const last = groups[groups.length - 1]
-    if (last && last.bucket === node.bucket) last.nodes.push(node)
-    else groups.push({ bucket: node.bucket, nodes: [node] })
-  }
-  return groups
-}
-
-function toBucketNode(node: FamilyNode, counts: FamilyBucketCounts): FamilyBucketNode {
-  const children = node.children.map(child => toBucketNode(child, counts))
-  const process = isProcessSession(node.session)
-  const own = familyBucket(node.session)
-  if (process) counts.processes++
-  else counts[own]++
-  let bucket = own
-  for (const child of children) {
-    if (BUCKET_RANK[child.bucket] < BUCKET_RANK[bucket]) bucket = child.bucket
-  }
-  return { session: node.session, bucket, process, groups: groupBucketNodes(children) }
-}
-
-/** `projectFamily` with every children list (the top-level sibling list
- * included) partitioned into attention → working → idle → finished groups.
- * One pass over the projected trees on top of the shared snapshot index,
- * so the whole thing stays O(n) for a snapshot. */
-export function bucketedFamily(selected: Session, source: FamilySource): BucketedFamilyProjection {
-  const base = projectFamily(selected, indexFor(source))
-  const counts: FamilyBucketCounts = { attention: 0, working: 0, idle: 0, finished: 0, processes: 0 }
-  const top = base.siblingTrees.map(tree => toBucketNode(tree, counts))
-  return { root: base.root, ancestors: base.ancestors, groups: groupBucketNodes(top), counts }
 }
 
 /** Complete descendant tree for a presentation root. Promoted descendants are
@@ -326,18 +201,33 @@ export function projectFamily(selected: Session, source: FamilySource): FamilyDr
     return { root, ancestors: [], siblingTrees: [descendantTree(root, index)] }
   }
 
-  const reverse: Session[] = []
-  const seen = new Set<string>([selected.id])
-  let cursor = selected
-  while (index.childIds.has(cursor.id)) {
-    const parent = index.byId.get(cursor.parent_session_id!)
-    if (!parent || seen.has(parent.id)) break
-    reverse.push(parent)
-    seen.add(parent.id)
-    cursor = parent
-  }
-  const parent = reverse[0]
-  const ancestors = reverse.reverse()
+  const ancestors = familyAncestors(selected, index)
+  const parent = ancestors[ancestors.length - 1]
   const siblings = parent ? index.childrenByParent.get(parent.id) ?? [] : []
   return { root, ancestors, siblingTrees: siblings.map(s => descendantTree(s, index)) }
+}
+
+/** Status totals for the panel's counts line, over every family member the
+ * panel shows (processes included, ancestors excluded — they live in the
+ * header breadcrumbs). Each member is tallied once under its dot-precedence
+ * state so the line and the row dots can never disagree. */
+export interface FamilyCounts {
+  error: number
+  working: number
+  unread: number
+  total: number
+}
+
+export function familyCounts(trees: readonly FamilyNode[]): FamilyCounts {
+  const counts: FamilyCounts = { error: 0, working: 0, unread: 0, total: 0 }
+  const visit = (node: FamilyNode) => {
+    const s = node.session
+    counts.total++
+    if (s.alive && s.status?.error) counts.error++
+    else if (s.alive && s.status?.active) counts.working++
+    else if (s.unread) counts.unread++
+    for (const child of node.children) visit(child)
+  }
+  for (const tree of trees) visit(tree)
+  return counts
 }
