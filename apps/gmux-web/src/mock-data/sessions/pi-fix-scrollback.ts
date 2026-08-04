@@ -25,7 +25,7 @@ export default {
   status: { active: false },
   unread: false,
   project_slug: 'my-project',
-  last_output_at: ago(24),
+  last_output_at: ago(4),
   socket_path: '/tmp/gmux-sessions/mock.sock',
   terminal: [
     `${GRAY}╭──────────────────────────────────────────────────────╮${RST}`,

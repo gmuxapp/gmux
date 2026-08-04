@@ -55,20 +55,24 @@ export const DEMO_ACTIVITY: MockSession[] = [
     cwd: '/home/user/dev/openclaw', workspace_root: '/home/user/dev/openclaw',
     remotes: { origin: 'github.com/acme/openclaw' },
     project_slug: 'openclaw',
+    created_at: ago(60 * 6), started_at: ago(60 * 6),
     last_output_at: ago(60 * 5),
   }),
   demo({
     id: '17i0p4fp', title: 'debug ws reconnect',
+    created_at: ago(60 * 27), started_at: ago(60 * 27),
     last_output_at: ago(60 * 26),
   }),
   demo({
     id: '1f4mvwv1', title: 'shell: profiling',
     adapter: 'shell', command: ['bash'],
+    created_at: ago(60 * 24 * 5), started_at: ago(60 * 24 * 5),
     last_output_at: ago(60 * 24 * 4),
   }),
   demo({
     id: '1eb5auvb', title: 'refactor launcher',
     alive: false, resumable: true, pid: null, exit_code: 0,
+    created_at: ago(60 * 31), started_at: ago(60 * 31),
     exited_at: ago(60 * 30), last_output_at: ago(60 * 30),
   }),
 ]

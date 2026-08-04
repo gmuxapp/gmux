@@ -33,7 +33,7 @@ export default {
   status: { active: true },
   unread: false,
   project_slug: 'my-project',
-  last_output_at: ago(3),
+  last_output_at: ago(0),
   socket_path: '/tmp/gmux-sessions/1jd5z9sg.sock',
   cursorX: 2,
   cursorY: 70,
