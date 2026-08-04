@@ -161,6 +161,138 @@ function byRecency(a: Session, b: Session): number {
   return bt.localeCompare(at) || a.id.localeCompare(b.id)
 }
 
+/** A family member whose parent is a semantic agent but who is not one
+ * itself: a process (shell command, watcher, …) owned by an agent. */
+export function isProcessSession(session: Session): boolean {
+  return session.semantic_agent !== true
+}
+
+/** Count of alive semantic agents in the selected session's presentation
+ * family, root included. Drives the header pill's `Agents · N` count;
+ * processes are intentionally excluded so the label stays truthful. */
+export function familyAgentCount(selected: Session, source: FamilySource): number {
+  const index = indexFor(source)
+  const root = familyRoot(selected, index)
+  let count = 0
+  for (const session of index.byId.values()) {
+    if (session.alive
+      && !isProcessSession(session)
+      && (index.rootById.get(session.id) ?? session) === root) count++
+  }
+  return count
+}
+
+// ── Bucketed drawer projection (noise reduction) ────────────────────────────
+
+/** Drawer grouping vocabulary, in display order. `attention` is error or
+ * unread — the reason the user opened the drawer; never capped. */
+export type FamilyBucket = 'attention' | 'working' | 'idle' | 'finished'
+
+const BUCKET_RANK: Record<FamilyBucket, number> = { attention: 0, working: 1, idle: 2, finished: 3 }
+
+/** Per-group visible-row caps before a `+N …` summary row takes over. */
+export const FAMILY_GROUP_CAPS: Record<FamilyBucket, number> = {
+  attention: Infinity,
+  working: 20,
+  idle: 10,
+  finished: 3,
+}
+
+/** A session's own bucket from its own facts (no subtree inheritance).
+ * Follows the `sessionDotState` precedence exactly (error > working >
+ * unread) so a row's dot and its group never disagree, with one addition:
+ * everything dead is `finished` — a swarm of dead children whose final
+ * output was never viewed is noise, not 500 rows of attention (matching
+ * `unreadCount`'s alive gate). */
+export function familyBucket(session: Session): FamilyBucket {
+  if (!session.alive) return 'finished'
+  if (session.status?.error) return 'attention'
+  if (session.status?.active) return 'working'
+  return session.unread ? 'attention' : 'idle'
+}
+
+export interface FamilyBucketNode {
+  session: Session
+  /** Effective bucket: the highest-urgency bucket in this node's subtree.
+   * A dead parent with a working descendant sorts (and stays visible) as
+   * working — noise is only what is transitively noise. */
+  bucket: FamilyBucket
+  process: boolean
+  /** Children partitioned into bucket groups, in display order. */
+  groups: FamilyBucketGroup[]
+}
+
+export interface FamilyBucketGroup {
+  bucket: FamilyBucket
+  nodes: FamilyBucketNode[]
+}
+
+/** Status-truth totals for the heading counts line: agents tallied by their
+ * own bucket (not the hoisted effective one), processes tallied separately. */
+export interface FamilyBucketCounts {
+  attention: number
+  working: number
+  idle: number
+  finished: number
+  processes: number
+}
+
+export interface BucketedFamilyProjection {
+  root: Session
+  ancestors: Session[]
+  groups: FamilyBucketGroup[]
+  counts: FamilyBucketCounts
+}
+
+const titleCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
+function compareBucketNodes(a: FamilyBucketNode, b: FamilyBucketNode): number {
+  // Bucket order, agents before processes, recency, then natural title so
+  // same-batch children (`swarm-425/426/…`) read ordered instead of shuffled.
+  const at = a.session.last_output_at || a.session.created_at
+  const bt = b.session.last_output_at || b.session.created_at
+  return BUCKET_RANK[a.bucket] - BUCKET_RANK[b.bucket]
+    || Number(a.process) - Number(b.process)
+    || (bt < at ? -1 : bt > at ? 1 : 0)
+    || titleCollator.compare(a.session.title, b.session.title)
+    || (a.session.id < b.session.id ? -1 : a.session.id > b.session.id ? 1 : 0)
+}
+
+function groupBucketNodes(nodes: FamilyBucketNode[]): FamilyBucketGroup[] {
+  const sorted = [...nodes].sort(compareBucketNodes)
+  const groups: FamilyBucketGroup[] = []
+  for (const node of sorted) {
+    const last = groups[groups.length - 1]
+    if (last && last.bucket === node.bucket) last.nodes.push(node)
+    else groups.push({ bucket: node.bucket, nodes: [node] })
+  }
+  return groups
+}
+
+function toBucketNode(node: FamilyNode, counts: FamilyBucketCounts): FamilyBucketNode {
+  const children = node.children.map(child => toBucketNode(child, counts))
+  const process = isProcessSession(node.session)
+  const own = familyBucket(node.session)
+  if (process) counts.processes++
+  else counts[own]++
+  let bucket = own
+  for (const child of children) {
+    if (BUCKET_RANK[child.bucket] < BUCKET_RANK[bucket]) bucket = child.bucket
+  }
+  return { session: node.session, bucket, process, groups: groupBucketNodes(children) }
+}
+
+/** `projectFamily` with every children list (the top-level sibling list
+ * included) partitioned into attention → working → idle → finished groups.
+ * One pass over the projected trees on top of the shared snapshot index,
+ * so the whole thing stays O(n) for a snapshot. */
+export function bucketedFamily(selected: Session, source: FamilySource): BucketedFamilyProjection {
+  const base = projectFamily(selected, indexFor(source))
+  const counts: FamilyBucketCounts = { attention: 0, working: 0, idle: 0, finished: 0, processes: 0 }
+  const top = base.siblingTrees.map(tree => toBucketNode(tree, counts))
+  return { root: base.root, ancestors: base.ancestors, groups: groupBucketNodes(top), counts }
+}
+
 /** Complete descendant tree for a presentation root. Promoted descendants are
  * intentionally excluded: each starts a new family, while provenance remains
  * available on the raw session. */

@@ -14,7 +14,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyNavigation, hasFamily } from './family'
+import { familyAgentCount, familyNavigation, hasFamily } from './family'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -211,7 +211,7 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
             aria-controls="agent-family-drawer"
             onClick={() => setFamilyOpen(open => !open)}
           >
-            Agents / Family
+            Agents · {familyAgentCount(session, sessions.value)}
           </button>
         )}
         {familyNav.parent && (
@@ -230,7 +230,7 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
             aria-label={`Go to root agent: ${familyNav.root.title}`}
             title={`Root: ${familyNav.root.title}`}
             onClick={() => navigateToSession(familyNav.root!.id)}
-          >⌂</button>
+          >⇈</button>
         )}
         <div class="main-header-title">
           {session.title}

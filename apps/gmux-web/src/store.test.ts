@@ -12,7 +12,7 @@ import {
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
   view, duplicateConversationFiles,
   sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
-  sidebarActivity, setAliveOnly,
+  sidebarActivity, setAliveOnly, familyDotById,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -1162,6 +1162,31 @@ describe('unreadCount (sidebar-only attention blip)', () => {
     expect(unreadCount.value).toBe(1)
   })
 
+  it('counts alive unread family children toward their folder-visible root', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'root', cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'child', cwd: '/work', adapter: 'pi', semantic_agent: true, parent_session_id: 'root', alive: true, unread: true }),
+      makeSession({ id: 'proc', cwd: '/work', parent_session_id: 'root', alive: true, unread: true }),
+      makeSession({ id: 'dead-child', cwd: '/work', adapter: 'pi', semantic_agent: true, parent_session_id: 'root', alive: false, unread: true }),
+    ]
+    // Children have no folder row of their own; the root row stands in and
+    // must ping for both the unread agent child and the unread process.
+    expect(unreadCount.value).toBe(2)
+  })
+
+  it('excludes the selected child from its root roll-up', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'root', cwd: '/work', adapter: 'pi', slug: 'rooty', semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'child', cwd: '/work', adapter: 'pi', slug: 'kiddo', semantic_agent: true, parent_session_id: 'root', alive: true, unread: true }),
+      makeSession({ id: 'sibling', cwd: '/work', adapter: 'pi', slug: 'sib', semantic_agent: true, parent_session_id: 'root', alive: true, unread: true }),
+    ]
+    expect(unreadCount.value).toBe(2)
+    urlPath.value = '/proj/pi/kiddo'
+    expect(selectedId.value).toBe('child')
+    // You're looking at `child`; its sibling still pings.
+    expect(unreadCount.value).toBe(1)
+  })
+
   it('is scoped to the tab\u2019s ?filter= selectors', () => {
     // A pinned tab must not blink for sessions outside its scope
     // (another tab or a notification covers those), and must still
@@ -1182,6 +1207,61 @@ describe('unreadCount (sidebar-only attention blip)', () => {
     expect(unreadCount.value).toBe(1)
     urlSearch.value = '?filter=elsewhere'
     expect(unreadCount.value).toBe(0)
+  })
+})
+
+describe('familyDotById (family-aggregated row dot)', () => {
+  beforeEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    urlPath.value = '/'
+    activityMap.value = new Map()
+  })
+
+  const pi = (id: string, extra: Partial<Session> = {}) => makeSession({
+    id, cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj', ...extra,
+  })
+
+  it('rolls the highest-precedence member state up to the presentation root', () => {
+    _rawSessions.value = [
+      pi('root'),
+      pi('working-child', { parent_session_id: 'root', status: { active: true } }),
+      pi('unread-child', { parent_session_id: 'root', unread: true }),
+      makeSession({ id: 'proc', cwd: '/work', parent_session_id: 'root', status: { active: true, error: true } }),
+    ]
+    // error (process!) > working > unread; the root row shows the max.
+    expect(familyDotById.value.get('root')).toBe('error')
+    expect(familyDotById.value.get('working-child')).toBeUndefined()
+  })
+
+  it('keeps standalone sessions at their own dot state', () => {
+    _rawSessions.value = [pi('solo', { unread: true })]
+    expect(familyDotById.value.get('solo')).toBe('unread')
+  })
+
+  it('ignores dead descendants: a never-viewed dead child must not pin the root', () => {
+    _rawSessions.value = [
+      pi('root'),
+      pi('dead-child', { parent_session_id: 'root', alive: false, unread: true }),
+    ]
+    expect(familyDotById.value.get('root')).toBe('none')
+  })
+
+  it('mutes only the selected member, not its siblings', () => {
+    _rawSessions.value = [
+      pi('root', { slug: 'rooty' }),
+      pi('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
+      pi('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
+    ]
+    expect(familyDotById.value.get('root')).toBe('unread')
+    urlPath.value = '/proj/pi/aa'
+    expect(selectedId.value).toBe('a')
+    // `a` is muted (you're looking at it) but `b` still pings the root row.
+    expect(familyDotById.value.get('root')).toBe('unread')
+    _rawSessions.value = _rawSessions.value.map(s => s.id === 'b' ? { ...s, unread: false } : s)
+    expect(familyDotById.value.get('root')).toBe('none')
   })
 })
 

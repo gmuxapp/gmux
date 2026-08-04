@@ -1,5 +1,5 @@
 import { bench, describe } from 'vitest'
-import { createFamilyIndex, projectFamily } from './family'
+import { bucketedFamily, createFamilyIndex, projectFamily } from './family'
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string) => makeSession({
@@ -28,5 +28,9 @@ describe('family projection (1,000 sessions / 500 children)', () => {
   const index = createFamilyIndex(sessions)
   bench('project the selected child drawer', () => {
     projectFamily(children[250], index)
+  })
+
+  bench('bucket the selected child drawer', () => {
+    bucketedFamily(children[250], index)
   })
 })

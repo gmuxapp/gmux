@@ -22,7 +22,7 @@ import type { Session } from './types'
 import {
   activityMap, peerStatusByName,
   sessionDotState, isSessionUnavailable,
-  duplicateConversationFiles,
+  duplicateConversationFiles, familyDotById,
 } from './store'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { HostSuffix } from './host-suffix'
@@ -104,10 +104,12 @@ export function SessionRow({
   const unavailable = isSessionUnavailable(session, peerStatus)
   const sleeping = !session.alive && session.resumable
 
-  const rawDot = resuming ? 'working' : sessionDotState(session, am)
-  // Selection mutes attention-grabbing dots (mirrors sidebar behavior):
-  // if you're already looking at it, "unread" / "error" aren't useful.
-  const dot = (selected && (rawDot === 'error' || rawDot === 'unread')) ? 'none' : rawDot
+  // Family-aggregated dot: this row stands in for the whole family.
+  // Selection muting ("unread isn't useful if you're looking at it") is
+  // applied per member inside `familyDotById`, mirroring the sidebar.
+  const dot = resuming
+    ? 'working'
+    : familyDotById.value.get(session.id) ?? sessionDotState(session, am)
   const arrival = useArrivalPulse(dot)
 
   const cls = [

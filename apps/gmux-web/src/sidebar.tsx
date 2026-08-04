@@ -17,7 +17,7 @@ import {
   activityMap, projects, connState, health, peers,
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
-  peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
+  peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState, familyDotById,
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
@@ -151,9 +151,10 @@ function SessionItem({
   onDragOver?: () => void
   onDragEnd?: () => void
 }) {
-  const effectiveDotState = resuming ? 'working' : rawDotState
-  // Nothing is "unread" if you're already looking at it.
-  const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
+  // Selection muting ("nothing is unread if you're already looking at it")
+  // happens per family member inside `familyDotById`, so a sibling child's
+  // attention still surfaces here while you view another member.
+  const dotState = resuming ? 'working' : rawDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
   // Same conversation file live in another runner (ADR 0011 N:1).
@@ -353,7 +354,7 @@ function FolderGroup({
             href={tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))}
             selected={selId === s.id}
             resuming={resumingId === s.id}
-            dotState={sessionDotState(s, am)}
+            dotState={familyDotById.value.get(s.id) ?? sessionDotState(s, am)}
             unavailable={isSessionUnavailable(s, peerStatus)}
             showHostMarker={mixedHosts}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
