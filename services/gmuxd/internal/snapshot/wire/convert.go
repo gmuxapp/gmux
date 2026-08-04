@@ -8,6 +8,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 )
 
 // Converter holds the pure derivation policy injected at construction:
@@ -65,6 +66,21 @@ func fmtMillisPtr(v *centralstore.UnixMillis) string {
 	return fmtMillis(*v)
 }
 
+// redactRemotes copies a session's remote map while removing URL userinfo.
+// Keeping this at the consumer-facing conversion boundary ensures local and
+// relayed peer sessions have the same wire security posture without mutating
+// the durable or peer projections used for project matching.
+func redactRemotes(remotes map[string]string) map[string]string {
+	if remotes == nil {
+		return nil
+	}
+	out := make(map[string]string, len(remotes))
+	for name, remote := range remotes {
+		out[name] = statetool.RedactURLUserinfo(remote)
+	}
+	return out
+}
+
 // session converts one composed local row: durable projection + runtime
 // overlay + derived title/status/resumable/rewritten command. Placement
 // stamps (project_slug/project_index) are applied by the payload-level
@@ -80,7 +96,7 @@ func (c *Converter) session(row central.SessionRow) Session {
 		SemanticAgent:   c.SemanticAgents[v.Adapter],
 		PromotedToRoot:  v.PromotedToRoot,
 		WorkspaceRoot:   v.WorkspaceRoot,
-		Remotes:         v.Remotes,
+		Remotes:         redactRemotes(v.Remotes),
 		Alive:           row.Alive,
 		ExitCode:        v.ExitCode,
 		StartedAt:       fmtMillisPtr(v.StartedAt),
@@ -164,6 +180,9 @@ func (c *Converter) Sessions(local *central.SessionsPayload, world *central.Proj
 	// durable placement join (or cleared stamps when unplaced).
 	peers := make([]Session, len(peerRows))
 	copy(peers, peerRows)
+	for i := range peers {
+		peers[i].Remotes = redactRemotes(peers[i].Remotes)
+	}
 	placementByPeerKey := map[[2]string]central.LocalPeerPlacementRow{}
 	if world != nil {
 		for _, p := range world.LocalPeerPlacements {
