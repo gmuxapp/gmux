@@ -929,11 +929,6 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
     const rootId = index.rootById.get(s.id)?.id ?? s.id
     let own = sessionDotState(s, am)
     if (s.id === sel && (own === 'error' || own === 'unread')) own = 'none'
-    // Descendants contribute only while alive: a dead child whose final
-    // output was never viewed must not pin its root's row to "unread"
-    // forever (mirrors unreadCount's alive gate). The root's own state
-    // passes through unchanged, preserving standalone-row behavior.
-    if (s.id !== rootId && !s.alive) own = 'none'
     const prev = map.get(rootId)
     if (prev === undefined || DOT_RANK[own] > DOT_RANK[prev]) map.set(rootId, own)
   }

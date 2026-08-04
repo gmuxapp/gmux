@@ -1241,12 +1241,14 @@ describe('familyDotById (family-aggregated row dot)', () => {
     expect(familyDotById.value.get('solo')).toBe('unread')
   })
 
-  it('ignores dead descendants: a never-viewed dead child must not pin the root', () => {
+  it('lets a never-viewed dead child surface unread on the root', () => {
+    // Unread is not alive-gated in sessionDotState, and the roll-up
+    // follows the same vocabulary: unseen output pings until viewed.
     _rawSessions.value = [
       pi('root'),
       pi('dead-child', { parent_session_id: 'root', alive: false, unread: true }),
     ]
-    expect(familyDotById.value.get('root')).toBe('none')
+    expect(familyDotById.value.get('root')).toBe('unread')
   })
 
   it('mutes only the selected member, not its siblings', () => {

@@ -123,7 +123,7 @@ describe('bucketed drawer projection', () => {
     expect(FAMILY_GROUP_CAPS).toEqual({ attention: Infinity, working: 20, idle: 10, finished: 3 })
   })
 
-  it('derives a session own bucket from error/unread, working, alive, dead', () => {
+  it('derives a session own bucket from the sessionDotState precedence', () => {
     expect(familyBucket(member('e', { status: { active: true, error: true } }))).toBe('attention')
     expect(familyBucket(member('u', { unread: true }))).toBe('attention')
     expect(familyBucket(member('w', { status: { active: true } }))).toBe('working')
@@ -131,8 +131,11 @@ describe('bucketed drawer projection', () => {
     // isn't "waiting on you" yet even if output is unseen.
     expect(familyBucket(member('wu', { status: { active: true }, unread: true }))).toBe('working')
     expect(familyBucket(member('i'))).toBe('idle')
-    // Dead is dead: a never-viewed dead child is noise, not attention.
-    expect(familyBucket(member('du', { alive: false, unread: true }))).toBe('finished')
+    // Unread is not alive-gated: unseen output demands attention even
+    // after the session died.
+    expect(familyBucket(member('du', { alive: false, unread: true }))).toBe('attention')
+    // Error/working are alive-gated (as in sessionDotState); a dead,
+    // fully-viewed session is finished no matter how it ended.
     expect(familyBucket(member('d', { alive: false, status: { active: true, error: true } }))).toBe('finished')
   })
 

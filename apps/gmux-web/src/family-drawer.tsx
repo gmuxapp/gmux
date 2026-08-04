@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
-import {
-  bucketedFamily, familyIndex, familyNavigation, FAMILY_GROUP_CAPS,
-  type BucketedFamilyProjection, type FamilyBucket, type FamilyBucketGroup,
-  type FamilyBucketNode, type FamilyNavigation,
-} from './family'
+import { useEffect, useReducer, useRef } from 'preact/hooks'
+import { familyIndex, type FamilyBucketGroup, type FamilyBucketNode } from './family'
+import { splitGroup, syncDrawer, toggleDrawerGroup, type DrawerModel } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { activityMap, projects, sessions, sessionDotState, tabHref } from './store'
 import type { Session } from './types'
@@ -11,24 +8,6 @@ import type { Session } from './types'
 function hrefFor(session: Session): string | undefined {
   const path = viewToPath({ kind: 'session', sessionId: session.id }, projects.value, sessions.value)
   return path ? tabHref(path) : undefined
-}
-
-/** Wording for a collapsed group's summary row. Agents get the bucket noun,
- * processes their own, so `+547 finished · 12 processes done` reads as two
- * facts instead of one blurred count. */
-function processNoun(count: number): string {
-  return count === 1 ? 'process' : 'processes'
-}
-
-function summaryLabel(bucket: FamilyBucket, agents: number, processes: number): string {
-  const parts: string[] = []
-  if (agents > 0) {
-    parts.push(bucket === 'working' ? `+${agents} more working` : `+${agents} ${bucket}`)
-  }
-  if (processes > 0) {
-    parts.push(`${agents > 0 ? '' : '+'}${processes} ${processNoun(processes)}${bucket === 'finished' ? ' done' : ''}`)
-  }
-  return parts.join(' · ')
 }
 
 function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
@@ -43,9 +22,7 @@ function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
   // in place without reshuffling the list under the cursor.
   const session = familyIndex(sessions.value).byId.get(node.session.id) ?? node.session
   const href = hrefFor(session)
-  // Dead rows carry no dot: their group position already says "finished",
-  // and a wall of never-viewed dead children must not glow "unread".
-  const rawDot = session.alive ? sessionDotState(session, activityMap.value) : 'none'
+  const rawDot = sessionDotState(session, activityMap.value)
   const dot = session.id === selectedId && (rawDot === 'error' || rawDot === 'unread') ? 'none' : rawDot
   return (
     <li>
@@ -91,14 +68,7 @@ function GroupRows({ group, parentId, selectedId, depth, expanded, onToggle }: {
   expanded: ReadonlySet<string>
   onToggle: (key: string) => void
 }) {
-  const key = `${parentId}:${group.bucket}`
-  const isExpanded = expanded.has(key)
-  const cap = FAMILY_GROUP_CAPS[group.bucket]
-  const shown = isExpanded ? group.nodes : group.nodes.slice(0, cap)
-  const hidden = group.nodes.slice(shown.length)
-  const collapsible = group.nodes.length > cap
-  const hiddenAgents = hidden.filter(n => !n.process).length
-  const hiddenProcesses = hidden.length - hiddenAgents
+  const { shown, summary } = splitGroup(group, parentId, expanded)
   return (
     <>
       {shown.map(node => (
@@ -111,17 +81,17 @@ function GroupRows({ group, parentId, selectedId, depth, expanded, onToggle }: {
           onToggle={onToggle}
         />
       ))}
-      {collapsible && (
+      {summary && (
         <li>
           <button
             type="button"
             class="family-more"
             style={{ paddingLeft: `${12 + depth * 18}px` }}
-            aria-expanded={isExpanded}
-            onClick={() => onToggle(key)}
+            aria-expanded={summary.expanded}
+            onClick={() => onToggle(summary.key)}
           >
-            <span class="family-more-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
-            {isExpanded ? 'show fewer' : summaryLabel(group.bucket, hiddenAgents, hiddenProcesses)}
+            <span class="family-more-chevron" aria-hidden="true">{summary.expanded ? '▾' : '▸'}</span>
+            {summary.label}
           </button>
         </li>
       )}
@@ -129,13 +99,13 @@ function GroupRows({ group, parentId, selectedId, depth, expanded, onToggle }: {
   )
 }
 
-function CountsLine({ counts }: { counts: BucketedFamilyProjection['counts'] }) {
+function CountsLine({ counts }: { counts: DrawerModel['projection']['counts'] }) {
   const segments: { text: string; cls?: string }[] = []
   if (counts.attention > 0) segments.push({ text: `${counts.attention} need attention`, cls: 'attention' })
   if (counts.working > 0) segments.push({ text: `${counts.working} working` })
   if (counts.idle > 0) segments.push({ text: `${counts.idle} idle` })
   if (counts.finished > 0) segments.push({ text: `${counts.finished} finished` })
-  if (counts.processes > 0) segments.push({ text: `${counts.processes} ${processNoun(counts.processes)}`, cls: 'processes' })
+  if (counts.processes > 0) segments.push({ text: `${counts.processes} ${counts.processes === 1 ? 'process' : 'processes'}`, cls: 'processes' })
   if (segments.length === 0) return null
   return (
     <div class="family-counts">
@@ -155,32 +125,23 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   triggerRef: { current: HTMLButtonElement | null }
 }) {
   const drawerRef = useRef<HTMLDivElement>(null)
-  // Two-state expansion per (parent, bucket); resets when the drawer
-  // closes because this component unmounts with it.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
-  const toggle = (key: string) => setExpanded(prev => {
-    const next = new Set(prev)
-    if (next.has(key)) next.delete(key)
-    else next.add(key)
-    return next
-  })
+  const [, forceRender] = useReducer((n: number) => n + 1, 0)
 
-  // Freeze the projection (ordering, bucketing, membership) for as long as
-  // the same session stays selected: live status updates repaint rows in
-  // place but never re-sort the list while the user is reading it. `peek`
-  // avoids subscribing the projection itself; rows subscribe for repaints.
+  // All freeze/expansion behavior lives in the pure drawer model (see
+  // family-drawer-model.ts): ordinary live updates keep the projection
+  // frozen; selection changes and group toggles re-project from current
+  // facts. `peek` keeps the projection itself unsubscribed; rows read
+  // sessions.value and repaint live. Expansion resets when the drawer
+  // closes because this component unmounts with it.
   // Promotion intentionally defers provenance: promoted sessions present
   // as roots even though parent_session_id remains immutable on the wire.
-  const frozenRef = useRef<{ selectedId: string; projection: BucketedFamilyProjection; navigation: FamilyNavigation } | null>(null)
-  if (frozenRef.current?.selectedId !== selected.id) {
-    const snapshot = sessions.peek()
-    frozenRef.current = {
-      selectedId: selected.id,
-      projection: bucketedFamily(selected, snapshot),
-      navigation: familyNavigation(selected, snapshot),
-    }
+  const modelRef = useRef<DrawerModel | null>(null)
+  modelRef.current = syncDrawer(modelRef.current, selected, sessions.peek())
+  const model = modelRef.current
+  const toggle = (key: string) => {
+    modelRef.current = toggleDrawerGroup(modelRef.current!, selected, sessions.peek(), key)
+    forceRender(0)
   }
-  const { projection, navigation } = frozenRef.current
 
   useEffect(() => {
     const drawer = drawerRef.current
@@ -223,6 +184,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
     return href ? <a class="family-nav-button" href={href}>{label}</a> : null
   }
 
+  const { projection, navigation } = model
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-modal="true" aria-label="Agents" tabIndex={-1} ref={drawerRef}>
       <div class="family-drawer-head">
@@ -258,7 +220,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
               parentId={projection.ancestors[projection.ancestors.length - 1]?.id ?? ''}
               selectedId={selected.id}
               depth={0}
-              expanded={expanded}
+              expanded={model.expanded}
               onToggle={toggle}
             />
           ))}

@@ -200,15 +200,15 @@ export const FAMILY_GROUP_CAPS: Record<FamilyBucket, number> = {
 
 /** A session's own bucket from its own facts (no subtree inheritance).
  * Follows the `sessionDotState` precedence exactly (error > working >
- * unread) so a row's dot and its group never disagree, with one addition:
- * everything dead is `finished` — a swarm of dead children whose final
- * output was never viewed is noise, not 500 rows of attention (matching
- * `unreadCount`'s alive gate). */
+ * unread, with error/working alive-gated and unread not) so a row's dot
+ * and its group never disagree. In particular a dead session whose final
+ * output was never viewed is `attention`, not `finished` — unseen output
+ * is unseen output regardless of liveness. */
 export function familyBucket(session: Session): FamilyBucket {
-  if (!session.alive) return 'finished'
-  if (session.status?.error) return 'attention'
-  if (session.status?.active) return 'working'
-  return session.unread ? 'attention' : 'idle'
+  if (session.alive && session.status?.error) return 'attention'
+  if (session.alive && session.status?.active) return 'working'
+  if (session.unread) return 'attention'
+  return session.alive ? 'idle' : 'finished'
 }
 
 export interface FamilyBucketNode {

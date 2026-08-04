@@ -18,22 +18,26 @@ false.
 ## Drawer presentation (noise reduction)
 
 Every children list in the drawer (the top-level sibling list included) is
-partitioned into attention → working → idle → finished groups, ordered by
-the `sessionDotState` precedence so a row's dot and its group never
-disagree; everything dead is `finished` regardless of unread. A node sorts
-into the highest-urgency bucket found in its entire subtree, so collapsed
-summaries can never hide live work. Groups are capped (attention ∞,
+partitioned into attention → working → idle → finished groups, classified
+by the `sessionDotState` precedence so a row's dot and its group never
+disagree: error and unread demand attention (unread is not alive-gated —
+unseen output pings until viewed, dead or not), active work is working,
+and only quiet sessions land in idle/finished. A node sorts into the
+highest-urgency bucket found in its entire subtree, so collapsed summaries
+can never hide urgent descendants. Groups are capped (attention ∞,
 working 20, idle 10, finished 3) behind `+N …` summary rows with
 per-(parent, bucket) expansion that resets when the drawer closes. The
-projection is frozen while the drawer is open: dots update in place, but
-rows never re-sort under the cursor.
+projection is frozen against ordinary live updates while the drawer is
+open — dots update in place, rows never re-sort under the cursor — and
+re-projects from current facts on the two explicit user actions: selecting
+another session and expanding/collapsing a group.
 
 Outside the drawer a root row stands in for its whole family:
 `familyDotById` aggregates the highest-precedence member dot onto the
 presentation root, and `unreadCount` adds alive unread descendants to their
-folder-visible root. Dead members never contribute (a never-viewed dead
-child is noise, not attention). Processes render with a `$` glyph and are
-excluded from the header pill's `Agents · N` count.
+folder-visible root (the count keeps its existing alive gate). Processes
+render with a `$` glyph and are excluded from the header pill's
+`Agents · N` count.
 
 ## Unresolved capability seam
 
