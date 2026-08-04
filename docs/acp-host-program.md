@@ -51,13 +51,30 @@ mode (terminal steer is refused permanently).
   in-flight turn state per session. The tape answers viewer attaches
   (snapshot-then-stream), reconnects, and mid-turn joins without touching
   the adapter — the PTY ring-buffer/scrollback split (ADR 0004/0016)
-  applied to conversations.
+  applied to conversations. **Retention: none.** The tape is
+  incarnation-local, never persisted, and carries no eviction/size-policy
+  machinery; the harness's own storage is the source of truth for anything
+  durable (reads without resume stay on the native-storage renderers), and
+  tape dumps exist only as debug artifacts.
+- **Package shape:** a new **`acprunner` sibling package** sharing
+  `session.State`, socket bind, registration and `/events` with
+  `ptyserver`. `ptyserver` is deliberately **not** generalized behind a
+  transport interface. A shared conformance suite in CI exercises the
+  common runner contract (registration, `/meta`, `/events`, turn edges,
+  semantic refusals) against both runner kinds; unification is revisited
+  after slice 6 with two real implementations in hand.
 - **Fan-out topology.** ACP is 1:1 per connection; the runner is the
   multiplex point. One upstream client connection to the adapter; N
   runner-hosted **agent-side facade connections** (one per WebSocket
   attach) re-serving the tape as `session/load` then live
   `session/update`s. All viewer writes route through the runner's single
   prompt-serialization point.
+- **Minimal capabilities on both faces.** The client capabilities gmux
+  advertises to the adapter and the agent capabilities the facade
+  advertises to browsers are both minimal: no fs capabilities, no terminal
+  capabilities, no form elicitation (§2.3). The rule: **every capability
+  advertised must have a consumer in a shipped slice** — capabilities are
+  added when the slice that consumes them lands, never speculatively.
 
 ### 2.2 Semantics (from the spike, adopted by ADR 0033 §4)
 
@@ -207,8 +224,12 @@ The ACP runner must carry the same session facts the PTY runner does:
     keyed `provider/modelId`; pi's persisted `defaultModel`/
     `defaultThinkingLevel` seed recency before any gmux history exists.
   - **claude:** SDK `initializationResult.models` filtered by the
-    `availableModels` settings allowlist. *Open sub-choice:* obtain via
-    spawning the adapter/SDK vs gmux parsing settings files.
+    `availableModels` settings allowlist. Acquisition (settled): **spawn
+    the pinned adapter, run the `initialize` handshake, read the model
+    list, kill it**; cache the result keyed on
+    **(adapter version, settings file mtime)**. gmux parses Claude
+    settings files **only as the `availableModels` allowlist filter**,
+    never as the catalog source.
   - **codex:** App Server `model/list`, non-hidden vendor catalog.
 - Launch-menu curation and a UI default-launch-mode are **deferred to their
   own small ADR**, kept separate from `preferred_harnesses`.
@@ -220,11 +241,11 @@ The proposal's seven questions, restated against current reality:
 | # | Question | Status | Answer / recommendation |
 |---|---|---|---|
 | 1 | Tracer launch surface | **RESOLVED** | Canonical `model:effort@harness` on `--model`, exact names, resolver later per ADR 0034. No `--adapter` flag, ever. |
-| 2 | Fate of PR #388 | **OPEN** | Re-evaluated post-rebase (green, 658 web tests). Recommendation: keep as a draft donor branch; do **not** merge the dialect wire (`cli/gmux/internal/acp`, `/acp/ingest`, server-pushed `session/load`) that slices 3–4 replace. Salvage the island/renderer/attachment code into slice 4 and close #388 when it lands. Alternative if a pi conversation view is wanted *now*: merge behind its pi-only gate and accept a wire migration in slice 4 plus dialect retirement in slice 10. |
+| 2 | Fate of PR #388 | **RESOLVED** | Stays a **draft donor branch**; the dialect wire (`cli/gmux/internal/acp`, `/acp/ingest`, server-pushed `session/load`) is never merged. The island/renderer/attachment code is absorbed in slice 4, which closes #388. |
 | 3 | Permission default | **RESOLVED (v1)** | Runner-side auto-allow (yolo) + native low-friction session mode; no form-elicitation capability advertised. The `ask`/`allow-safe` tiers, waiting-on-user status, notifications and web answering are one deferred slice; no timeout ever auto-answers. |
-| 4 | Distribution/pinning | **OPEN** | Recommendation stands: npx-with-pin for the tracer, gmux-managed cache before release, adapter-bundled binaries by default, conformance suite on pin bumps (§2.7). Needs a yes. |
+| 4 | Distribution/pinning | **OPEN (last one)** | The tracer path is fixed by the plan (npx-with-pin, §2.7); still needing a yes before release: the gmux-managed install cache and the adapter-bundled-binary default. Does not block slices 0–2. |
 | 5 | `drive_mode` store axis now | **RESOLVED** | Mandated by ADR 0033 ("mode becomes a real session axis"); pre-release schema change, no migration (ADR 0026 clean-state policy). Store + `/meta` + wire + web (fit report §5 lists the missing wire facts). |
-| 6 | Runner packaging | **RESOLVED (SDK) / OPEN (shape)** | Protocol layer is `coder/acp-go-sdk` (settled in the #388 review discussion). Package shape recommendation: new `acprunner` package sharing `session.State`, socket bind, registration and `/events` with `ptyserver` — not a transport-interface refactor of `ptyserver` itself. |
+| 6 | Runner packaging | **RESOLVED** | Protocol layer is `coder/acp-go-sdk`. Shape: new **`acprunner` sibling package** sharing `session.State`, socket bind, registration and `/events` with `ptyserver`; `ptyserver` is not generalized. A shared conformance suite in CI covers both runner kinds; unification is revisited after slice 6 (§2.1). |
 | 7 | Hardcoded tracer permission policy | **RESOLVED** | Subsumed by #3: auto-allow *is* the v1 policy, not a temporary hack. |
 
 New decisions recorded (settled with the user, outside ADR text): resolver
@@ -233,25 +254,30 @@ one (§2.8); launch-menu curation deferred to its own ADR; ACP-first/pi-last
 ordering and official SDKs at both ends (§2.4); runner-as-multiplex-point
 with session tape (§2.1).
 
-**Genuinely remaining open decisions:**
+**Settled at program approval** (2026-08-04, replacing the former open list):
 
-1. **PR #388 disposition** (register #2): donor-and-close vs merge-now.
-2. **Distribution confirmation** (register #4): npx-pin tracer → managed
-   cache; bundled-binary default.
-3. **Claude catalog acquisition** (§2.8): spawn the adapter/SDK for
-   `initializationResult.models` vs gmux parsing the settings allowlist
-   directly.
-4. **Runner package shape** (register #6): `acprunner` sibling package
-   (recommended) vs generalizing `ptyserver`.
-5. **Facade capability trimming** (fit report): what capability set the
-   runner's agent-side facade advertises to browsers (recommend: no
-   fs/terminal client capabilities from the web).
-6. **Tape retention/size policy** for very long sessions (recommend: mirror
-   scrollback caps; `agent logs` reads native storage regardless).
-7. **`gmux tail`/`attach`/`send` wording** for PTY-less sessions (decided:
-   refuse by name pointing at `agent logs`/web/`agent prompt` — final
-   copy TBD with slice 0; ADR 0033 left "polite refusal vs conversation
-   rendering" open, this program recommends refusal).
+1. **PR #388** stays a draft donor branch; its island is absorbed in
+   slice 4 (register #2).
+2. **Tape retention: none** — the harness's own storage is the source of
+   truth; tapes are incarnation-local debug artifacts only (§2.1).
+3. **Refusal copy** for PTY-less `tail`/`attach`/`send` and terminal-mode
+   semantic verbs is delegated to the slice 0 implementation (direction
+   fixed: refuse by name, stating the working surface; ADR 0033 §3 style).
+4. **Claude model catalog**: spawn the pinned adapter, initialize handshake,
+   read models, kill; cache keyed on (adapter version, settings mtime);
+   settings parsing is allowlist-only (§2.8).
+5. **Runner shape**: `acprunner` sibling package, no `ptyserver`
+   generalization; shared conformance suite in CI; revisit unification
+   after slice 6 (§2.1).
+6. **Capabilities**: minimal on both faces — no fs/terminal capabilities
+   advertised to the adapter or to browsers; every advertised capability
+   must have a consumer in a shipped slice (§2.1).
+7. **Protocol layer**: `coder/acp-go-sdk`, pinned (§2.1).
+8. **Permissions v1**: runner-side auto-allow (§2.3).
+
+**Genuinely remaining open decision:** distribution confirmation
+(register #4) — the release-time gmux-managed adapter cache and the
+adapter-bundled-binary default. Blocks release packaging, not slice work.
 
 ## 4. Slice plan
 
@@ -264,7 +290,9 @@ lesson is that handshakes lie until a live gate runs.
 `drive_mode` (`terminal`|`acp`) in the central store, registration, `/meta`,
 and the session wire; capability checks key on (harness, mode); terminal
 claude/codex semantic verbs emit ADR 0033 §3 refusals (steer permanent;
-prompt/follow-up naming the ACP path); `ls`/web display the mode.
+prompt/follow-up naming the ACP path); `ls`/web display the mode. The final
+refusal copy — including the PTY-less `tail`/`attach`/`send` wording — is
+decided and asserted in this slice.
 *Exit:* refusal texts asserted in tests; mode visible end-to-end; no
 behavior change for existing sessions.
 
