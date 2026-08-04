@@ -237,7 +237,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -272,6 +272,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
+		&i.DriveMode,
 	)
 	return i, err
 }
@@ -430,18 +431,19 @@ func (q *Queries) InsertProjectRule(ctx context.Context, arg InsertProjectRulePa
 
 const insertSession = `-- name: InsertSession :one
 INSERT INTO local_sessions (
-    id, adapter, conversation_ref, command_json, cwd, workspace_root,
+    id, adapter, drive_mode, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
     active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode
 `
 
 type InsertSessionParams struct {
 	ID               string
 	Adapter          string
+	DriveMode        string
 	ConversationRef  sql.NullString
 	CommandJson      string
 	Cwd              string
@@ -471,6 +473,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 	row := q.db.QueryRowContext(ctx, insertSession,
 		arg.ID,
 		arg.Adapter,
+		arg.DriveMode,
 		arg.ConversationRef,
 		arg.CommandJson,
 		arg.Cwd,
@@ -525,6 +528,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
+		&i.DriveMode,
 	)
 	return i, err
 }
@@ -696,7 +700,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, drive_mode FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -737,6 +741,7 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.TerminalRows,
 			&i.LaunchParentID,
 			&i.PromotedToRoot,
+			&i.DriveMode,
 		); err != nil {
 			return nil, err
 		}

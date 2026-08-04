@@ -22,10 +22,22 @@ type SessionID string
 type ProjectEntryID int64
 type PeerKey string
 
+// Drive modes (ADR 0033). Mirrored from packages/adapter rather than
+// imported: centralstore is a leaf persistence package and the mode names
+// are a wire/schema contract, exactly like the status booleans.
+const (
+	DriveModeTerminal = "terminal"
+	DriveModeACP      = "acp"
+)
+
 type Session struct {
-	ID                                                        SessionID
-	Version                                                   RowVersion
-	Adapter, ConversationRef                                  string
+	ID                       SessionID
+	Version                  RowVersion
+	Adapter, ConversationRef string
+	// DriveMode is how gmux hosts this harness (ADR 0033): "terminal" or
+	// "acp". Durable because a retained session resumes in the mode it was
+	// registered in; capability checks key on the (Adapter, DriveMode) pair.
+	DriveMode                                                 string
 	Command                                                   []string
 	CWD, WorkspaceRoot                                        string
 	Remotes                                                   map[string]string
@@ -51,8 +63,10 @@ type Session struct {
 // NewSession contains only facts legal at registration. New registrations are
 // always visible, unpromoted, and start at row version one.
 type NewSession struct {
-	ID                                       SessionID
-	Adapter, ConversationRef                 string
+	ID                       SessionID
+	Adapter, ConversationRef string
+	// DriveMode defaults to terminal when empty (older callers).
+	DriveMode                                string
 	Command                                  []string
 	CWD, WorkspaceRoot                       string
 	Remotes                                  map[string]string
@@ -217,6 +231,25 @@ func validateTerminal(cols, rows *uint16) error {
 	}
 	return nil
 }
+
+// validateDriveMode accepts a known drive mode or empty (normalized to
+// terminal at insert). An unknown mode is refused rather than defaulted: a
+// caller naming a mode this store does not understand must be told, not
+// silently registered as a terminal session.
+func validateDriveMode(s string) error {
+	if s == "" || s == DriveModeTerminal || s == DriveModeACP {
+		return nil
+	}
+	return fmt.Errorf("centralstore: unknown drive mode %q", s)
+}
+
+func normalizeDriveMode(s string) string {
+	if s == "" {
+		return DriveModeTerminal
+	}
+	return s
+}
+
 func validateExitLifecycle(exitedAt *UnixMillis, exitCode *int) error {
 	if exitCode != nil && exitedAt == nil {
 		return errors.New("centralstore: exit code requires exited timestamp")
@@ -226,6 +259,9 @@ func validateExitLifecycle(exitedAt *UnixMillis, exitCode *int) error {
 func validateNewSession(v NewSession) error {
 	if v.ID == "" || v.Adapter == "" {
 		return errors.New("centralstore: session id and adapter required")
+	}
+	if err := validateDriveMode(v.DriveMode); err != nil {
+		return err
 	}
 	if v.CreatedAt < 0 {
 		return errors.New("centralstore: created timestamp must be non-negative")
@@ -263,7 +299,7 @@ func marshalWhole(command []string, remotes map[string]string) (string, string, 
 }
 
 func sessionFromDB(v db.LocalSession) (Session, error) {
-	out := Session{ID: SessionID(v.ID), Version: RowVersion(v.RowVersion), Adapter: v.Adapter, ConversationRef: v.ConversationRef.String, CWD: v.Cwd, WorkspaceRoot: v.WorkspaceRoot.String, Slug: v.Slug.String, SlugBase: v.SlugBase.String, ShellTitle: v.ShellTitle.String, AdapterTitle: v.AdapterTitle.String, Subtitle: v.Subtitle.String, CreatedAt: UnixMillis(v.CreatedAtMs)}
+	out := Session{ID: SessionID(v.ID), Version: RowVersion(v.RowVersion), Adapter: v.Adapter, DriveMode: v.DriveMode, ConversationRef: v.ConversationRef.String, CWD: v.Cwd, WorkspaceRoot: v.WorkspaceRoot.String, Slug: v.Slug.String, SlugBase: v.SlugBase.String, ShellTitle: v.ShellTitle.String, AdapterTitle: v.AdapterTitle.String, Subtitle: v.Subtitle.String, CreatedAt: UnixMillis(v.CreatedAtMs)}
 	if v.RowVersion < 1 || v.CreatedAtMs < 0 {
 		return Session{}, errors.New("centralstore: corrupt session numeric value")
 	}
@@ -376,7 +412,7 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 		return Session{}, MutationResult{}, err
 	}
 	v.SlugBase, v.Slug = candidate.SlugBase, candidate.Slug
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, DriveMode: normalizeDriveMode(v.DriveMode), ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
 		if v.LaunchParentID == nil {
 			return sql.NullString{}
 		}

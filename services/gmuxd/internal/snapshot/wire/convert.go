@@ -52,6 +52,16 @@ func (c *Converter) resolveTitle(s centralstore.Session) string {
 	return s.Adapter
 }
 
+// wireDriveMode keeps the terminal default off the wire: the pre-mode
+// shape had no field, so terminal (and a legacy empty value) stays absent
+// and only "acp" is emitted. Consumers treat absence as terminal.
+func wireDriveMode(s string) string {
+	if s == centralstore.DriveModeTerminal {
+		return ""
+	}
+	return s
+}
+
 // fmtMillis converts a durable Unix-ms stamp to the wire's RFC3339 form.
 // time.RFC3339 has no fractional-second component, so this matches the
 // production nowRFC3339 second precision (FD-4).
@@ -93,6 +103,7 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Command:         v.Command,
 		Cwd:             v.CWD,
 		Adapter:         v.Adapter,
+		DriveMode:       wireDriveMode(v.DriveMode),
 		SemanticAgent:   c.SemanticAgents[v.Adapter],
 		PromotedToRoot:  v.PromotedToRoot,
 		WorkspaceRoot:   v.WorkspaceRoot,

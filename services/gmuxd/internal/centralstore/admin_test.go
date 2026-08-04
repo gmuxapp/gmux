@@ -84,8 +84,8 @@ func TestEmbeddedSchemaVersionMatchesOpenedDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head != got || head != 1 {
-		t.Fatalf("embedded head %d vs opened %d; want release baseline 1", head, got)
+	if head != got || head != 2 {
+		t.Fatalf("embedded head %d vs opened %d; want schema head 2 (v2: drive_mode)", head, got)
 	}
 }
 

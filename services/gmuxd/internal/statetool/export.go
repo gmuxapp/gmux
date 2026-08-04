@@ -26,6 +26,7 @@ type ExportDoc struct {
 type ExportSession struct {
 	ID              string            `json:"id"`
 	Adapter         string            `json:"adapter"`
+	DriveMode       string            `json:"drive_mode,omitempty"`
 	ConversationRef string            `json:"conversation_ref,omitempty"`
 	Command         []string          `json:"command"`
 	CWD             string            `json:"cwd"`
@@ -134,7 +135,7 @@ func Export(ctx context.Context, store *centralstore.Store) (ExportDoc, error) {
 
 func exportSession(s centralstore.Session) ExportSession {
 	out := ExportSession{
-		ID: string(s.ID), Adapter: s.Adapter, ConversationRef: s.ConversationRef,
+		ID: string(s.ID), Adapter: s.Adapter, DriveMode: s.DriveMode, ConversationRef: s.ConversationRef,
 		Command: append([]string{}, s.Command...),
 		CWD:     s.CWD, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: map[string]string{},

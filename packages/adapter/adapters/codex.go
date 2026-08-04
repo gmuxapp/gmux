@@ -77,6 +77,11 @@ func (c *Codex) Match(cmd []string) bool {
 // Env returns no extra environment variables.
 func (c *Codex) Env(_ adapter.EnvContext) []string { return nil }
 
+// SupportsACPDrive reports that the Codex harness has an ACP drive mode
+// (ADR 0033): semantic control is delivered by the ACP runner, so terminal
+// refusals name the mode boundary rather than a missing capability.
+func (c *Codex) SupportsACPDrive() bool { return true }
+
 func (c *Codex) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{
 		ID:          "codex",

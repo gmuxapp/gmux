@@ -417,6 +417,32 @@ func registryRuntime(reg *sessioncoord.Registry, id centralstore.SessionID) (ses
 	return sessioncoord.Runtime{}, false
 }
 
+// terminalWSEndpoint resolves the runner backend for the terminal
+// WebSocket (/ws/{id}). The drive-mode boundary is answered from the
+// AUTHORITATIVE store, not the composed fanout snapshot: immediately after
+// an ACP registration the snapshot can lag (or be empty), and falling
+// through to the live registry endpoint would attempt a terminal proxy
+// against a runner that has no PTY (ADR 0033). A store failure refuses
+// conservatively: a backend must not be resolved when the session's mode
+// cannot be established.
+func terminalWSEndpoint(ctx context.Context, st *centralstore.Store, reg *sessioncoord.Registry, fanout *sseFanout, sessionID string) (string, error) {
+	sid := centralstore.SessionID(sessionID)
+	row, found, err := st.Session(ctx, sid)
+	if err != nil {
+		return "", fmt.Errorf("session %s drive mode could not be verified: %v", sessionID, err)
+	}
+	if found && row.DriveMode == centralstore.DriveModeACP {
+		return "", fmt.Errorf("session %s is an ACP session; there is no terminal to attach", sessionID)
+	}
+	if e, ok := registryRuntime(reg, sid); ok {
+		return e.Endpoint, nil
+	}
+	if _, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
+		return "", fmt.Errorf("session %s has no socket", sessionID)
+	}
+	return "", fmt.Errorf("session %s not found", sessionID)
+}
+
 func sessionTreeRows(ctx context.Context, st *centralstore.Store, root centralstore.SessionID) ([]centralstore.Session, error) {
 	rows, err := st.ListSessions(ctx)
 	if err != nil {
@@ -493,6 +519,9 @@ func wireSessionFromStore(row centralstore.Session, reg *sessioncoord.Registry) 
 		ID:        string(row.ID),
 		CreatedAt: fmtMillis(row.CreatedAt),
 		Adapter:   row.Adapter,
+	}
+	if row.DriveMode != centralstore.DriveModeTerminal {
+		out.DriveMode = row.DriveMode
 	}
 	if row.TerminalCols != nil {
 		out.TerminalCols = *row.TerminalCols
