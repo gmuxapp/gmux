@@ -48,6 +48,40 @@ func TestSessionConversionPreservesFamilyFacts(t *testing.T) {
 	}
 }
 
+func TestSessionConversionRedactsRemoteUserinfo(t *testing.T) {
+	localRemotes := map[string]string{
+		"origin": "https://user:token@git.example/acme/repo.git",
+		"ssh":    "git@github.com:acme/repo.git",
+	}
+	peerRemotes := map[string]string{
+		"origin": "alice:secret@git.example/peer/repo.git",
+	}
+	local := localRow("local", true, func(r *central.SessionRow) { r.Session.Remotes = localRemotes })
+	peer := Session{ID: "remote@peer", Peer: "peer", Adapter: "shell", Remotes: peerRemotes}
+
+	got := (&Converter{}).Sessions(
+		&central.SessionsPayload{Sessions: []central.SessionRow{local}},
+		&central.ProjectsPayload{},
+		[]Session{peer},
+	)
+	byID := map[string]Session{}
+	for _, session := range got.Sessions {
+		byID[session.ID] = session
+	}
+	if remote := byID["local"].Remotes["origin"]; remote != "https://REDACTED@git.example/acme/repo.git" {
+		t.Fatalf("local remote userinfo reached wire: %q", remote)
+	}
+	if remote := byID["local"].Remotes["ssh"]; remote != "git@github.com:acme/repo.git" {
+		t.Fatalf("userinfo-free SSH remote changed: %q", remote)
+	}
+	if remote := byID["remote@peer"].Remotes["origin"]; remote != "REDACTED@git.example/peer/repo.git" {
+		t.Fatalf("peer remote userinfo reached relayed wire: %q", remote)
+	}
+	if localRemotes["origin"] != "https://user:token@git.example/acme/repo.git" || peerRemotes["origin"] != "alice:secret@git.example/peer/repo.git" {
+		t.Fatal("wire conversion mutated its source projections")
+	}
+}
+
 // TestTitlePrecedence pins the resolveTitle chain against the production
 // precedence (store.resolveTitle): adapter title > shell title >
 // CommandTitler(command) > adapter name.
