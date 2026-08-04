@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -445,6 +446,70 @@ func cmdKill(ref string) int {
 		return 1
 	}
 	fmt.Printf("killed %s\n", displayID(sess))
+	return 0
+}
+
+// cmdSession implements local-daemon family mutations. Cross-peer mutation is
+// intentionally refused: parent identity and cycle validation are one SQLite
+// transaction on the daemon that owns both rows.
+func cmdSession(cmd *command) int {
+	sess, err := resolveSession(cmd.ref)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	if sess.Peer != "" {
+		fmt.Fprintln(os.Stderr, "gmux: session family mutations require a session owned by this daemon; run gmux on the owning host")
+		return 1
+	}
+
+	action := cmd.sessionSub
+	var body []byte
+	if action == "parent" {
+		var parentID any
+		if !cmd.clearParent {
+			parent, resolveErr := resolveSession(cmd.parentRef)
+			if resolveErr != nil {
+				fmt.Fprintln(os.Stderr, "gmux:", resolveErr)
+				return 1
+			}
+			if parent.Peer != "" {
+				fmt.Fprintln(os.Stderr, "gmux: parent session must be owned by this daemon; cross-peer reparenting is not supported")
+				return 1
+			}
+			parentID = parent.ID
+		}
+		body, err = json.Marshal(map[string]any{"parent_session_id": parentID})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gmux:", err)
+			return 1
+		}
+	} else {
+		body = []byte("{}")
+	}
+
+	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/" + action
+	resp, err := gmuxdClient().Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		responseBody, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "gmux: session %s failed: %s: %s\n", action, resp.Status, strings.TrimSpace(string(responseBody)))
+		return 1
+	}
+	switch {
+	case action == "parent" && cmd.clearParent:
+		fmt.Printf("cleared parent of %s\n", displayID(sess))
+	case action == "parent":
+		fmt.Printf("parented %s under %s\n", displayID(sess), cmd.parentRef)
+	case action == "promote":
+		fmt.Printf("promoted %s to root\n", displayID(sess))
+	default:
+		fmt.Printf("demoted %s\n", displayID(sess))
+	}
 	return 0
 }
 

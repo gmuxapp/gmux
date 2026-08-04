@@ -942,7 +942,7 @@ func TestOrderTakeoverEvictionsRejectsCorruptParentCycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.database.ExecContext(ctx, `DROP TRIGGER local_sessions_launch_parent_immutable_update`); err != nil {
+	if _, err := s.database.ExecContext(ctx, `DROP TRIGGER local_sessions_launch_parent_no_cycle_update`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launch_parent_id = CASE id WHEN 'cycle-a' THEN 'cycle-b' ELSE 'cycle-a' END`); err != nil {

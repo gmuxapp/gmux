@@ -43,6 +43,7 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
    verbs:
    - `gmux daemon start|stop|restart|status|log-path` — daemon process
      lifecycle (was the `gmuxd` verbs).
+   - `gmux session parent|promote|demote …` — explicit task-family mutations;
    - future groups (e.g. `gmux peer …`) as needed.
    `auth` and `remote` remain top-level (rare, deliberate, setup-time).
    Adding a new top-level verb is a breaking change requiring a major
@@ -73,7 +74,7 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
    that infra already invokes.)
 
 7. **Daemon auto-start is intent-driven.** Session verbs (`open`, `ls`,
-   `attach`, `tail`, `send`, `wait`, `kill`, and `gmux -- <cmd>`)
+   `attach`, `tail`, `send`, `wait`, `kill`, `gmux session …`, and `gmux -- <cmd>`)
    auto-start `gmuxd` when it is down — the daemon is a *stateful broker*
    that rehydrates dead sessions from disk, so even `ls`/`tail` on a cold
    machine have something to serve. `gmux daemon status` and bare `gmux`

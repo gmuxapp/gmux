@@ -144,25 +144,27 @@ ADR 0025's complete host-ownership model is preserved:
 
 Placement is recalculated at existing discovery/registration points and, in a later feature, when runner/adapter common state reports a CWD/workspace change or project rules change. A project change removes the old placement and appends the session to its newly derived project transactionally. Users do not manually move sessions between projects.
 
-Ordering within a project is durable user state. It uses dense, zero-based integer positions among display siblings. The schema uses an explicit non-null sibling-scope key for roots and grouped children, avoiding SQLite's nullable-unique-index hole. Promotion, unpromotion, project reassignment, dismissal, and parent deletion rewrite every affected old/new scope to its canonical `0..n-1` order in one collision-safe transaction. Fractional ranks and linked-list ordering are rejected: they optimize writes that are negligible at sidebar scale while adding exhaustion/rebalancing or integrity complexity.
+Ordering within a project is durable user state. It uses dense, zero-based integer positions among display siblings. The schema uses an explicit non-null sibling-scope key for roots and grouped children, avoiding SQLite's nullable-unique-index hole. Promotion, unpromotion, explicit reparenting, project reassignment, dismissal, and parent deletion rewrite every affected old/new scope to its canonical `0..n-1` order in one collision-safe transaction. Reparenting therefore closes the old direct-parent scope and opens or appends to the new one atomically, with no transient duplicate or gap. Fractional ranks and linked-list ordering are rejected: they optimize writes that are negligible at sidebar scale while adding exhaustion/rebalancing or integrity complexity.
 
 Dismissed sessions have no placement or preserved order. If they register again, they are newly assigned at the normal bottom.
 
 ### 8. Parent-child provenance supports arbitrary depth
 
-A nullable parent-session ID records the session that launched a session. Every genuinely new nested `gmux` launch automatically captures the inherited `GMUX_SESSION_ID`; resume/restart retain their existing identity semantics. This is intentionally not a foreign key: the PTY child starts before the parent's asynchronous daemon registration completes, so a child may durably register first. The private domain API keeps the relationship immutable, rejects cycles as missing parents arrive, and owns deletion repair.
+A nullable parent-session ID initially records the session that launched a session. Every genuinely new nested `gmux` launch automatically captures the inherited `GMUX_SESSION_ID`; resume/restart retain their existing identity semantics. This is intentionally not a foreign key: the PTY child starts before the parent's asynchronous daemon registration completes, so a child may durably register first. Registration, observation, resume, restart, placement, and reconciliation never mutate the relationship implicitly; the domain owns deletion repair.
 
-The adjacency model permits arbitrary depth because subagents may launch subagents. Initial product behavior only passively groups recorded relationships; no closure table, materialized path, or general subtree editor is introduced.
+An explicit user-authored reparent operation is the sole exception to that implicit immutability. It may assign any retained session on the same daemon as direct parent, or clear the edge. In one transaction it verifies that the child and requested parent rows exist, rejects self-parenting, walks the requested parent's ancestor chain to reject cycles, bumps the child's row version, writes the edge, and canonically rewrites both affected sibling scopes. Cross-peer reassignment is refused. Semantic-agent capability remains a projection predicate rather than a storage constraint: an edge to a non-agent parent is valid provenance but presentation-inert.
 
-Parentage records launch provenance while both rows are retained; it is immutable during that lifetime and dismissal does not alter it. `promoted_to_root` is separate, sticky, user-authored presentation state:
+The adjacency model permits arbitrary depth because subagents may launch subagents. No closure table or materialized path is introduced; explicit reparenting is the narrow subtree-edit interface.
+
+Parentage normally records launch provenance while both rows are retained; explicit reparenting deliberately replaces that direct edge, while dismissal alone does not alter it. `promoted_to_root` remains separate, sticky, user-authored presentation state:
 
 - when true, the session renders as a project root without losing its launch parent;
 - when false, it groups beneath its parent only when both are visible in the same derived project;
 - sessions whose parent resolves to another project render as roots while retaining provenance.
 
-A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging can reorder siblings and promote/unpromote relative to the original parent, but arbitrary adoption under an unrelated parent is out of scope.
+A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging can reorder siblings and promote/unpromote without rewriting the parent edge. Explicit reparenting permits adoption under an unrelated retained parent and changes the direct parent used by family grouping and child-notification suppression.
 
-Dismissing a parent recursively dismisses its descendants. Permanently reconciling away a parent does not delete resumable descendants; the deletion transaction explicitly clears its direct children's parent IDs, makes them genuine roots, and intentionally forgets that deleted relationship. Their own descendant relationships remain intact.
+Dismissing a parent recursively dismisses the descendants reachable through the current direct-parent edges, including explicitly reparented descendants. Permanently reconciling away a parent does not delete resumable descendants; the deletion transaction explicitly clears its direct children's parent IDs, makes them genuine roots, and intentionally forgets that deleted relationship. Their own descendant relationships remain intact.
 
 ### 9. Cross-entity changes are domain transactions
 

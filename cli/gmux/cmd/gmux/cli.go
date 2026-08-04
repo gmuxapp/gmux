@@ -26,6 +26,7 @@ const (
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                   // gmux wait <id>...
 	modeAgent                  // gmux agent prompt|cancel|output <id>
+	modeSession                // gmux session parent|promote|demote <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
 	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path|state ...>
@@ -79,6 +80,11 @@ type command struct {
 	agentModel  string  // --new only: model selector for the launch
 	agentName   string  // --new only: session display name for the launch
 
+	// session (modeSession)
+	sessionSub  string // parent|promote|demote
+	parentRef   string // parent target for `session parent`; empty with --clear
+	clearParent bool
+
 	// help
 	helpTopic string // "agent", "agent prompt", ... ("" = full usage)
 
@@ -104,12 +110,11 @@ type command struct {
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
 //
-// `agent` is a namespace group, not a new bare verb: it grows under
-// `gmux agent <verb>` exactly as decision 9 prescribes, which is why adding it
-// does not reopen the frozen top-level list — it extends it by one group.
+// `agent` and `session` are namespace groups, not new bare action verbs: they
+// grow under `gmux <group> <verb>` without reopening the frozen action list.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "agent", "edit", "daemon", "auth", "remote", "version", "help",
+	"wait", "agent", "session", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -173,6 +178,8 @@ func parseCLI(args []string) (*command, error) {
 			switch {
 			case rest[0] == "agent":
 				return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
+			case rest[0] == "session":
+				return &command{mode: modeHelp, helpTopic: "session"}, nil
 			case rest[0] == "daemon":
 				return &command{mode: modeDaemon, daemonArgs: []string{"help"}}, nil
 			case helpTopicExists(rest[0]):
@@ -211,6 +218,12 @@ func parseCLI(args []string) (*command, error) {
 			// A mistake inside the namespace prints the namespace guide,
 			// not the top-level synopsis.
 			return nil, &usageError{topic: "agent", err: err}
+		}
+		return c, nil
+	case "session":
+		c, err := parseSession(rest)
+		if err != nil {
+			return nil, &usageError{topic: "session", err: err}
 		}
 		return c, nil
 	case "edit":
@@ -303,6 +316,49 @@ func dispatchVerb(topic string, args []string, parse func([]string) (*command, e
 			return &command{mode: modeHelp, helpTopic: topic}, nil
 		}
 		return nil, &usageError{topic: topic, err: err}
+	}
+	return c, nil
+}
+
+func parseSession(args []string) (*command, error) {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		return &command{mode: modeHelp, helpTopic: "session"}, nil
+	}
+	c := &command{mode: modeSession, sessionSub: args[0]}
+	switch c.sessionSub {
+	case "promote", "demote":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("session %s requires a session id", c.sessionSub)
+		}
+		c.ref = args[1]
+	case "parent":
+		pos := make([]string, 0, 2)
+		for _, arg := range args[1:] {
+			if arg == "--clear" {
+				if c.clearParent {
+					return nil, errors.New("session parent: --clear specified more than once")
+				}
+				c.clearParent = true
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return nil, fmt.Errorf("session parent: unknown flag %q", arg)
+			}
+			pos = append(pos, arg)
+		}
+		if c.clearParent {
+			if len(pos) != 1 {
+				return nil, errors.New("session parent --clear requires one session id and no parent id")
+			}
+			c.ref = pos[0]
+		} else {
+			if len(pos) != 2 {
+				return nil, errors.New("session parent requires a session id and parent id (or --clear)")
+			}
+			c.ref, c.parentRef = pos[0], pos[1]
+		}
+	default:
+		return nil, fmt.Errorf("unknown session command %q (expected parent, promote, or demote)", c.sessionSub)
 	}
 	return c, nil
 }

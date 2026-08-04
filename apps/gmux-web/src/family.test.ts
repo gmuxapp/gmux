@@ -37,6 +37,20 @@ describe('task-family projection', () => {
     expect(descendantTree(child, sessions).session).toBe(child)
   })
 
+  it('reprojects against the reassigned direct parent', () => {
+    const first = agent('first')
+    const second = agent('second')
+    const child = agent('child', 'first')
+    expect(familyRoot(child, [first, second, child])).toBe(first)
+
+    const reparented = { ...child, parent_session_id: 'second' }
+    expect(familyRoot(reparented, [first, second, reparented])).toBe(second)
+    expect(isFamilyChild(reparented, [first, second, reparented])).toBe(true)
+
+    const cleared = { ...child, parent_session_id: undefined }
+    expect(familyRoot(cleared, [first, second, cleared])).toBe(cleared)
+  })
+
   it('shows family controls only when a real edge exists', () => {
     const root = agent('root')
     const child = agent('child', 'root')

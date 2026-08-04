@@ -100,7 +100,9 @@ var (
 	ErrStaleVersion = errors.New("centralstore: stale row version")
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
-	ErrSessionNotFound = errors.New("centralstore: session not found")
+	ErrSessionNotFound    = errors.New("centralstore: session not found")
+	ErrSessionParentSelf  = errors.New("centralstore: session cannot parent itself")
+	ErrSessionParentCycle = errors.New("centralstore: session parent cycle")
 	// ErrCatalogHasPlacements marks the bootstrap-only catalog boundary. This
 	// primitive cannot authoritatively rematch subjects once placement exists.
 	ErrCatalogHasPlacements = errors.New("centralstore: catalog replacement requires zero placements")
@@ -1511,6 +1513,92 @@ func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReor
 	// Both kinds: the new positions are read back as session-row
 	// project_index stamps (see the note in place()).
 	return MutationResult{Changed: changedAny, SessionsDirty: changedAny, WorldDirty: changedAny}, nil
+}
+
+// SetSessionParent reassigns the direct provenance edge used by family
+// projection. An edge to any retained local session is valid; whether it is
+// presentation-active is derived separately from the direct parent's semantic
+// agent capability. This keeps non-agent provenance storable but inert.
+func (s *Store) SetSessionParent(ctx context.Context, id SessionID, parent *SessionID) (MutationResult, error) {
+	if id == "" {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+	row, err := q.GetSession(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if parent != nil && *parent == "" {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	if parent != nil && *parent == id {
+		return MutationResult{}, ErrSessionParentSelf
+	}
+
+	if parent != nil {
+		cursor := *parent
+		seen := map[SessionID]bool{}
+		for cursor != "" {
+			if cursor == id || seen[cursor] {
+				return MutationResult{}, ErrSessionParentCycle
+			}
+			seen[cursor] = true
+			ancestor, getErr := q.GetSession(ctx, string(cursor))
+			if errors.Is(getErr, sql.ErrNoRows) {
+				// The requested direct parent must exist. Older provenance edges
+				// may point at a parent that has not registered yet; that inert
+				// tail cannot introduce a cycle back to this retained row.
+				if cursor == *parent {
+					return MutationResult{}, ErrSessionNotFound
+				}
+				break
+			}
+			if getErr != nil {
+				return MutationResult{}, getErr
+			}
+			if !ancestor.LaunchParentID.Valid {
+				break
+			}
+			cursor = SessionID(ancestor.LaunchParentID.String)
+		}
+	}
+
+	parentValue := ""
+	if parent != nil {
+		parentValue = string(*parent)
+	}
+	nullParent := nullString(parentValue)
+	n, err := q.SetSessionParent(ctx, db.SetSessionParentParams{
+		LaunchParentID: nullParent, ID: string(id), LaunchParentID_2: nullParent,
+	})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if n == 0 {
+		if err = tx.Commit(); err != nil {
+			return MutationResult{}, err
+		}
+		return MutationResult{SessionVersion: RowVersion(row.RowVersion)}, nil
+	}
+	all, err := placements(ctx, q)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if _, err = rewritePlacements(ctx, q, all, nil, s.beforePlacementFinalize); err != nil {
+		return MutationResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{Changed: true, SessionVersion: RowVersion(row.RowVersion + 1), SessionsDirty: true, WorldDirty: true}, nil
 }
 
 func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, index *int) (MutationResult, error) {

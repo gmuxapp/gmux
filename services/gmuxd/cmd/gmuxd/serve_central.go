@@ -1030,6 +1030,11 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	}
 	if peerManager != nil && action != "" {
 		if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+			if action == "parent" || action == "promote" || action == "demote" {
+				writeError(w, http.StatusBadRequest, codeLocalOnly, fmt.Sprintf(
+					"%s is only available for sessions owned by this daemon; run gmux on the owning host", action))
+				return
+			}
 			// Semantic agent actions are local-only in this slice (ADR 0027).
 			// Refusing is not a limitation to paper over: forwarding would run
 			// an agent on another host under a contract (readiness, admission,
@@ -1052,6 +1057,73 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	sess, ok := visibleSession(frames.Sessions, sessionID)
 	sid := centralstore.SessionID(sessionID)
 	switch action {
+	case "promote", "demote":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+			return
+		}
+		result, err := boot.Store.SetPromotion(r.Context(), sid, action == "promote", nil)
+		if errors.Is(err, centralstore.ErrSessionNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "session not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if result.Changed {
+			boot.Composer.Invalidate(result)
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+	case "parent":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+		if err != nil || len(body) > 4096 {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
+			return
+		}
+		var payload map[string]json.RawMessage
+		if err = json.Unmarshal(body, &payload); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		rawParent, present := payload["parent_session_id"]
+		if !present {
+			writeError(w, http.StatusBadRequest, "bad_request", "parent_session_id is required (use null to clear)")
+			return
+		}
+		var parent *centralstore.SessionID
+		if !bytes.Equal(bytes.TrimSpace(rawParent), []byte("null")) {
+			var parentID string
+			if err = json.Unmarshal(rawParent, &parentID); err != nil || parentID == "" {
+				writeError(w, http.StatusBadRequest, "bad_request", "parent_session_id must be a session id or null")
+				return
+			}
+			value := centralstore.SessionID(parentID)
+			parent = &value
+		}
+		result, err := boot.Store.SetSessionParent(r.Context(), sid, parent)
+		switch {
+		case errors.Is(err, centralstore.ErrSessionNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "child and parent sessions must exist on this daemon")
+			return
+		case errors.Is(err, centralstore.ErrSessionParentSelf):
+			writeError(w, http.StatusConflict, "self_parent", err.Error())
+			return
+		case errors.Is(err, centralstore.ErrSessionParentCycle):
+			writeError(w, http.StatusConflict, "parent_cycle", err.Error())
+			return
+		case err != nil:
+			writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		if result.Changed {
+			boot.Composer.Invalidate(result)
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "attach":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")

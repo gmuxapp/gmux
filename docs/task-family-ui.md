@@ -1,13 +1,22 @@
 # Task-family UI integration seam
 
 Task-family presentation uses durable `launch_parent_id` (wire:
-`parent_session_id`) without mutating launch provenance. `promoted_to_root`
-breaks only the presentation edge.
+`parent_session_id`). Normal lifecycle and placement operations never mutate
+this launch provenance; the explicit `gmux session parent` operation may
+reassign or clear the direct edge. `promoted_to_root` breaks only the
+presentation edge and never erases the stored parent.
 
 A resolved launch-parent relationship is a family edge when its direct parent
 carries `semantic_agent: true`; the child may be an agent or any other process
 session. Missing parents and children of shells, editors, or terminal helpers
-remain presentation roots and cannot be hidden accidentally.
+remain presentation roots and cannot be hidden accidentally. Reparenting to a
+non-agent is therefore valid stored provenance but presentation-inert.
+
+`gmux session promote|demote` exposes the existing sticky promotion state.
+`gmux session parent <id> <parent-id>` (or `--clear`) changes the direct parent
+used by this projection and by child-notification suppression. Both rows must
+exist on the local daemon; self-parenting, ancestor cycles, and cross-peer
+reassignment are rejected transactionally.
 
 The daemon derives `semantic_agent` from the existing
 `adapter.ConversationSource` capability. This is the same semantic distinction

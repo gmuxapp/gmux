@@ -689,6 +689,71 @@ func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
 	}
 }
 
+func TestSessionReparentValidationAndRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	p := addProject(t, s)
+	addSession(t, s, "root", "")
+	addSession(t, s, "other", "")
+	addSession(t, s, "child", "root")
+	for _, id := range []SessionID{"root", "other", "child"} {
+		if _, err := s.PlaceLocalSession(ctx, id, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	other := SessionID("other")
+	r, err := s.SetSessionParent(ctx, "child", &other)
+	if err != nil || !r.Changed || !r.SessionsDirty || !r.WorldDirty || r.SessionVersion != 2 {
+		t.Fatalf("reparent=%#v err=%v", r, err)
+	}
+	child, ok, err := s.Session(ctx, "child")
+	if err != nil || !ok || child.LaunchParentID == nil || *child.LaunchParentID != other {
+		t.Fatalf("reparented child=%#v ok=%v err=%v", child, ok, err)
+	}
+	if got := scopeOrder(t, s, p, "c:l:other"); !reflect.DeepEqual(got, []string{"l:child"}) {
+		t.Fatalf("new direct-parent scope=%v", got)
+	}
+
+	r, err = s.SetSessionParent(ctx, "child", nil)
+	if err != nil || !r.Changed || r.SessionVersion != 3 {
+		t.Fatalf("clear parent=%#v err=%v", r, err)
+	}
+	child, _, _ = s.Session(ctx, "child")
+	if child.LaunchParentID != nil {
+		t.Fatalf("parent not cleared: %#v", child)
+	}
+	if got := rootOrder(t, s, p); !reflect.DeepEqual(got, []string{"l:root", "l:other", "l:child"}) {
+		t.Fatalf("cleared child roots=%v", got)
+	}
+
+	self := SessionID("root")
+	if _, err = s.SetSessionParent(ctx, "root", &self); !errors.Is(err, ErrSessionParentSelf) {
+		t.Fatalf("self-parent err=%v", err)
+	}
+	missing := SessionID("missing")
+	if _, err = s.SetSessionParent(ctx, "child", &missing); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing parent err=%v", err)
+	}
+	if _, err = s.SetSessionParent(ctx, "missing", nil); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing child err=%v", err)
+	}
+
+	childID := SessionID("child")
+	if _, err = s.SetSessionParent(ctx, "other", &childID); err != nil {
+		t.Fatal(err)
+	}
+	otherID := SessionID("other")
+	if _, err = s.SetSessionParent(ctx, "child", &otherID); !errors.Is(err, ErrSessionParentCycle) {
+		t.Fatalf("cycle err=%v", err)
+	}
+	child, _, _ = s.Session(ctx, "child")
+	if child.LaunchParentID != nil || child.Version != 3 {
+		t.Fatalf("cycle rejection mutated child: %#v", child)
+	}
+	assertKernelInvariants(t, s)
+}
+
 func TestReorderValidatesProjectParentAndDuplicates(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)

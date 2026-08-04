@@ -84,8 +84,8 @@ func TestEmbeddedSchemaVersionMatchesOpenedDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head != got || head != 1 {
-		t.Fatalf("embedded head %d vs opened %d; want release baseline 1", head, got)
+	if head != got || head != 2 {
+		t.Fatalf("embedded head %d vs opened %d; want schema head 2", head, got)
 	}
 }
 
@@ -159,10 +159,10 @@ func TestCheckStateLaunchCycle(t *testing.T) {
 	s, _ := openAdminStore(t)
 	addSession(t, s, "a", "")
 	addSession(t, s, "b", "a")
-	// The immutability trigger blocks rewrites at runtime; a corrupt
-	// database has no such guarantee, so drop it and manufacture a cycle.
+	// The update-cycle trigger blocks corrupt rewrites at runtime; drop it
+	// to manufacture corruption that the administrative checker must find.
 	exec(t, s,
-		"DROP TRIGGER local_sessions_launch_parent_immutable_update",
+		"DROP TRIGGER local_sessions_launch_parent_no_cycle_update",
 		"UPDATE local_sessions SET launch_parent_id = 'b' WHERE id = 'a'",
 	)
 	requireFinding(t, checkFindings(t, s), "launch_cycle")

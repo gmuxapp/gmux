@@ -33,6 +33,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
   gmux wait <id>... [--timeout|-t N] block until turns end; print reports
   gmux kill <id>                    terminate a session
+  gmux session --help               promote, demote, or reparent sessions
 
 Editing (usable as $EDITOR; blocks until the editor closes):
   gmux edit [file]                  open a file for the user to inspect or edit
@@ -220,6 +221,25 @@ timeout. A local signal prints '[Wait interrupted; agent remains active]' and ex
 Sends SIGHUP to the session's child process group, waits up to two seconds,
 then escalates to SIGKILL. The session stays listed
 ('gmux ls') with its exit code, and its output remains readable.
+`,
+
+	"session": `gmux session: change task-family relationships
+
+  gmux session promote <id>              present a child as a root
+  gmux session demote <id>               restore its direct family edge
+  gmux session parent <id> <parent-id>   assign a new direct parent
+  gmux session parent --clear <id>       clear the direct parent
+
+Promotion is sticky user-authored presentation state: it preserves the direct
+parent as provenance while giving the session full root behavior, including
+independent sidebar visibility and notifications. Demotion restores the edge
+when the direct parent is a semantic agent.
+
+Reparenting changes the direct parent used by family grouping and child
+notification suppression. Both sessions must be retained on this daemon;
+self-parenting, cycles, and cross-peer reassignment are refused. A non-agent
+parent is valid provenance but presentation-inert until it has semantic-agent
+capability.
 `,
 
 	"edit": `gmux edit: open a file in a managed editor session
