@@ -174,8 +174,9 @@ best-effort (v2's `messageId` makes it exact).
 The ACP runner must carry the same session facts the PTY runner does:
 
 - **Launch parent provenance**: inherit `GMUX_SESSION_ID` at driven launch
-  into `ParentSessionID`, through runner state, `/meta`, and registration
-  (`launch_parent_id`); resume/restart never acquires a new parent.
+  into `ParentSessionID`, through runner state and `/meta`. Registration copies
+  it into both organizational `parent_session_id` and write-once
+  `launched_from_session_id`; resume/restart changes neither.
 - **`semantic_agent`** derives from `adapter.ConversationSource` — Claude
   and Codex adapters already implement it, so ACP-mode sessions
   participate in family edges and child-notification suppression
