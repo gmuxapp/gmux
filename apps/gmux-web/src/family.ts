@@ -13,40 +13,117 @@ function potentialFamilyParent(session: Session, byId: ReadonlyMap<string, Sessi
   return parent?.semantic_agent === true ? parent : undefined
 }
 
+/** Snapshot-wide family facts. Build this once for a session-list identity and
+ * share it across projection callers; membership and roots are then O(1). */
+export interface FamilyIndex {
+  readonly byId: ReadonlyMap<string, Session>
+  readonly childIds: ReadonlySet<string>
+  readonly childrenByParent: ReadonlyMap<string, readonly Session[]>
+  readonly rootById: ReadonlyMap<string, Session>
+}
+
+const familyIndexCache = new WeakMap<readonly Session[], FamilyIndex>()
+
+/** Classify every session with memoized ancestor walks. An ancestry component
+ * is visited at most once, including malformed cycles and their descendants. */
+export function createFamilyIndex(sessions: readonly Session[]): FamilyIndex {
+  const byId = new Map<string, Session>()
+  for (const session of sessions) byId.set(session.id, session)
+
+  const ancestrySafe = new Map<string, boolean>()
+  const rootById = new Map<string, Session>()
+  for (const start of sessions) {
+    if (ancestrySafe.has(start.id)) continue
+    const path: Session[] = []
+    const pathIds = new Set<string>()
+    let cursor: Session | undefined = start
+    let safe = true
+    let root: Session | undefined
+    while (cursor) {
+      const known = ancestrySafe.get(cursor.id)
+      if (known !== undefined) {
+        safe = known
+        root = rootById.get(cursor.id)
+        break
+      }
+      if (pathIds.has(cursor.id)) {
+        safe = false
+        break
+      }
+      path.push(cursor)
+      pathIds.add(cursor.id)
+      const parent = potentialFamilyParent(cursor, byId)
+      if (!parent) {
+        root = cursor
+        break
+      }
+      cursor = parent
+    }
+    for (const session of path) {
+      ancestrySafe.set(session.id, safe)
+      rootById.set(session.id, safe && root ? root : session)
+    }
+  }
+
+  const childIds = new Set<string>()
+  const childrenByParent = new Map<string, Session[]>()
+  for (const session of sessions) {
+    if (ancestrySafe.get(session.id) !== true || !potentialFamilyParent(session, byId)) continue
+    childIds.add(session.id)
+    const children = childrenByParent.get(session.parent_session_id!) ?? []
+    children.push(session)
+    childrenByParent.set(session.parent_session_id!, children)
+  }
+  for (const children of childrenByParent.values()) children.sort(byRecency)
+  return { byId, childIds, childrenByParent, rootById }
+}
+
+/** Return the projection index cached for this exact session-list snapshot. */
+export function familyIndex(sessions: readonly Session[]): FamilyIndex {
+  const cached = familyIndexCache.get(sessions)
+  if (cached) return cached
+  const created = createFamilyIndex(sessions)
+  familyIndexCache.set(sessions, created)
+  return created
+}
+
+type FamilySource = readonly Session[] | FamilyIndex
+
+function indexFor(source: FamilySource): FamilyIndex {
+  return Array.isArray(source) ? familyIndex(source) : source as FamilyIndex
+}
+
 /** Resolve whether this session has a safe direct task-family edge. Malformed
  * snapshots can contain ancestry cycles even though the daemon rejects them at
  * registration. Every edge whose ancestry reaches a cycle fails open, keeping
  * all affected sessions visible rather than filtering the whole component. */
-export function isFamilyChild(session: Session, sessions: readonly Session[]): boolean {
-  const byId = new Map(sessions.map(candidate => [candidate.id, candidate]))
-  if (!potentialFamilyParent(session, byId)) return false
-  const seen = new Set<string>()
-  let current: Session | undefined = session
-  while (current) {
-    if (seen.has(current.id)) return false
-    seen.add(current.id)
-    current = potentialFamilyParent(current, byId)
-  }
-  return true
+export function isFamilyChild(session: Session, source: FamilySource): boolean {
+  return indexFor(source).childIds.has(session.id)
 }
 
-export function familyRoot(session: Session, sessions: readonly Session[]): Session {
-  const byId = new Map(sessions.map(s => [s.id, s]))
+export function familyRoot(session: Session, source: FamilySource): Session {
+  const index = indexFor(source)
+  const known = index.rootById.get(session.id)
+  if (known) return known
+
+  // Preserve the old behavior for a caller-provided session not present in the
+  // snapshot while still sharing the snapshot's by-ID index.
   const seen = new Set<string>()
   let current = session
-  while (isFamilyChild(current, sessions) && !seen.has(current.id)) {
+  while (true) {
+    if (seen.has(current.id)) return session
     seen.add(current.id)
-    const parent = byId.get(current.parent_session_id!)
-    if (!parent) break
+    const parent = potentialFamilyParent(current, index.byId)
+    if (!parent) return current
     current = parent
   }
-  return current
 }
 
-export function familyRootId(id: string | null, sessions: readonly Session[]): string | null {
+export function familyRootId(id: string | null, source: FamilySource): string | null {
   if (!id) return null
-  const session = sessions.find(s => s.id === id)
-  return session ? familyRoot(session, sessions).id : id
+  const index = indexFor(source)
+  const session = index.byId.get(id)
+  return session ? familyRoot(session, index).id : id
 }
 
 export interface FamilyNavigation {
@@ -57,21 +134,20 @@ export interface FamilyNavigation {
 /** True when the selected session belongs to a family with at least one real
  * presentation edge. Orphans and standalone semantic agents stay ordinary
  * roots and therefore do not get family controls. */
-export function hasFamily(session: Session, sessions: readonly Session[]): boolean {
-  if (isFamilyChild(session, sessions)) return true
-  return sessions.some(candidate =>
-    candidate.parent_session_id === session.id && isFamilyChild(candidate, sessions),
-  )
+export function hasFamily(session: Session, source: FamilySource): boolean {
+  const index = indexFor(source)
+  return index.childIds.has(session.id) || (index.childrenByParent.get(session.id)?.length ?? 0) > 0
 }
 
 /** Header/drawer navigation for a genuinely nested family member. Root is
  * omitted when it would duplicate Parent. Promoted sessions and unresolved
  * provenance intentionally expose neither control. */
-export function familyNavigation(selected: Session, sessions: readonly Session[]): FamilyNavigation {
-  if (!isFamilyChild(selected, sessions)) return {}
-  const parent = sessions.find(s => s.id === selected.parent_session_id)
+export function familyNavigation(selected: Session, source: FamilySource): FamilyNavigation {
+  const index = indexFor(source)
+  if (!index.childIds.has(selected.id)) return {}
+  const parent = index.byId.get(selected.parent_session_id!)
   if (!parent) return {}
-  const root = familyRoot(selected, sessions)
+  const root = familyRoot(selected, index)
   return { parent, root: root.id !== parent.id ? root : undefined }
 }
 
@@ -89,23 +165,18 @@ function byRecency(a: Session, b: Session): number {
 /** Complete descendant tree for a presentation root. Promoted descendants are
  * intentionally excluded: each starts a new family, while provenance remains
  * available on the raw session. */
-export function descendantTree(root: Session, sessions: readonly Session[]): FamilyNode {
-  const childrenByParent = new Map<string, Session[]>()
-  for (const candidate of sessions) {
-    if (!isFamilyChild(candidate, sessions)) continue
-    const children = childrenByParent.get(candidate.parent_session_id!) ?? []
-    children.push(candidate)
-    childrenByParent.set(candidate.parent_session_id!, children)
-  }
-  const build = (session: Session, spine: Set<string>): FamilyNode => {
-    const nextSpine = new Set(spine).add(session.id)
-    const children = (childrenByParent.get(session.id) ?? [])
-      .filter(child => !nextSpine.has(child.id))
-      .sort(byRecency)
-      .map(child => build(child, nextSpine))
+export function descendantTree(root: Session, source: FamilySource): FamilyNode {
+  const index = indexFor(source)
+  const spine = new Set<string>()
+  const build = (session: Session): FamilyNode => {
+    spine.add(session.id)
+    const children = (index.childrenByParent.get(session.id) ?? [])
+      .filter(child => !spine.has(child.id))
+      .map(build)
+    spine.delete(session.id)
     return { session, children }
   }
-  return build(root, new Set())
+  return build(root)
 }
 
 /** Drawer projection. Roots see their tree. A child sees its ancestor spine,
@@ -117,18 +188,18 @@ export interface FamilyDrawerProjection {
   siblingTrees: FamilyNode[]
 }
 
-export function projectFamily(selected: Session, sessions: readonly Session[]): FamilyDrawerProjection {
-  const byId = new Map(sessions.map(s => [s.id, s]))
-  const root = familyRoot(selected, sessions)
+export function projectFamily(selected: Session, source: FamilySource): FamilyDrawerProjection {
+  const index = indexFor(source)
+  const root = familyRoot(selected, index)
   if (root.id === selected.id) {
-    return { root, ancestors: [], siblingTrees: [descendantTree(root, sessions)] }
+    return { root, ancestors: [], siblingTrees: [descendantTree(root, index)] }
   }
 
   const reverse: Session[] = []
   const seen = new Set<string>([selected.id])
   let cursor = selected
-  while (isFamilyChild(cursor, sessions)) {
-    const parent = byId.get(cursor.parent_session_id!)
+  while (index.childIds.has(cursor.id)) {
+    const parent = index.byId.get(cursor.parent_session_id!)
     if (!parent || seen.has(parent.id)) break
     reverse.push(parent)
     seen.add(parent.id)
@@ -136,8 +207,6 @@ export function projectFamily(selected: Session, sessions: readonly Session[]): 
   }
   const parent = reverse[0]
   const ancestors = reverse.reverse()
-  const siblings = sessions
-    .filter(s => isFamilyChild(s, sessions) && s.parent_session_id === parent?.id)
-    .sort(byRecency)
-  return { root, ancestors, siblingTrees: siblings.map(s => descendantTree(s, sessions)) }
+  const siblings = parent ? index.childrenByParent.get(parent.id) ?? [] : []
+  return { root, ancestors, siblingTrees: siblings.map(s => descendantTree(s, index)) }
 }
