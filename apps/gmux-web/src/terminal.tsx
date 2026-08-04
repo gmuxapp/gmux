@@ -18,7 +18,7 @@ import { createLongPressRecognizer } from './long-press'
 import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
-import { decideViewportResize, sameSize } from './terminal-resize'
+import { decideViewportResize, sameSize, terminalGridSize } from './terminal-resize'
 import { wsStateOnClose, wsStateOnOutput, type WsState } from './ws-state'
 import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
 import { TerminalFindBar } from './terminal-find'
@@ -90,8 +90,15 @@ function measureTerminalFit(
   const availW = shellEl.offsetWidth - padX - reserveWidth
   const availH = shellEl.offsetHeight - padY - overlayBar
 
-  let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  let rows = Math.max(1, (overlayBar > 0 ? Math.ceil : Math.floor)(availH / dims.css.cell.height))
+  const grid = terminalGridSize(
+    availW,
+    availH,
+    dims.css.cell.width,
+    dims.css.cell.height,
+    overlayBar > 0 ? Math.ceil : Math.floor,
+  )
+  if (!grid) return null
+  let { cols, rows } = grid
 
   // Guard against 1px overflow: xterm computes screen width as
   // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
