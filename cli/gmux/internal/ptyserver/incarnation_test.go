@@ -94,6 +94,11 @@ func TestIncarnationIsReportedOnEveryResponseAndInMeta(t *testing.T) {
 	if _, ok := meta["id"]; !ok {
 		t.Error("/meta lost its existing fields")
 	}
+	// A PTY runner IS terminal mode (ADR 0033): the drive mode is spliced
+	// beside the incarnation so registration can persist the axis.
+	if got, _ := meta["drive_mode"].(string); got != "terminal" {
+		t.Errorf("/meta drive_mode = %q, want terminal", got)
+	}
 
 	// The stream reports it too, in headers, before any event is sent.
 	req, _ := http.NewRequest(http.MethodGet, "http://x/events", nil)

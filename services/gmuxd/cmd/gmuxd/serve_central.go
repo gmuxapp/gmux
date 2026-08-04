@@ -778,13 +778,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				}
 			}
 			proxy := wsproxy.New(func(sessionID string) (string, error) {
-				if e, ok := registryRuntime(boot.Registry, centralstore.SessionID(sessionID)); ok {
-					return e.Endpoint, nil
-				}
-				if _, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
-					return "", fmt.Errorf("session %s has no socket", sessionID)
-				}
-				return "", fmt.Errorf("session %s not found", sessionID)
+				return terminalWSEndpoint(r.Context(), boot.Store, boot.Registry, fanout, sessionID)
 			}, centralSizer{fanout: fanout})
 			proxy.Handler()(w, r)
 		})
@@ -1058,8 +1052,14 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			return
 		}
 		// Store-direct existence check (ADR 0026 §2a).
-		if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
+		row, found, err := boot.Store.Session(r.Context(), sid)
+		if err != nil || !found {
 			writeError(w, http.StatusNotFound, "not_found", "session not found")
+			return
+		}
+		if row.DriveMode == centralstore.DriveModeACP {
+			writeError(w, http.StatusUnprocessableEntity, codeNoTerminal,
+				"this is an ACP session; there is no terminal to attach. The web view renders the conversation, and gmux agent prompt drives it")
 			return
 		}
 		socketPath := ""
@@ -1154,6 +1154,20 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 			return
 		}
+		// Store-direct mode check (ADR 0033): an ACP session has no PTY to
+		// write into, and that fact must not depend on snapshot freshness.
+		// A store failure refuses rather than proceeds: bytes must not reach
+		// a live endpoint whose mode could not be established.
+		row, found, storeErr := boot.Store.Session(r.Context(), sid)
+		if storeErr != nil {
+			writeError(w, http.StatusInternalServerError, "internal", storeErr.Error())
+			return
+		}
+		if found && row.DriveMode == centralstore.DriveModeACP {
+			writeError(w, http.StatusUnprocessableEntity, codeNoTerminal,
+				"this is an ACP session; there is no terminal to type into. Use gmux agent prompt to drive it")
+			return
+		}
 		runtime, live := registryRuntime(boot.Registry, sid)
 		if !live {
 			writeError(w, http.StatusConflict, "not_running", "session is not running")
@@ -1186,6 +1200,11 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 				ok = true
 				sess = wireSessionFromStore(row, boot.Registry)
 			}
+		}
+		if ok && sess.DriveMode == centralstore.DriveModeACP {
+			writeError(w, http.StatusUnprocessableEntity, codeNoTerminal,
+				"this is an ACP session; there is no terminal screen. Use gmux agent logs to read the conversation")
+			return
 		}
 		scrollbackBrokerHandlerCentral(w, r, sessionID, sess, ok, sessionDirs.SessionDir)
 	case "conversation":

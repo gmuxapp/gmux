@@ -261,7 +261,7 @@ func (productionRunnerClient) Meta(ctx context.Context, endpoint string) (sessio
 	if s.ID == "" || s.Adapter == "" {
 		return sessioncoord.RunnerMeta{}, fmt.Errorf("runner /meta: missing id or adapter")
 	}
-	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
+	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, DriveMode: s.DriveMode, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
 	if s.ParentSessionID != "" {
 		parent := centralstore.SessionID(s.ParentSessionID)
 		reg.LaunchParentID = &parent
@@ -286,6 +286,7 @@ type runnerMetaWire struct {
 	ID              string            `json:"id"`
 	Incarnation     string            `json:"incarnation"`
 	Adapter         string            `json:"adapter"`
+	DriveMode       string            `json:"drive_mode"` // empty (older runner) = terminal
 	Kind            string            `json:"kind"`
 	Alive           bool              `json:"alive"`
 	CreatedAt       string            `json:"created_at"`

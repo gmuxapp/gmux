@@ -17,6 +17,10 @@ export const SessionSchema = z.object({
   workspace_root: z.string().optional(),
   remotes: z.record(z.string()).optional(),
   adapter: z.string().default('shell'),
+  // Drive mode (ADR 0033): how gmux hosts this harness. Absent on the
+  // wire means terminal (the pre-mode shape); 'acp' sessions have no PTY
+  // and render the conversation view instead of a terminal.
+  drive_mode: z.enum(['terminal', 'acp']).optional().default('terminal'),
   // Session this one was spawned from (e.g. `gmux edit` invoked as
   // $EDITOR inside an existing session). The UI places the child
   // directly under its parent in the sidebar.

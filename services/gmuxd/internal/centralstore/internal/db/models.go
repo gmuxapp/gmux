@@ -42,6 +42,7 @@ type LocalSession struct {
 	TerminalRows     sql.NullInt64
 	LaunchParentID   sql.NullString
 	PromotedToRoot   int64
+	DriveMode        string
 }
 
 type ManualPeer struct {

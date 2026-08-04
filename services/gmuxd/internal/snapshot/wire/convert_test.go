@@ -48,6 +48,25 @@ func TestSessionConversionPreservesFamilyFacts(t *testing.T) {
 	}
 }
 
+// The drive mode rides the wire only when it is not the terminal default:
+// the pre-mode wire shape had no field, so terminal (and a legacy empty
+// value) stays byte-identical and only "acp" is emitted (ADR 0033).
+func TestSessionConversionDriveMode(t *testing.T) {
+	conv := &Converter{}
+	for mode, want := range map[string]string{
+		centralstore.DriveModeTerminal: "",
+		"":                             "",
+		centralstore.DriveModeACP:      "acp",
+	} {
+		got := conv.session(central.SessionRow{SessionView: centralstore.SessionView{Session: centralstore.Session{
+			ID: "s", Adapter: "claude", DriveMode: mode, CreatedAt: 1,
+		}}})
+		if got.DriveMode != want {
+			t.Fatalf("DriveMode(%q) = %q, want %q", mode, got.DriveMode, want)
+		}
+	}
+}
+
 func TestSessionConversionRedactsRemoteUserinfo(t *testing.T) {
 	localRemotes := map[string]string{
 		"origin": "https://user:token@git.example/acme/repo.git",

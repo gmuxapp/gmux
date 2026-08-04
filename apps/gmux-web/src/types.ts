@@ -24,6 +24,12 @@ export interface Session {
   remotes?: Record<string, string>
   adapter: string
   /**
+   * Drive mode (ADR 0033): how gmux hosts this harness. Absent means
+   * terminal; 'acp' sessions have no PTY. Server-derived; never inferred
+   * from adapter names.
+   */
+  drive_mode?: 'terminal' | 'acp'
+  /**
    * Session this one was spawned from (e.g. `gmux edit` invoked as
    * $EDITOR inside an existing session). Drives adjacent placement in
    * the sidebar: the child renders directly under its parent.

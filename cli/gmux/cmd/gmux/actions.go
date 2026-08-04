@@ -20,10 +20,14 @@ import (
 // session is the subset of gmuxd's Session model that the CLI cares
 // about. Defined locally to avoid pulling in the gmuxd store package.
 type cliSession struct {
-	ID            string `json:"id"`
-	Peer          string `json:"peer,omitempty"`
-	Cwd           string `json:"cwd,omitempty"`
-	Adapter       string `json:"adapter"`
+	ID      string `json:"id"`
+	Peer    string `json:"peer,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Adapter string `json:"adapter"`
+	// DriveMode is how gmux hosts this harness (ADR 0033). Absent on the
+	// wire means terminal; "acp" sessions have no PTY. Round-trips through
+	// `gmux ls --json` so scripts can see the mode axis.
+	DriveMode     string `json:"drive_mode,omitempty"`
 	Alive         bool   `json:"alive"`
 	Pid           int    `json:"pid,omitempty"`
 	Title         string `json:"title,omitempty"`
@@ -369,7 +373,14 @@ func cmdList(all bool, asJSON bool) int {
 		if title == "" {
 			title = strings.Join(s.Command, " ")
 		}
-		row := [5]string{id, status, s.Adapter, title, s.Cwd}
+		// The mode rides the adapter cell rather than adding a column: it
+		// is exceptional (terminal is the default and stays unmarked), and
+		// a copy-pasteable table should not grow a column for it.
+		adapterCell := s.Adapter
+		if s.DriveMode == "acp" {
+			adapterCell += " (acp)"
+		}
+		row := [5]string{id, status, adapterCell, title, s.Cwd}
 		rows = append(rows, row)
 		if n := len(row[0]); n > idW {
 			idW = n
@@ -514,6 +525,14 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 		if resp.StatusCode == http.StatusNotFound {
 			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 			return nil, 1
+		}
+		if resp.StatusCode == http.StatusUnprocessableEntity {
+			// A capability refusal (e.g. an ACP session has no terminal
+			// screen, ADR 0033) arrives with a self-contained message.
+			if msg := extractMessage(body); msg != "" {
+				fmt.Fprintf(os.Stderr, "gmux: %s\n", msg)
+				return nil, 1
+			}
 		}
 		fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
 		return nil, 1

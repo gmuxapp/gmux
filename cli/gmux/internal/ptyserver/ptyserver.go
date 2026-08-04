@@ -990,17 +990,19 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Splice the incarnation in rather than adding it to session.State: the
-	// nonce belongs to this runner process, not to the session, and State is
-	// the session's own document. Decoding to RawMessage keeps every existing
-	// field byte-identical.
-	if s.incarnation != "" {
-		var obj map[string]json.RawMessage
-		if json.Unmarshal(data, &obj) == nil {
+	// Splice runner-process facts in rather than adding them to
+	// session.State: the incarnation nonce and the drive mode belong to this
+	// runner process (a PTY runner IS terminal mode, ADR 0033), not to the
+	// session document. Decoding to RawMessage keeps every existing field
+	// byte-identical.
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) == nil {
+		if s.incarnation != "" {
 			obj["incarnation"], _ = json.Marshal(s.incarnation)
-			if merged, mErr := json.Marshal(obj); mErr == nil {
-				data = merged
-			}
+		}
+		obj["drive_mode"], _ = json.Marshal(adapter.DriveModeTerminal)
+		if merged, mErr := json.Marshal(obj); mErr == nil {
+			data = merged
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

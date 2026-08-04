@@ -376,7 +376,10 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
-            <span class="session-menu-value">{session.adapter}</span>
+            <span class="session-menu-value">
+              {session.adapter}
+              {session.drive_mode === 'acp' ? ' (acp)' : ''}
+            </span>
           </div>
           <div class="session-menu-row">
             <span class="session-menu-label">Version</span>

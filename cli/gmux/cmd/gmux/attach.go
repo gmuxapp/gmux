@@ -31,6 +31,14 @@ func cmdAttach(ref string) int {
 		return 1
 	}
 
+	// An ACP session has no PTY at all (ADR 0033): the terminal WebSocket
+	// would fail with a cryptic upgrade error, so name the boundary and the
+	// surfaces that do exist.
+	if sess.DriveMode == "acp" {
+		fmt.Fprintln(os.Stderr, "gmux: this is an ACP session; there is no terminal to attach. The web view renders the conversation, and 'gmux agent prompt' drives it")
+		return 1
+	}
+
 	// A dead session has no backend socket for gmuxd to dial, so the WS
 	// upgrade would fail with a cryptic "backend unavailable". Surface the
 	// real reason up front and point the user at the UI where they can

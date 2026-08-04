@@ -7,12 +7,12 @@ SELECT value FROM centralstore_metadata WHERE key = ?;
 
 -- name: InsertSession :one
 INSERT INTO local_sessions (
-    id, adapter, conversation_ref, command_json, cwd, workspace_root,
+    id, adapter, drive_mode, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
     active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetSession :one

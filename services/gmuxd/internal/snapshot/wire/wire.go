@@ -51,6 +51,7 @@ type Session struct {
 	Command         []string          `json:"command,omitempty"`
 	Cwd             string            `json:"cwd,omitempty"`
 	Adapter         string            `json:"adapter"`
+	DriveMode       string            `json:"drive_mode,omitempty"` // ADR 0033; omitted = terminal
 	WorkspaceRoot   string            `json:"workspace_root,omitempty"`
 	Remotes         map[string]string `json:"remotes,omitempty"`
 	ParentSessionID string            `json:"parent_session_id,omitempty"`

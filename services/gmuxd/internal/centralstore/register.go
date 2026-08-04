@@ -17,7 +17,13 @@ import (
 type RunnerRegistration struct {
 	ID      SessionID
 	Adapter string
-	Alive   bool
+	// DriveMode is the registering runner's drive mode (ADR 0033). Empty
+	// (an older runner) normalizes to terminal. Like Adapter it is part of
+	// the session's identity: a re-registration under a different mode is
+	// refused — mode changes only through the explicit relaunch-conversion
+	// operation, which owns its own registration provenance.
+	DriveMode string
+	Alive     bool
 	// NewGeneration is coordinator provenance: for an existing row, this
 	// observation belongs to a newly reserved replacement/resume/restart
 	// generation rather than a startup re-observation of the same runner.
@@ -68,6 +74,10 @@ type RunnerFacts struct {
 
 var (
 	ErrAdapterMismatch = errors.New("centralstore: runner adapter mismatch")
+	// ErrDriveModeMismatch marks a runner registering an existing session
+	// under a different drive mode than the row records. No implicit mode
+	// conversion: ADR 0033 makes conversion an explicit relaunch operation.
+	ErrDriveModeMismatch = errors.New("centralstore: runner drive-mode mismatch")
 	// ErrInvalidEviction marks a takeover eviction that is structurally
 	// illegal: an eviction on a dead registration (only a live binder may
 	// take over), an empty loser ID, or a self-eviction.
@@ -85,6 +95,9 @@ var (
 func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Session, MutationResult, error) {
 	if reg.ID == "" || reg.Adapter == "" {
 		return Session{}, MutationResult{}, errors.New("centralstore: session id and adapter required")
+	}
+	if err := validateDriveMode(reg.DriveMode); err != nil {
+		return Session{}, MutationResult{}, err
 	}
 	if reg.CreatedAt < 0 || reg.ObservedAt < 0 {
 		return Session{}, MutationResult{}, errors.New("centralstore: registration timestamps must be non-negative")
@@ -134,6 +147,9 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		if before.Adapter != reg.Adapter {
 			return Session{}, MutationResult{SessionVersion: before.Version}, ErrAdapterMismatch
 		}
+		if before.DriveMode != normalizeDriveMode(reg.DriveMode) {
+			return Session{}, MutationResult{SessionVersion: before.Version}, ErrDriveModeMismatch
+		}
 	}
 	// Every dead generation must carry an explicit exit timestamp: a
 	// replacement generation because it must never inherit the previous
@@ -179,7 +195,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 
 	if isNew {
 		current = Session{
-			ID: reg.ID, Adapter: reg.Adapter, CreatedAt: reg.CreatedAt,
+			ID: reg.ID, Adapter: reg.Adapter, DriveMode: normalizeDriveMode(reg.DriveMode), CreatedAt: reg.CreatedAt,
 			Command: []string{}, Remotes: map[string]string{}, LaunchParentID: cloneSessionID(reg.LaunchParentID),
 		}
 		if current.LaunchParentID != nil && evictedIDs[*current.LaunchParentID] {
@@ -205,7 +221,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			return Session{}, MutationResult{}, marshalErr
 		}
 		raw, err = q.InsertSession(ctx, db.InsertSessionParams{
-			ID: string(current.ID), Adapter: current.Adapter, ConversationRef: nullString(current.ConversationRef),
+			ID: string(current.ID), Adapter: current.Adapter, DriveMode: current.DriveMode, ConversationRef: nullString(current.ConversationRef),
 			CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 			Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
 			Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),

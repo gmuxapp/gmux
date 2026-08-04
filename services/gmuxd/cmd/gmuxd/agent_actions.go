@@ -365,6 +365,14 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
+	// The (adapter, drive mode) capability boundary is checked before
+	// residency, readiness, and activity (ADR 0033 §3): it is the one
+	// permanent-shaped refusal, and checking it here keeps transparent
+	// resume from spawning an interactive session just to be refused.
+	if status, code, msg := semanticModeGate(row, req.Mode); status != 0 {
+		writeError(w, status, code, msg)
+		return
+	}
 	runtime, live := deps.live(sid)
 	resumed := false
 	if !live {
@@ -578,13 +586,19 @@ func handleAgentCancelCentral(w http.ResponseWriter, r *http.Request, deps agent
 	// A store failure is not a missing session: reporting 404 for a broken read
 	// would tell the caller their session is gone on the strength of a database
 	// error.
-	_, found, err := deps.store.Session(r.Context(), sid)
+	row, found, err := deps.store.Session(r.Context(), sid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
+		return
+	}
+	// Capability before residency/activity (ADR 0033 §3): "this mode cannot
+	// cancel" is permanent-shaped; "no turn to cancel" is transient.
+	if status, code, msg := semanticModeGate(row, opCancel); status != 0 {
+		writeError(w, status, code, msg)
 		return
 	}
 	runtime, live := deps.live(sid)
