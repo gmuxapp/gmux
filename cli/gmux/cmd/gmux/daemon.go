@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,38 +32,78 @@ func ensureGmuxdContext(ctx context.Context) bool {
 		return false
 	}
 
+	// Autostart is a cross-process decision. Serialize it, then jitter and
+	// recheck: the process that lost the first race should observe the winner's
+	// socket instead of spawning a second full bootstrap.
+	lock, err := acquireAutostartLock(ctx)
+	if err != nil {
+		return false
+	}
+	releaseHere := true
+	defer func() {
+		if releaseHere {
+			releaseAutostartLock(lock)
+		}
+	}()
+	jitter := 25*time.Millisecond + time.Duration(time.Now().UnixNano()%int64(75*time.Millisecond))
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(jitter):
+	}
+	if !gmuxdNeedsStartContext(ctx) || ctx.Err() != nil {
+		return false
+	}
+
 	gmuxdBin := findGmuxdBin()
 	if gmuxdBin == "" {
 		log.Printf("warning: gmuxd not found (install it alongside gmux or add it to PATH)")
 		return false
 	}
 
-	// gmuxd run starts in the foreground; we background it ourselves.
-	return startGmuxd(gmuxdBin, []string{"run"})
+	// gmuxd run starts in the foreground; we background it ourselves. Keep the
+	// lock until that exact child either exposes a socket or exits. If the
+	// caller's request budget ends first, a watcher retains the lock so another
+	// CLI cannot overlap the still-bootstrapping child.
+	started, done := startGmuxd(gmuxdBin, []string{"run"})
+	if !started {
+		return false
+	}
+	if !waitForAutostartCandidate(ctx, done, 30*time.Second) && ctx.Err() != nil {
+		releaseHere = false
+		go func() {
+			waitForAutostartCandidate(context.Background(), done, 30*time.Second)
+			releaseAutostartLock(lock)
+		}()
+	}
+	return true
 }
 
-// gmuxdNeedsStart checks the running daemon.
-//
-// The probe retries with growing budgets before concluding the daemon is
-// down: a single 500ms probe is a hair trigger on a loaded host, and a false
-// "down" verdict spawns a daemon. (Spawning is no longer destructive — a
-// healthy same-version incumbent refuses replacement since the autostart
-// takeover incident — but pointless spawns still burn a full bootstrap.)
+// gmuxdNeedsStart checks socket ownership first and health identity second.
+// Response latency is never evidence that the socket has no owner.
 func gmuxdNeedsStart() bool { return gmuxdNeedsStartContext(context.Background()) }
 
 func gmuxdNeedsStartContext(ctx context.Context) bool {
-	// "dev" builds never replace — avoids churn during development.
+	// Socket ownership is liveness. A completed connect proves an owner even if
+	// its HTTP handler is overloaded; timeout and permission failures are
+	// ambiguous and therefore conservative. Only ENOENT/ECONNREFUSED start.
+	if !gmuxdSocketOwnedContext(ctx) {
+		return true
+	}
+
+	// "dev" builds never replace — avoids churn during development and needs
+	// no identity response once socket ownership is established.
 	if version == "dev" {
-		return !gmuxdHealthyRetryContext(ctx)
+		return false
 	}
 
 	resp, err := gmuxdHealthGetContext(ctx)
 	if err != nil {
-		return true // not running
+		return false // connected owner, identity unavailable: leave it alone
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return true // not healthy
+		return false // responder is alive even if it reports unhealthy
 	}
 
 	var health struct {
@@ -70,11 +112,11 @@ func gmuxdNeedsStartContext(ctx context.Context) bool {
 		} `json:"data"`
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if json.Unmarshal(body, &health) != nil {
-		return false // can't parse, leave it alone
+	if json.Unmarshal(body, &health) != nil || strings.TrimSpace(health.Data.Version) == "" {
+		return false // identity contract unavailable: leave the owner alone
 	}
 
-	// Same version: no action needed. Different version: replace.
+	// Same version: no action needed. Different known version: replace.
 	return health.Data.Version != version
 }
 
@@ -118,8 +160,9 @@ func autostartLogFile() *os.File {
 	return f
 }
 
-// startGmuxd launches gmuxd in the background with the given args.
-func startGmuxd(gmuxdBin string, args []string) bool {
+// startGmuxd launches gmuxd in the background with the given args and returns
+// a channel closed when that exact child exits.
+func startGmuxd(gmuxdBin string, args []string) (bool, <-chan struct{}) {
 	// Log gmuxd output to a file so users can diagnose startup failures.
 	logFile := autostartLogFile()
 
@@ -141,16 +184,79 @@ func startGmuxd(gmuxdBin string, args []string) bool {
 		if logFile != nil {
 			logFile.Close()
 		}
-		return false
+		return false, nil
 	}
+	done := make(chan struct{})
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 		if logFile != nil {
 			logFile.Close()
 		}
+		close(done)
 	}()
 
-	return true
+	return true, done
+}
+
+func acquireAutostartLock(ctx context.Context) (*os.File, error) {
+	if err := os.MkdirAll(paths.StateDir(), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(paths.StateDir(), "gmuxd.autostart.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			f.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			f.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func releaseAutostartLock(f *os.File) {
+	if f == nil {
+		return
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
+}
+
+// waitForAutostartCandidate returns false only when the caller context ended.
+// Child exit, socket appearance, and the bootstrap ceiling all resolve this
+// candidate and permit the next lock holder to make a fresh decision.
+func waitForAutostartCandidate(ctx context.Context, done <-chan struct{}, ceiling time.Duration) bool {
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(ceiling)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-done:
+			return true
+		case <-deadline.C:
+			return true
+		case <-tick.C:
+			probeCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			owned := gmuxdSocketOwnedContext(probeCtx)
+			cancel()
+			if owned {
+				return true
+			}
+		}
+	}
 }
 
 // gmuxdClient returns an HTTP client connected to gmuxd via Unix socket.
@@ -172,58 +278,36 @@ func gmuxdBaseURL() string {
 	return "http://localhost"
 }
 
-func gmuxdHealthyContext(ctx context.Context, timeout time.Duration) bool {
-	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+func gmuxdSocketOwnedContext(ctx context.Context) bool {
+	dialCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "unix", paths.SocketPath())
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	return !(errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED))
+}
+
+// gmuxdHealthGetContext fetches identity with a generous deadline separate
+// from the connect-only liveness probe. Callers own resp.Body.
+func gmuxdHealthGetContext(ctx context.Context) (*http.Response, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	client := gmuxdClient()
+	client.Timeout = 15 * time.Second
 	req, _ := http.NewRequestWithContext(attemptCtx, http.MethodGet, gmuxdBaseURL()+"/v1/health", nil)
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-// gmuxdHealthyRetry probes health with growing budgets (500ms, 1s, 2s) so a
-// momentarily busy daemon isn't misdiagnosed as down.
-func gmuxdHealthyRetry() bool { return gmuxdHealthyRetryContext(context.Background()) }
-
-func gmuxdHealthyRetryContext(ctx context.Context) bool {
-	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
-		if gmuxdHealthyContext(ctx, timeout) {
-			return true
-		}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
 	}
-	return false
-}
-
-// gmuxdHealthGet fetches /v1/health with the same growing budgets, returning
-// the last error if all attempts fail. Callers own resp.Body.
-func gmuxdHealthGet() (*http.Response, error) { return gmuxdHealthGetContext(context.Background()) }
-
-func gmuxdHealthGetContext(ctx context.Context) (*http.Response, error) {
-	var lastErr error
-	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		client := gmuxdClient()
-		req, _ := http.NewRequestWithContext(attemptCtx, http.MethodGet, gmuxdBaseURL()+"/v1/health", nil)
-		resp, err := client.Do(req)
-		if err == nil {
-			body, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			cancel()
-			if readErr == nil {
-				resp.Body = io.NopCloser(bytes.NewReader(body))
-				return resp, nil
-			}
-			err = readErr
-		} else {
-			cancel()
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
 
 // registerOutcome classifies the result of a registration attempt so

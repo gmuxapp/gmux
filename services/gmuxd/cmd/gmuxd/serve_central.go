@@ -54,6 +54,24 @@ import (
 // replacement was requested.
 var errIncumbentHealthy = errors.New("gmuxd: already running")
 
+// implicitIncumbentCheck is deliberately cheap and conservative. It runs
+// before any adapter discovery, indexing, state creation, or database access.
+// A connected/ambiguous socket with unreadable identity is still an owner and
+// must not be replaced implicitly; only a known different version proceeds.
+func implicitIncumbentCheck(sock string) error {
+	if !unixipc.SocketOwned(sock) {
+		return nil
+	}
+	ident, ok := unixipc.HealthIdentity(sock)
+	if !ok {
+		return fmt.Errorf("%w: socket owner with unavailable identity owns %s", errIncumbentHealthy, sock)
+	}
+	if ident.Version == version {
+		return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
+	}
+	return nil
+}
+
 // registerGetProjectsRoute installs the production GET /v1/projects handler.
 // Keeping registration and ownership projection together lets contract tests
 // exercise the same mux path peers consume.
@@ -69,6 +87,15 @@ func registerGetProjectsRoute(mux *http.ServeMux, render func(*http.Request) (wi
 }
 
 func serveCentral(stderr io.Writer, replace bool) int {
+	// This must remain the first operation. A candidate that will yield must do
+	// no bootstrap work against the incumbent it was spawned to replace.
+	if !replace {
+		if err := implicitIncumbentCheck(paths.SocketPath()); err != nil {
+			_, _ = fmt.Fprintf(stderr, "%v\n", err)
+			return 0
+		}
+	}
+
 	gmuxBin := resolveGmux()
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -111,46 +138,34 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		return 1
 	}
 
-	// A healthy incumbent of the SAME version is never shut down implicitly.
-	// This path is reached by `gmux`'s daemon autostart whenever a health
-	// probe times out (500ms budget) — on a loaded host that spawned daemons
-	// which killed the healthy incumbent, re-bootstrapped for seconds, and
-	// were killed in turn by the next autostart: a rolling production outage
-	// (registrations timing out, /v1/health dead) that looked like a store
-	// wedge. Replacement must be explicit (`gmuxd start`/`restart` pass
-	// --replace) or an actual version upgrade (release CLI replacing an
-	// outdated daemon).
-	//
-	// The yield check runs as bootstrapOwnership's precheck — BEFORE Verify
-	// opens the database — so a pointless autostart bounces off the incumbent
-	// without touching SQLite at all.
+	// Recheck before Verify to catch an owner that appeared after the first
+	// instruction. Known version upgrades may proceed; same/unknown owners
+	// yield unless replacement was explicit.
 	precheck := func(context.Context) error {
 		if replace {
 			return nil
 		}
-		sock := paths.SocketPath()
-		ident, ok := unixipc.HealthIdentity(sock)
-		if !ok {
-			return nil
-		}
-		if ident.Version == version {
-			return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
-		}
-		return nil
+		return implicitIncumbentCheck(paths.SocketPath())
 	}
 	takeover := func(context.Context) error {
 		sock := paths.SocketPath()
-		ident, ok := unixipc.HealthIdentity(sock)
-		if !ok {
+		if !unixipc.SocketOwned(sock) {
 			return nil
 		}
-		if !replace && ident.Version == version {
-			// Re-check: an incumbent may have become healthy between the
-			// precheck and here (e.g. it was mid-bootstrap during precheck).
+		ident, identityOK := unixipc.HealthIdentity(sock)
+		if !replace && (!identityOK || ident.Version == version) {
+			if !identityOK {
+				return fmt.Errorf("%w: socket owner with unavailable identity owns %s", errIncumbentHealthy, sock)
+			}
 			return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
 		}
 		if !unixipc.Shutdown(sock) {
-			return fmt.Errorf("existing daemon at %s did not shut down", sock)
+			// The incumbent may have exited between identity and POST. Continue
+			// only when a connect now positively proves it gone; timeout remains
+			// a live/ambiguous owner and is a hard refusal.
+			if unixipc.ProbeSocket(sock, 500*time.Millisecond) != unixipc.SocketDead {
+				return fmt.Errorf("existing daemon at %s did not shut down", sock)
+			}
 		}
 		return nil
 	}
@@ -925,7 +940,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		daemonCancel()
 		return 1
 	}
-	defer unixipc.Cleanup(sock)
+	defer sockLn.Close()
 	sockSrv := &http.Server{Handler: unixMux}
 	go func() {
 		if err := sockSrv.Serve(sockLn); err != nil && err != http.ErrServerClosed {
