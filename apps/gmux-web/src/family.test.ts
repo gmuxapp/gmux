@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { descendantTree, familyNavigation, familyRoot, hasFamily, isFamilyChild, projectFamily } from './family'
+import { descendantTree, familyIndex, familyNavigation, familyRoot, hasFamily, isFamilyChild, projectFamily } from './family'
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
@@ -77,5 +77,27 @@ describe('task-family projection', () => {
     expect(p.siblingTrees.map(n => n.session.id).sort()).toEqual(['selected', 'sibling'])
     expect(p.siblingTrees.flatMap(n => n.children).map(n => n.session.id)).toEqual(['niece'])
     expect(p.siblingTrees.some(n => n.session.id === 'aunt')).toBe(false)
+  })
+
+  it('indexes a large snapshot once across projection callers', () => {
+    const root = agent('root')
+    const children = Array.from({ length: 500 }, (_, i) => agent(`child-${i}`, 'root'))
+    const unrelated = Array.from({ length: 499 }, (_, i) => agent(`other-${i}`))
+    let indexedReads = 0
+    const snapshot = new Proxy([root, ...children, ...unrelated], {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^\\d+$/.test(property)) indexedReads++
+        return Reflect.get(target, property, receiver)
+      },
+    })
+
+    expect(familyIndex(snapshot)).toBe(familyIndex(snapshot))
+    expect(projectFamily(children[250], snapshot).siblingTrees).toHaveLength(500)
+    expect(familyRoot(children[250], snapshot)).toBe(root)
+    expect(hasFamily(root, snapshot)).toBe(true)
+    expect(isFamilyChild(children[250], snapshot)).toBe(true)
+    // One indexed pass over 1,000 rows; old per-candidate Map construction
+    // performed hundreds of thousands of indexed reads here.
+    expect(indexedReads).toBeLessThanOrEqual(snapshot.length + 1)
   })
 })

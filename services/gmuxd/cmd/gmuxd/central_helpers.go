@@ -422,36 +422,32 @@ func sessionTreeRows(ctx context.Context, st *centralstore.Store, root centralst
 	if err != nil {
 		return nil, err
 	}
-	byParent := make(map[centralstore.SessionID][]centralstore.Session)
-	present := false
-	for _, row := range rows {
-		if row.ID == root {
-			present = true
-		}
+	return projectSessionTreeRows(rows, root)
+}
+
+func projectSessionTreeRows(rows []centralstore.Session, root centralstore.SessionID) ([]centralstore.Session, error) {
+	byID := make(map[centralstore.SessionID]int, len(rows))
+	byParent := make(map[centralstore.SessionID][]centralstore.SessionID)
+	for i := range rows {
+		row := &rows[i]
+		byID[row.ID] = i
 		if row.LaunchParentID != nil {
-			byParent[*row.LaunchParentID] = append(byParent[*row.LaunchParentID], row)
+			byParent[*row.LaunchParentID] = append(byParent[*row.LaunchParentID], row.ID)
 		}
 	}
-	if !present {
+	if _, present := byID[root]; !present {
 		return nil, fmt.Errorf("%w: %s", centralstore.ErrSessionNotFound, root)
 	}
 	for _, kids := range byParent {
-		sort.Slice(kids, func(i, j int) bool { return kids[i].ID < kids[j].ID })
+		sort.Slice(kids, func(i, j int) bool { return kids[i] < kids[j] })
 	}
 	var out []centralstore.Session
 	queue := []centralstore.SessionID{root}
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		for _, row := range rows {
-			if row.ID == id {
-				out = append(out, row)
-				break
-			}
-		}
-		for _, child := range byParent[id] {
-			queue = append(queue, child.ID)
-		}
+		out = append(out, rows[byID[id]])
+		queue = append(queue, byParent[id]...)
 	}
 	return out, nil
 }
