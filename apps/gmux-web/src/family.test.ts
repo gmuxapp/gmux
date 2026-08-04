@@ -7,23 +7,25 @@ const agent = (id: string, parent?: string, extra = {}) => makeSession({
 })
 
 describe('task-family projection', () => {
-  it('uses semantic capability and promotion to distinguish presentation roots', () => {
+  it('groups agent and process children of semantic parents unless promoted', () => {
     const root = agent('root')
     const child = agent('child', 'root')
     const shell = makeSession({ id: 'shell', cwd: '/p', parent_session_id: 'root', adapter: 'shell' })
     const promoted = agent('promoted', 'root', { promoted_to_root: true })
     const sessions = [root, child, shell, promoted]
     expect(isFamilyChild(child, sessions)).toBe(true)
-    expect(isFamilyChild(shell, sessions)).toBe(false)
+    expect(isFamilyChild(shell, sessions)).toBe(true)
     expect(isFamilyChild(promoted, sessions)).toBe(false)
-    expect(familyRoot(child, [root, child])).toBe(root)
-    expect(familyRoot(promoted, [root, promoted])).toBe(promoted)
+    expect(familyRoot(child, sessions)).toBe(root)
+    expect(familyRoot(shell, sessions)).toBe(root)
+    expect(familyRoot(promoted, sessions)).toBe(promoted)
   })
 
   it.each([
     ['semantic child with shell parent', agent('child', 'shell'), makeSession({ id: 'shell', cwd: '/p', adapter: 'shell' })],
-    ['shell child with semantic parent', makeSession({ id: 'child', cwd: '/p', adapter: 'shell', parent_session_id: 'parent' }), agent('parent')],
+    ['shell child with shell parent', makeSession({ id: 'child', cwd: '/p', adapter: 'shell', parent_session_id: 'shell' }), makeSession({ id: 'shell', cwd: '/p', adapter: 'shell' })],
     ['semantic child with missing parent', agent('orphan', 'missing'), undefined],
+    ['process child with missing parent', makeSession({ id: 'orphan-shell', cwd: '/p', adapter: 'shell', parent_session_id: 'missing' }), undefined],
   ])('keeps %s as a visible root', (_name, child, parent) => {
     const sessions = parent ? [parent, child] : [child]
     expect(isFamilyChild(child, sessions)).toBe(false)

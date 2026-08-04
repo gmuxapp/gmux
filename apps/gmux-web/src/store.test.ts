@@ -265,15 +265,15 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
   })
   afterEach(() => setAliveOnly(false))
 
-  it('hides agent children from both views and selects their root row', () => {
+  it('hides agent and process children from both views and selects their root row', () => {
     _rawSessions.value = [
       makeSession({ id: 'root', cwd: '/p', adapter: 'pi', slug: 'root', project_slug: 'proj', semantic_agent: true, alive: false, resumable: false }),
       makeSession({ id: 'child', cwd: '/other', adapter: 'pi', slug: 'child', project_slug: 'proj', semantic_agent: true, parent_session_id: 'root' }),
       makeSession({ id: 'helper', cwd: '/p', adapter: 'shell', slug: 'helper', project_slug: 'proj', parent_session_id: 'root' }),
     ]
     urlPath.value = '/proj/pi/child'
-    expect(folderIds()).toEqual(['helper', 'root'])
-    expect(ids(sidebarActivity.value)).toEqual(['helper', 'root'])
+    expect(folderIds()).toEqual(['root'])
+    expect(ids(sidebarActivity.value)).toEqual(['root'])
     expect(familySelectedId.value).toBe('root')
   })
 
@@ -339,7 +339,7 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
     expect(homePartition.value.flatMap(bucket => bucket.sessions.map(s => s.id)).sort()).toEqual(['a', 'b'])
   })
 
-  it('never hides unresolved or non-agent launch-parent edges', () => {
+  it('groups process children only under resolved agent parents', () => {
     _rawSessions.value = [
       makeSession({ id: 'agent-parent', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true }),
       makeSession({ id: 'shell-child', cwd: '/p', adapter: 'shell', project_slug: 'proj', parent_session_id: 'agent-parent' }),
@@ -347,7 +347,7 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
       makeSession({ id: 'agent-under-shell', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true, parent_session_id: 'shell-parent' }),
       makeSession({ id: 'orphan', cwd: '/p', adapter: 'pi', project_slug: 'proj', semantic_agent: true, parent_session_id: 'missing' }),
     ]
-    expect(folderIds()).toEqual(['agent-parent', 'agent-under-shell', 'orphan', 'shell-child', 'shell-parent'])
+    expect(folderIds()).toEqual(['agent-parent', 'agent-under-shell', 'orphan', 'shell-parent'])
     expect(ids(sidebarActivity.value)).toEqual(folderIds())
   })
 

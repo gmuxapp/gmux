@@ -115,21 +115,23 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 	}
 }
 
-func TestCentralNotifyNonAgentLaunchesRemainRoots(t *testing.T) {
+func TestCentralNotifyProcessChildUsesAgentParentSuppression(t *testing.T) {
 	r := newParentNotifyTestRouter(t)
 	r.handleOutcome(upsertOutcome("parent", notifyRow("pi", true, "", false)))
 	r.handleOutcome(upsertOutcome("shell-child", notifyRow("shell", true, "parent", false)))
 	r.handleOutcome(upsertOutcome("shell-child", notifyRow("shell", false, "parent", false)))
-	if !hasPendingNotification(r, "shell-child") {
-		t.Fatal("a shell with launch provenance must retain root notification behavior")
+	if hasPendingNotification(r, "shell-child") {
+		t.Fatal("a process child must inherit its active agent parent's notification suppression")
 	}
+}
 
-	r = newParentNotifyTestRouter(t)
+func TestCentralNotifyNonAgentParentRemainsRootBoundary(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
 	r.handleOutcome(upsertOutcome("shell-parent", notifyRow("shell", true, "", false)))
-	r.handleOutcome(upsertOutcome("agent-child", notifyRow("pi", true, "shell-parent", false)))
-	r.handleOutcome(upsertOutcome("agent-child", notifyRow("pi", false, "shell-parent", false)))
-	if !hasPendingNotification(r, "agent-child") {
-		t.Fatal("a non-agent launch parent must not become an agent management boundary")
+	r.handleOutcome(upsertOutcome("shell-child", notifyRow("shell", true, "shell-parent", false)))
+	r.handleOutcome(upsertOutcome("shell-child", notifyRow("shell", false, "shell-parent", false)))
+	if !hasPendingNotification(r, "shell-child") {
+		t.Fatal("a non-agent launch parent must not become a family management boundary")
 	}
 }
 

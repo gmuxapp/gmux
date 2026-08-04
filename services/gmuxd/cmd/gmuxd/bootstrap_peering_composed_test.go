@@ -85,6 +85,7 @@ func TestComposedPeerFamilyFactsReachViewerWire(t *testing.T) {
 	spoke := newComposedSpoke(t, []peering.SessionProjection{
 		{ID: "root", Adapter: "pi", Alive: true, SemanticAgent: true},
 		{ID: "child", Adapter: "pi", Alive: true, ParentSessionID: "root", SemanticAgent: true},
+		{ID: "process-child", Adapter: "shell", Alive: true, ParentSessionID: "root"},
 		{ID: "promoted", Adapter: "pi", Alive: true, ParentSessionID: "root", SemanticAgent: true, PromotedToRoot: true},
 		{ID: "cross", Adapter: "pi", Alive: true, ParentSessionID: "external@tower", SemanticAgent: true},
 	})
@@ -99,7 +100,7 @@ func TestComposedPeerFamilyFactsReachViewerWire(t *testing.T) {
 	}
 	eventually(t, func() bool {
 		rows := adapter.PeerSessions()
-		if len(rows) != 4 {
+		if len(rows) != 5 {
 			return false
 		}
 		byID = make(map[string]struct {
@@ -119,6 +120,9 @@ func TestComposedPeerFamilyFactsReachViewerWire(t *testing.T) {
 	}
 	if got := byID["child@box"]; !got.semantic || got.parent != "root@box" || got.promoted {
 		t.Fatalf("child viewer wire facts = %#v", got)
+	}
+	if got := byID["process-child@box"]; got.semantic || got.parent != "root@box" || got.promoted {
+		t.Fatalf("process child viewer wire facts = %#v", got)
 	}
 	if got := byID["promoted@box"]; !got.semantic || got.parent != "root@box" || !got.promoted {
 		t.Fatalf("promoted viewer wire facts = %#v", got)
