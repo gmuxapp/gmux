@@ -114,7 +114,9 @@ var (
 	ErrStaleVersion = errors.New("centralstore: stale row version")
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
-	ErrSessionNotFound = errors.New("centralstore: session not found")
+	ErrSessionNotFound    = errors.New("centralstore: session not found")
+	ErrSessionParentSelf  = errors.New("centralstore: session cannot parent itself")
+	ErrSessionParentCycle = errors.New("centralstore: session parent cycle")
 	// ErrCatalogHasPlacements marks the bootstrap-only catalog boundary. This
 	// primitive cannot authoritatively rematch subjects once placement exists.
 	ErrCatalogHasPlacements = errors.New("centralstore: catalog replacement requires zero placements")
@@ -1548,6 +1550,92 @@ func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReor
 	// Both kinds: the new positions are read back as session-row
 	// project_index stamps (see the note in place()).
 	return MutationResult{Changed: changedAny, SessionsDirty: changedAny, WorldDirty: changedAny}, nil
+}
+
+// SetSessionParent is the sole operation that may mutate the organizational
+// parent edge. Validation, the version bump, and sibling-order repair happen
+// in one transaction so snapshots can never observe a partial move.
+func (s *Store) SetSessionParent(ctx context.Context, id SessionID, parent *SessionID) (MutationResult, error) {
+	if id == "" {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+
+	row, err := q.GetSession(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if parent != nil && (*parent == "" || *parent == id) {
+		if parent != nil && *parent == id {
+			return MutationResult{}, ErrSessionParentSelf
+		}
+		return MutationResult{}, ErrSessionNotFound
+	}
+
+	if parent != nil {
+		cursor := *parent
+		seen := map[SessionID]bool{}
+		for {
+			if cursor == id || seen[cursor] {
+				return MutationResult{}, ErrSessionParentCycle
+			}
+			seen[cursor] = true
+			ancestor, getErr := q.GetSession(ctx, string(cursor))
+			if errors.Is(getErr, sql.ErrNoRows) {
+				if cursor == *parent {
+					return MutationResult{}, ErrSessionNotFound
+				}
+				break // an inherited parent may not have registered yet
+			}
+			if getErr != nil {
+				return MutationResult{}, getErr
+			}
+			if !ancestor.ParentSessionID.Valid {
+				break
+			}
+			cursor = SessionID(ancestor.ParentSessionID.String)
+		}
+	}
+
+	value := sql.NullString{}
+	if parent != nil {
+		value = nullString(string(*parent))
+	}
+	n, err := q.SetSessionParent(ctx, db.SetSessionParentParams{
+		ParentSessionID: value, ID: string(id), ParentSessionID_2: value,
+	})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if n == 0 {
+		if err = tx.Commit(); err != nil {
+			return MutationResult{}, err
+		}
+		return MutationResult{SessionVersion: RowVersion(row.RowVersion)}, nil
+	}
+
+	all, err := placements(ctx, q)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if _, err = rewritePlacements(ctx, q, all, nil, s.beforePlacementFinalize); err != nil {
+		return MutationResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{
+		Changed: true, SessionVersion: RowVersion(row.RowVersion + 1),
+		SessionsDirty: true, WorldDirty: true,
+	}, nil
 }
 
 func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, index *int) (MutationResult, error) {

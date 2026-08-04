@@ -2,6 +2,7 @@ package centralstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -687,6 +688,99 @@ func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
 	if got.Version != 2 {
 		t.Fatalf("rollback changed version: %d", got.Version)
 	}
+}
+
+func TestSessionReparentValidationOrderingAndProvenance(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	project := addProject(t, s)
+	oldParent := addSession(t, s, "old", "")
+	addSession(t, s, "new", "")
+	for _, row := range []struct{ id, parent string }{
+		{"a", "old"}, {"b", "old"}, {"c", "old"}, {"n1", "new"},
+	} {
+		addSession(t, s, row.id, row.parent)
+	}
+	for _, id := range []SessionID{"old", "new", "a", "b", "c", "n1"} {
+		if _, err := s.PlaceLocalSession(ctx, id, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	newParent := SessionID("new")
+	result, err := s.SetSessionParent(ctx, "b", &newParent)
+	if err != nil || !result.Changed || !result.SessionsDirty || result.SessionVersion != 2 {
+		t.Fatalf("reparent result=%#v err=%v", result, err)
+	}
+	if got := scopeOrder(t, s, project, "c:l:old"); !reflect.DeepEqual(got, []string{"l:a", "l:c"}) {
+		t.Fatalf("old sibling scope=%v", got)
+	}
+	if got := scopeOrder(t, s, project, "c:l:new"); !reflect.DeepEqual(got, []string{"l:n1", "l:b"}) {
+		t.Fatalf("new sibling scope=%v", got)
+	}
+	b := mustSession(t, s, "b")
+	if b.ParentSessionID == nil || *b.ParentSessionID != "new" || launchedFromID(t, s, "b") != "old" {
+		t.Fatalf("reparented b=%#v launched_from=%q", b, launchedFromID(t, s, "b"))
+	}
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launched_from_session_id='new' WHERE id='b'`); err == nil {
+		t.Fatal("launched_from_session_id was mutable")
+	}
+
+	result, err = s.SetSessionParent(ctx, "b", nil)
+	if err != nil || !result.Changed || result.SessionVersion != 3 {
+		t.Fatalf("clear result=%#v err=%v", result, err)
+	}
+	if got := rootOrder(t, s, project); !reflect.DeepEqual(got, []string{"l:old", "l:new", "l:b"}) {
+		t.Fatalf("cleared roots=%v", got)
+	}
+	result, err = s.SetSessionParent(ctx, "b", nil)
+	if err != nil || result.Changed || result.SessionVersion != 3 {
+		t.Fatalf("repeat clear result=%#v err=%v", result, err)
+	}
+
+	self := SessionID("b")
+	if _, err = s.SetSessionParent(ctx, "b", &self); !errors.Is(err, ErrSessionParentSelf) {
+		t.Fatalf("self-parent err=%v", err)
+	}
+	missing := SessionID("missing")
+	if _, err = s.SetSessionParent(ctx, "b", &missing); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing parent err=%v", err)
+	}
+	if _, err = s.SetSessionParent(ctx, "missing", nil); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing child err=%v", err)
+	}
+
+	addSession(t, s, "x", "a")
+	addSession(t, s, "y", "x")
+	y := SessionID("y")
+	if _, err = s.SetSessionParent(ctx, "old", &y); !errors.Is(err, ErrSessionParentCycle) {
+		t.Fatalf("deep cycle err=%v", err)
+	}
+
+	if _, err = s.SetSessionParent(ctx, "b", &newParent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RemoveSessionAtVersion(ctx, "old", oldParent.Version); err != nil {
+		t.Fatal(err)
+	}
+	b = mustSession(t, s, "b")
+	if b.ParentSessionID == nil || *b.ParentSessionID != "new" || launchedFromID(t, s, "b") != "old" {
+		t.Fatalf("historical launch fact did not survive parent deletion: %#v launched_from=%q", b, launchedFromID(t, s, "b"))
+	}
+	a := mustSession(t, s, "a")
+	if a.ParentSessionID != nil || launchedFromID(t, s, "a") != "old" {
+		t.Fatalf("deletion repair changed launch provenance: %#v launched_from=%q", a, launchedFromID(t, s, "a"))
+	}
+	assertKernelInvariants(t, s)
+}
+
+func launchedFromID(t *testing.T, s *Store, id SessionID) string {
+	t.Helper()
+	var launched sql.NullString
+	if err := s.database.QueryRow(`SELECT launched_from_session_id FROM local_sessions WHERE id = ?`, id).Scan(&launched); err != nil {
+		t.Fatal(err)
+	}
+	return launched.String
 }
 
 func TestReorderValidatesProjectParentAndDuplicates(t *testing.T) {

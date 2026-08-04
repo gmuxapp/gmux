@@ -76,6 +76,11 @@ UPDATE local_sessions
 SET promoted_to_root = ?, row_version = row_version + 1
 WHERE id = ? AND promoted_to_root <> ?;
 
+-- name: SetSessionParent :execrows
+UPDATE local_sessions
+SET parent_session_id = ?, row_version = row_version + 1
+WHERE id = ? AND parent_session_id IS NOT ?;
+
 -- name: ListProjectEntries :many
 SELECT * FROM project_entries ORDER BY sidebar_order;
 

@@ -78,6 +78,27 @@ func TestDismissSessionTreeRecursive(t *testing.T) {
 	}
 }
 
+func TestDismissSessionTreeFollowsReparentedOwnership(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	treeFixture(t, s)
+	x := SessionID("x")
+	if _, err := s.SetSessionParent(ctx, "c", &x); err != nil {
+		t.Fatal(err)
+	}
+
+	dismissed, _, err := s.DismissSessionTree(ctx, "x", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dismissed, []SessionID{"x", "c", "g"}) {
+		t.Fatalf("dismissed reparented tree=%v", dismissed)
+	}
+	if mustSession(t, s, "p").DismissedAt != nil {
+		t.Fatal("former parent dismissed with reparented subtree")
+	}
+}
+
 func TestDismissSessionTreeRepairsChildSiblingScope(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)

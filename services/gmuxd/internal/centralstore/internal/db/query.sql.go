@@ -892,6 +892,26 @@ func (q *Queries) SetPromotion(ctx context.Context, arg SetPromotionParams) (int
 	return result.RowsAffected()
 }
 
+const setSessionParent = `-- name: SetSessionParent :execrows
+UPDATE local_sessions
+SET parent_session_id = ?, row_version = row_version + 1
+WHERE id = ? AND parent_session_id IS NOT ?
+`
+
+type SetSessionParentParams struct {
+	ParentSessionID   sql.NullString
+	ID                string
+	ParentSessionID_2 sql.NullString
+}
+
+func (q *Queries) SetSessionParent(ctx context.Context, arg SetSessionParentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionParent, arg.ParentSessionID, arg.ID, arg.ParentSessionID_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const sweepSessionDead = `-- name: SweepSessionDead :execrows
 UPDATE local_sessions
 SET exited_at_ms = ?1,
