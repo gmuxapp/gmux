@@ -1986,8 +1986,11 @@ body {
 
 .main-header-left {
   display: flex;
-  /* Baseline so the bold title and smaller muted cwd align. */
-  align-items: baseline;
+  /* Center, not baseline: the row mixes text (title, crumbs) with boxes
+   * (the family trigger, status dots). Baseline alignment lets a single
+   * text item define the line box, which floated the title ~3px above
+   * every other control once the crumbs landed. */
+  align-items: center;
   gap: 8px;
   min-width: 0;
   overflow: hidden;
@@ -2009,9 +2012,14 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   letter-spacing: -0.01em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  /* Block, not flex: text-overflow never applies to a flex container's
+   * anonymous text item, so a flex title hard-clipped mid-glyph instead
+   * of ellipsizing. line-height matches the 26px control row so the
+   * title's box lines up with the trigger and ⋮ button. */
+  display: block;
+  line-height: 26px;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .main-header-status {
@@ -2038,7 +2046,6 @@ body {
   width: 26px;
   height: 26px;
   flex-shrink: 0;
-  align-self: center;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -2052,13 +2059,15 @@ body {
 }
 .family-trigger:hover,
 .family-trigger[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
-.family-trigger-icon { width: 16px; height: 16px; }
+.family-trigger-icon { width: 16px; height: 16px; display: block; }
+/* 7px like every other status dot in the app — a one-off 6px dot reads as
+ * a rendering artifact next to the sidebar's dots. */
 .family-trigger-badge {
   position: absolute;
-  top: 1px;
-  right: 1px;
-  width: 6px;
-  height: 6px;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
   pointer-events: none;
 }
 
@@ -2070,16 +2079,23 @@ body {
   align-items: center;
   gap: 2px;
   min-width: 0;
-  flex-shrink: 1;
+  /* Ancestors yield space before the current session's title does, and
+   * when even their minimums overflow the clip falls on the root end
+   * (justify-content: flex-end) so the immediate parent stays readable. */
+  flex-shrink: 2;
+  justify-content: flex-end;
   overflow: hidden;
-  align-self: center;
+  /* Match the 26px control row so crumb text shares the title's center. */
+  height: 26px;
 }
 .header-crumb {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 3px 6px;
+  /* 26px tall like the trigger and ⋮ buttons, so every hover rectangle in
+   * the header row is the same height. */
+  padding: 4px 6px;
   border-radius: 4px;
   color: var(--text-secondary);
   font-size: 13px;
@@ -2089,12 +2105,17 @@ body {
 .header-crumb:hover { background: var(--bg-hover); color: var(--text); }
 .header-crumb-title {
   max-width: 18ch;
+  /* No min-width: a floor here makes the crumb strip's min-content exceed
+   * its box on medium widths, and the overflow clips crumbs mid-glyph.
+   * Ellipsis-to-nothing degrades; hard clipping just looks broken. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .header-crumb-sep,
-.header-crumb-gap { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
-.header-crumb-gap { padding: 0 2px; }
+.header-crumb-gap { color: var(--text-muted); font-size: 12px; flex-shrink: 0; line-height: 26px; }
+/* Same optical breathing room as a crumb's own 6px padding. */
+.header-crumb-gap { padding: 0 4px; }
 
 .family-trigger:focus-visible,
 .header-crumb:focus-visible,
@@ -2105,7 +2126,9 @@ body {
 .family-drawer {
   position: absolute;
   top: calc(100% + 4px);
-  left: 12px;
+  /* Flush with the trigger button's left edge (the header's own padding),
+   * not 4px shy of it. */
+  left: 16px;
   z-index: 100;
   width: max-content;
   min-width: 320px;
@@ -2857,9 +2880,22 @@ body {
     min-height: var(--header-height);
     padding-top: 4px;
     padding-bottom: 4px;
+    /* Two-row left column: the status chip and ⋮ belong on the title row,
+     * not floating half a row above it. */
+    align-items: flex-end;
   }
-  .main-header:has(.header-crumbs) .main-header-left { flex-wrap: wrap; row-gap: 0; }
-  .header-crumbs { order: -1; width: 100%; flex: 1 0 100%; }
+  .main-header:has(.header-crumbs) .main-header-left {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    width: 100%;
+  }
+  .header-crumbs { order: -1; width: 100%; flex: 0 0 100%; justify-content: flex-start; }
+  /* The trailing separator points at the title; on the wrapped layout the
+   * title is on the next row, so it would dangle at the line end. */
+  .header-crumbs .header-crumb-sep:last-child { display: none; }
+  /* flex-basis: 0 so a long title shrinks inside the trigger's row instead
+   * of wrapping onto a third row of its own. */
+  .main-header:has(.header-crumbs) .main-header-title { flex: 1 1 0; }
 
   /* Full-width sheet instead of a floating card: a 380px popover on a
    * 390px screen is a sheet with sad margins. */

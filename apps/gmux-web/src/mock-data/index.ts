@@ -15,6 +15,7 @@ import codexMigrateConvex from './sessions/codex-migrate'
 import shellOpenclawConfigure from './sessions/shell-openclaw-configure'
 import shellOpenclawLogs from './sessions/shell-openclaw-logs'
 import { DEMO_ACTIVITY } from './sessions/demo-activity'
+import { DEMO_FAMILY } from './sessions/demo-family'
 
 /** All mock sessions. First alive session is auto-selected. */
 export const MOCK_SESSIONS: MockSession[] = [
@@ -26,6 +27,7 @@ export const MOCK_SESSIONS: MockSession[] = [
   shellOpenclawConfigure,
   shellOpenclawLogs,
   ...DEMO_ACTIVITY,
+  ...DEMO_FAMILY,
 ]
 
 /** Mock peers (host roster). Exercises the Hosts-tab groups
