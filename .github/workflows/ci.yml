@@ -19,8 +19,6 @@ jobs:
     # One source of truth: run the same pnpm entrypoints developers run
     # locally. The actual commands live once in moon.yml (moon discovers
     # projects from the workspace globs), so CI can't drift from local.
-    # `pnpm lint` = biome (--error-on-warnings, matching the root script)
-    # + `moon run :lint`; build/test fan out the same way.
     env:
       GOWORK: ${{ github.workspace }}/go.work
     steps:
@@ -56,6 +54,33 @@ jobs:
       - name: Test
         run: pnpm test
 
+  central-store-checks:
+    name: Central store generated + cross-build
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: ${{ github.workspace }}/go.work
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # These are moon tasks and need the default-branch baseline.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: |
+            **/go.sum
+            go.work.sum
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       # Central-store (ADR 0026) gates that the pnpm test/build/lint fan-out
       # does not cover: they live under distinct moon task names, so they
       # must be invoked explicitly. All are Docker-free and fast.
@@ -65,10 +90,23 @@ jobs:
       - name: Central store — CGO-free cross-build (linux/darwin × amd64/arm64)
         run: pnpm exec moon run gmuxd:check-centralstore-cross-build
 
+  central-store-race:
+    name: Central store race detector
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: ${{ github.workspace }}/go.work
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: |
+            **/go.sum
+            go.work.sum
+
       # Race detector on the concurrency-critical central-store machinery
       # (coordinator, snapshot composer, peering projection, daemon entry).
-      # These packages carried the bulk of the lifecycle/ordering review;
-      # the plain `pnpm test` run above is race-free.
       - name: Central store — race detector (hot packages)
         working-directory: services/gmuxd
         run: go test -race ./internal/sessioncoord ./internal/snapshot/central ./internal/peering ./cmd/gmuxd
@@ -105,6 +143,9 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.26"
+          cache-dependency-path: |
+            **/go.sum
+            go.work.sum
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
