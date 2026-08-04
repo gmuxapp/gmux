@@ -83,8 +83,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	peerTransport := tsauth.NewRoutedTransport()
 	stateDir := paths.StateDir()
 	convIndex := conversations.New()
-	convIndex.Snapshot()
-	log.Printf("conversations: indexed %d conversations", convIndex.Count())
 
 	nodeID, err := nodeid.LoadOrCreate(stateDir)
 	if err != nil {
@@ -177,6 +175,12 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	if bounded := installBoundedLog(stderr, paths.DaemonLogPath(), defaultLogLimit); bounded != nil {
 		defer bounded.Stop()
 	}
+
+	// Conversation discovery reads and parses the complete on-disk history.
+	// Do it only after ownership is settled: autostart contenders that find a
+	// healthy incumbent must yield without paying this multi-second cost.
+	convIndex.Snapshot()
+	log.Printf("conversations: indexed %d conversations", convIndex.Count())
 
 	var peerManager *peering.Manager
 	var tsListener *tsauth.Listener

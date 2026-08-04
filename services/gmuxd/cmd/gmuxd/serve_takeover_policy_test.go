@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,8 +50,23 @@ func TestServeRefusesToReplaceHealthySameVersionIncumbent(t *testing.T) {
 	sock := paths.SocketPath()
 	waitUntil(t, 10*time.Second, func() bool { return unixipc.Healthy(sock) }, "incumbent never became healthy")
 
+	// Point any new invocation's Pi source at a FIFO. Reading it would block,
+	// making this an ordering guard: a same-version challenger must complete
+	// the incumbent precheck before attempting the expensive conversation
+	// snapshot. The incumbent's watcher already captured the original root.
+	blockedAgentDir := filepath.Join(base, "blocked-agent")
+	blockedSessions := filepath.Join(blockedAgentDir, "sessions")
+	if err := os.MkdirAll(blockedSessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(blockedSessions, "would-block.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", blockedAgentDir)
+
 	// Same version (both "dev" in tests), no --replace: must yield exit 0
-	// quickly and leave the incumbent running.
+	// quickly, without opening the FIFO, and leave the incumbent running.
 	challenger := make(chan int, 1)
 	go func() { challenger <- serveCentral(io.Discard, false) }()
 	select {
@@ -63,6 +79,9 @@ func TestServeRefusesToReplaceHealthySameVersionIncumbent(t *testing.T) {
 	}
 	if !unixipc.Healthy(sock) {
 		t.Fatal("incumbent was disturbed by the non-replace challenger")
+	}
+	if err := os.Remove(fifo); err != nil {
+		t.Fatal(err)
 	}
 
 	// Explicit --replace must shut the incumbent down and take over.
