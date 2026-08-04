@@ -17,6 +17,22 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
 
+type blockingPeerStatusSink struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingPeerStatusSink) ReplacePeerSessions(string, []peering.SessionProjection) {}
+func (s *blockingPeerStatusSink) RemovePeerSessions(string)                               {}
+func (s *blockingPeerStatusSink) SessionActivity(string)                                  {}
+func (s *blockingPeerStatusSink) PeerWorldChanged(string)                                 {}
+func (s *blockingPeerStatusSink) AliveSessionCount(string) int {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return 0
+}
+
 type composedSpoke struct {
 	*httptest.Server
 	connected chan struct{}
@@ -206,6 +222,56 @@ func TestComposedLocalPeerConnectAssignsAndTransientDisconnectPrunes(t *testing.
 	}
 	if prunes != 1 {
 		t.Fatalf("durable prune dirty notifications=%d, after disconnect=%v", prunes, dirt[baseline:])
+	}
+}
+
+func TestReconcileManualPeersToleratesConcurrentRemoval(t *testing.T) {
+	ctx := context.Background()
+	st, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, _, _, err := st.UpsertManualPeer(ctx, centralstore.ManualPeerSpec{Name: "box", URL: "http://box", Token: "secret"}, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// PeerStatus holds the manager read lock while consulting the sink. Queue a
+	// removal there so it runs after reconcile snapshots the runtime but before
+	// reconcile ensures every desired config, reproducing the later TOCTOU
+	// ordering from the review deterministically.
+	sink := &blockingPeerStatusSink{entered: make(chan struct{}), release: make(chan struct{})}
+	mgr := peering.NewProjectionManager([]config.PeerConfig{{Name: "box", URL: "http://box", Token: "secret"}}, "self", sink, peering.EventHooks{})
+	reconcileDone := make(chan error, 1)
+	go func() {
+		var err error
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("reconcile panicked: %v", r)
+			}
+			reconcileDone <- err
+		}()
+		err = reconcileManualPeers(ctx, st, mgr)
+	}()
+	<-sink.entered
+	removeStarted := make(chan struct{})
+	removeDone := make(chan struct{})
+	go func() {
+		close(removeStarted)
+		mgr.RemovePeer("box")
+		close(removeDone)
+	}()
+	<-removeStarted
+	// Let RemovePeer queue for the manager lock before reconciliation resumes.
+	time.Sleep(10 * time.Millisecond)
+	close(sink.release)
+
+	if err := <-reconcileDone; err != nil {
+		t.Fatal(err)
+	}
+	<-removeDone
+	if p := mgr.GetPeer("box"); p == nil || p.Config.Token != "secret" {
+		t.Fatalf("durable peer was not restored after concurrent removal: %v", p)
 	}
 }
 

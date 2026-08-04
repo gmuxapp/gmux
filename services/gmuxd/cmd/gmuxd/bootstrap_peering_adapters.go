@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
@@ -54,11 +55,17 @@ func (a *centralPeerAdapter) PeerSessions() []wire.Session {
 	rows := a.manager.SessionProjections()
 	out := make([]wire.Session, 0, len(rows))
 	for _, r := range rows {
-		b, _ := json.Marshal(r)
-		var s wire.Session
-		if json.Unmarshal(b, &s) == nil {
-			out = append(out, s)
+		b, err := json.Marshal(r)
+		if err != nil {
+			log.Printf("peering: %s: marshal session projection %s: %v", r.Peer, r.ID, err)
+			continue
 		}
+		var s wire.Session
+		if err := json.Unmarshal(b, &s); err != nil {
+			log.Printf("peering: %s: convert session projection %s: %v", r.Peer, r.ID, err)
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -91,7 +98,11 @@ func (a *centralPeerAdapter) hooks() peering.EventHooks {
 		LocalPeerConnected: func(_ string, rows []peering.SessionProjection) { a.assign(rows) },
 		LocalPeerDisconnected: func(name string) {
 			r, err := a.store.PruneLocalPeer(context.Background(), centralstore.PeerKey(name))
-			if err == nil && r.Changed {
+			if err != nil {
+				log.Printf("peering: %s: prune local peer placements: %v", name, err)
+				return
+			}
+			if r.Changed {
 				a.dirty(r.SessionsDirty, r.WorldDirty)
 			}
 		},
@@ -101,6 +112,7 @@ func (a *centralPeerAdapter) assign(rows []peering.SessionProjection) {
 	ctx := context.Background()
 	snap, err := a.store.ReadSnapshot(ctx, centralstore.SnapshotQuery{IncludeProjects: true})
 	if err != nil {
+		log.Printf("peering: read projects for local peer assignment: %v", err)
 		return
 	}
 	entries := make([]projectmatch.Entry, 0, len(snap.Projects))
@@ -122,8 +134,9 @@ func (a *centralPeerAdapter) assign(rows []peering.SessionProjection) {
 		if !ok {
 			continue
 		}
-		r, e := a.store.UpsertLocalPeerPlacement(ctx, centralstore.LocalPeerSubject{PeerKey: centralstore.PeerKey(s.Peer), SessionID: peeringOriginalID(s.ID), ParentSessionID: peeringOriginalID(s.ParentSessionID)}, ids[i])
-		if e != nil {
+		r, err := a.store.UpsertLocalPeerPlacement(ctx, centralstore.LocalPeerSubject{PeerKey: centralstore.PeerKey(s.Peer), SessionID: peeringOriginalID(s.ID), ParentSessionID: peeringOriginalID(s.ParentSessionID)}, ids[i])
+		if err != nil {
+			log.Printf("peering: %s: assign local peer session %s: %v", s.Peer, peeringOriginalID(s.ID), err)
 			continue
 		}
 		combined.Changed = combined.Changed || r.Changed
@@ -146,23 +159,18 @@ func reconcileManualPeers(ctx context.Context, st *centralstore.Store, mgr *peer
 		desired[p.Name] = p
 	}
 	for _, info := range mgr.PeerStatus() {
-		p, ok := desired[info.Name]
-		if !ok {
+		if _, ok := desired[info.Name]; !ok {
 			mgr.RemovePeer(info.Name)
-			continue
 		}
-		live := mgr.GetPeer(info.Name)
-		if live.Config.URL != p.URL || live.Config.Token != p.Token {
-			mgr.RemovePeer(info.Name)
-			mgr.AddPeer(config.PeerConfig{Name: p.Name, URL: p.URL, Token: p.Token})
-		}
-		delete(desired, info.Name)
 	}
+	// Ensure every durable row after removals. EnsurePeer serializes the config
+	// comparison and any generation replacement with concurrent peer mutations,
+	// so a stale pointer cannot make this pass skip a now-absent desired peer.
 	for _, p := range desired {
 		if p.Name == "" {
 			return fmt.Errorf("manual peer has empty name")
 		}
-		mgr.AddPeer(config.PeerConfig{Name: p.Name, URL: p.URL, Token: p.Token})
+		mgr.EnsurePeer(config.PeerConfig{Name: p.Name, URL: p.URL, Token: p.Token})
 	}
 	return nil
 }

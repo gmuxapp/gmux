@@ -10,6 +10,9 @@ import (
 
 // Manager orchestrates connections to all configured spoke peers.
 type Manager struct {
+	// mutationMu serializes peer lifecycle mutations across the periods where
+	// mu must be released to stop a connection and wait for its callbacks.
+	mutationMu         sync.Mutex
 	mu                 sync.RWMutex
 	peers              map[string]*managedPeer
 	sink               ProjectionSink
@@ -198,6 +201,12 @@ func (m *Manager) Stop() {
 // AddPeer registers a new peer and starts its connection. If a peer
 // with the same name already exists, AddPeer is a no-op.
 func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
+	m.addPeer(cfg, opts...)
+}
+
+func (m *Manager) addPeer(cfg config.PeerConfig, opts ...PeerOption) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -217,11 +226,38 @@ func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
 	}
 }
 
+// EnsurePeer atomically ensures that cfg is the installed peer generation.
+// A changed generation is fully stopped and cleaned up before its replacement
+// starts; concurrent AddPeer, RemovePeer, and EnsurePeer calls cannot observe
+// and act on a stale generation between the comparison and replacement.
+func (m *Manager) EnsurePeer(cfg config.PeerConfig) {
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
+
+	m.mu.RLock()
+	mp := m.peers[cfg.Name]
+	unchanged := mp != nil && mp.peer.Config == cfg
+	m.mu.RUnlock()
+	if unchanged {
+		return
+	}
+	if mp != nil {
+		m.removePeer(cfg.Name)
+	}
+	m.addPeer(cfg)
+}
+
 // RemovePeer stops a peer connection, waits for its goroutine to finish,
 // and removes all its sessions from the store. If OnPeerRemoved is set,
 // it fires after store cleanup so the caller can run additional cleanup
 // (e.g. PruneNamespacedKeys for a destroyed devcontainer).
 func (m *Manager) RemovePeer(name string) {
+	m.mutationMu.Lock()
+	defer m.mutationMu.Unlock()
+	m.removePeer(name)
+}
+
+func (m *Manager) removePeer(name string) {
 	m.mu.Lock()
 	mp, ok := m.peers[name]
 	if !ok {

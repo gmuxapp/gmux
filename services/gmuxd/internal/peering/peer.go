@@ -260,6 +260,7 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 	p.cachedProjects = projects
 	p.cachedDiscovered = discovered
 	p.projectsLoaded = true
+	status := p.status
 	p.mu.Unlock()
 	// Second reciprocal feedback loop: the hub sets projects-update on
 	// every world frame it ships to ?as=peer subscribers, so a mutual
@@ -285,7 +286,7 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 		return
 	}
 	if p.onStatus != nil {
-		p.onStatus(p.Config.Name, p.status)
+		p.onStatus(p.Config.Name, status)
 	}
 }
 
