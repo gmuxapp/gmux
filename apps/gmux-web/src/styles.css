@@ -1961,7 +1961,10 @@ body {
   display: flex;
   position: relative;
   flex-direction: column;
-  min-width: 0;
+  /* Keep a usable terminal beside the fixed desktop sidebar. When the native
+     app window is narrower than both, clip the layout at the viewport instead
+     of collapsing the terminal and propagating a degenerate PTY resize. */
+  min-width: 320px;
   min-height: 0;
   background: var(--bg);
 }
@@ -2835,6 +2838,7 @@ body {
 
   .main-panel {
     width: 100%;
+    min-width: 0;
     /* Stacking-context root for the key layering: key borders (z:1) <
        terminal (z:2) < glyphs + feedback (z:3). Also anchors the overlaid
        control bar. */
