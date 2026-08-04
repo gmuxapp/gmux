@@ -123,6 +123,31 @@ func TestScan_DescribeFailureNotIndexed(t *testing.T) {
 	}
 }
 
+func TestScan_DescribeFailurePreservesCachedResumeCommand(t *testing.T) {
+	a := &dbAdapter{rows: map[string]adapter.ConversationInfo{
+		"row:7": {ID: "conv-7", Slug: "seven", Cwd: "/home/u/proj", MessageCount: 2},
+	}}
+	idx := New()
+	if slug := idx.Scan(a, "row:7"); slug != "seven" {
+		t.Fatalf("initial Scan slug = %q, want seven", slug)
+	}
+
+	delete(a.rows, "row:7") // transient descriptor failure on the next upsert
+	if slug := idx.Scan(a, "row:7"); slug != "" {
+		t.Fatalf("failed rescan slug = %q, want empty", slug)
+	}
+	if cmd := idx.LookupResumeCommand("dbtool", "row:7"); len(cmd) != 3 || cmd[2] != "conv-7" {
+		t.Fatalf("failed rescan replaced stale-good command with %v", cmd)
+	}
+
+	if !idx.RemoveByRef("dbtool", "row:7") {
+		t.Fatal("RemoveByRef returned false after transient failure")
+	}
+	if cmd := idx.LookupResumeCommand("dbtool", "row:7"); len(cmd) != 0 {
+		t.Fatalf("RemoveByRef retained resume command %v", cmd)
+	}
+}
+
 // TestScan_NonResumableNotIndexed pins the caller side of the Resumer
 // contract: a conversation that describes cleanly but whose adapter returns
 // no resume command is not indexed and yields no slug. It also pins the

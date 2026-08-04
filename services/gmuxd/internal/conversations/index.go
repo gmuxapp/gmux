@@ -215,7 +215,9 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 
 	convInfo, err := desc.DescribeConversation(ref)
 	if err != nil {
-		idx.setResumeCommand(a.Name(), ref, nil)
+		// Keep stale-good state on transient descriptor failures, matching the
+		// main metadata index. A source Remove event is the authoritative
+		// signal that clears both entries.
 		return ""
 	}
 
