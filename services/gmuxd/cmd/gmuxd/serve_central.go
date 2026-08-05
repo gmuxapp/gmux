@@ -1099,7 +1099,7 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			value := centralstore.SessionID(parentID)
 			parent = &value
 		}
-		result, err := boot.Store.SetSessionParent(r.Context(), sid, parent)
+		_, err = boot.Coordinator.SetSessionParent(r.Context(), sid, parent)
 		switch {
 		case errors.Is(err, centralstore.ErrSessionNotFound):
 			writeError(w, http.StatusNotFound, "not_found", "child and parent sessions must exist on this daemon")
@@ -1113,9 +1113,6 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 		case err != nil:
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
-		}
-		if result.Changed {
-			boot.Composer.Invalidate(result)
 		}
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "attach":

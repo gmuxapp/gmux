@@ -232,10 +232,12 @@ type Coordinator struct {
 	// double-spawning or double-killing. See lifecycle.go.
 	ops map[centralstore.SessionID]*LifecycleClaim
 
-	// beforeDismissLock is a test-only synchronization seam: when set, it is
-	// called immediately before Dismiss attempts the lifecycle mutex, letting
-	// serialization tests deterministically observe "blocked at the mutex".
-	beforeDismissLock func()
+	// beforeDismissLock and beforeReparentLock are test-only synchronization
+	// seams: when set, they are called immediately before the operation attempts
+	// the lifecycle mutex, letting serialization tests deterministically observe
+	// "blocked at the mutex".
+	beforeDismissLock  func()
+	beforeReparentLock func()
 
 	// outcomes is the post-commit outcome bus (see outcomes.go). It has its
 	// own lock; publishing never runs under the lifecycle mutex.

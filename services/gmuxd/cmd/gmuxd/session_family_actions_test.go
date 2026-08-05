@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
@@ -30,7 +31,8 @@ func TestSessionFamilyMutationHTTPRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	boot := &Bootstrap{Store: store, Composer: central.New(store, nil, nil)}
+	coord := sessioncoord.New(nil, nil, store, nil, nil)
+	boot := &Bootstrap{Store: store, Coordinator: coord, Composer: central.New(store, nil, nil)}
 	fanout := newSSEFanout()
 	post := func(path, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -120,7 +122,8 @@ func TestSessionReparentHTTPValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	boot := &Bootstrap{Store: store, Composer: central.New(store, nil, nil)}
+	coord := sessioncoord.New(nil, nil, store, nil, nil)
+	boot := &Bootstrap{Store: store, Coordinator: coord, Composer: central.New(store, nil, nil)}
 	request := func(id, body string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		handleCentralSessionAction(recorder, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+id+"/reparent", strings.NewReader(body)), boot, newSSEFanout(), nil, nil, nil, "")
