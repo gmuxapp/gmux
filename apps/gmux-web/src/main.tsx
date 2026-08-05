@@ -14,7 +14,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAgentCount, familyNavigation, hasFamily } from './family'
+import { familyAncestors, familyRoot, hasFamily } from './family'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -25,14 +25,15 @@ import { ToastHost } from './toast-host'
 import { pushError } from './toasts'
 
 import {
-  sessions, connState, selected, selectedId, view, health, peers,
+  sessions, connState, selected, selectedId, view, health, peers, projects,
   terminalOptions, keybinds, macCommandIsCtrl,
   keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
-  sessionStaleness,
+  sessionStaleness, sessionDotState, activityMap, familyDotById, tabHref,
 } from './store'
+import { viewToPath } from './routing'
 
 // Lazy-loaded routes (code-split, not bundled with the main app)
 const InputDiagnostics = lazy(() => import('./input-diagnostics'))
@@ -196,47 +197,20 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
     )
   }
 
-  const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
-  const familyNav = familyNavigation(session, sessions.value)
-
   return (
     <div class={`main-header ${keyboardOpen.value ? 'keyboard-collapsed' : ''}`}>
       <div class="main-header-left">
         {showFamily && (
-          <button
-            ref={familyTriggerRef}
-            class="family-pill"
-            type="button"
-            aria-expanded={familyOpen}
-            aria-controls="agent-family-drawer"
-            onClick={() => setFamilyOpen(open => !open)}
-          >
-            Agents · {familyAgentCount(session, sessions.value)}
-          </button>
+          <FamilyTrigger
+            session={session}
+            open={familyOpen}
+            triggerRef={familyTriggerRef}
+            onToggle={() => setFamilyOpen(open => !open)}
+          />
         )}
-        {familyNav.parent && (
-          <button
-            class="family-header-nav"
-            type="button"
-            aria-label={`Go to parent agent: ${familyNav.parent.title}`}
-            title={`Parent: ${familyNav.parent.title}`}
-            onClick={() => navigateToSession(familyNav.parent!.id)}
-          >↑</button>
-        )}
-        {familyNav.root && (
-          <button
-            class="family-header-nav"
-            type="button"
-            aria-label={`Go to root agent: ${familyNav.root.title}`}
-            title={`Root: ${familyNav.root.title}`}
-            onClick={() => navigateToSession(familyNav.root!.id)}
-          >⇈</button>
-        )}
+        {showFamily && <HeaderCrumbs session={session} />}
         <div class="main-header-title">
           {session.title}
-        </div>
-        <div class="main-header-meta">
-          <span class="main-header-cwd">{shortCwd}</span>
         </div>
       </div>
       <div class="main-header-right">
@@ -248,6 +222,76 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
       )}
     </div>
   )
+}
+
+/** The family panel's trigger: a ghost icon button (3-node tree) with a
+ * corner badge showing the family's aggregated dot state — same roll-up
+ * the sidebar row shows, so background family activity is visible without
+ * opening the panel. */
+function FamilyTrigger({ session, open, triggerRef, onToggle }: {
+  session: Session
+  open: boolean
+  triggerRef: { current: HTMLButtonElement | null }
+  onToggle: () => void
+}) {
+  const rootId = familyRoot(session, sessions.value).id
+  const dot = familyDotById.value.get(rootId) ?? 'none'
+  return (
+    <button
+      ref={triggerRef}
+      class="family-trigger"
+      type="button"
+      aria-label="Session family"
+      title="Session family"
+      aria-expanded={open}
+      aria-controls="agent-family-drawer"
+      onClick={onToggle}
+    >
+      <svg class="family-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 5.5v2M8 7.5c0 1.5-3.5 1-3.5 3M8 7.5c0 1.5 3.5 1 3.5 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        <circle cx="8" cy="3.75" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+        <circle cx="4.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+        <circle cx="11.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+      </svg>
+      {dot !== 'none' && <span class={`family-trigger-badge session-dot-indicator ${dot}`} aria-hidden="true" />}
+    </button>
+  )
+}
+
+/** Ancestor breadcrumbs in the title row: `●root › ●parent › title`. Each
+ * crumb is a live-dotted ghost link; the current session is the plain bold
+ * title that follows (its state lives in the status chip). Depth > 3
+ * collapses the middle to a static `…` — the panel still shows the full
+ * structure. */
+function HeaderCrumbs({ session }: { session: Session }) {
+  const ancestors = familyAncestors(session, sessions.value)
+  if (ancestors.length === 0) return null
+  const shown: (Session | null)[] = ancestors.length > 3
+    ? [ancestors[0], null, ancestors[ancestors.length - 1]]
+    : [...ancestors]
+  const am = activityMap.value
+  return (
+    <nav class="header-crumbs" aria-label="Ancestor agents">
+      {shown.map((ancestor) => (
+        <Fragment key={ancestor?.id ?? 'gap'}>
+          {ancestor
+            ? (
+              <a class="header-crumb" href={sessionHref(ancestor)}>
+                <span class={`session-dot-indicator ${sessionDotState(ancestor, am)}`} aria-hidden="true" />
+                <span class="header-crumb-title">{ancestor.title}</span>
+              </a>
+            )
+            : <span class="header-crumb-gap" title="More ancestors in the family panel">…</span>}
+          <span class="header-crumb-sep" aria-hidden="true">›</span>
+        </Fragment>
+      ))}
+    </nav>
+  )
+}
+
+function sessionHref(session: Session): string | undefined {
+  const path = viewToPath({ kind: 'session', sessionId: session.id }, projects.value, sessions.value)
+  return path ? tabHref(path) : undefined
 }
 
 /** Session status in the header, one chip slot for both states: alive shows

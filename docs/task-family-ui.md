@@ -15,29 +15,38 @@ used by notification suppression and covers the conversation-backed Pi,
 Claude, and Codex adapters without a frontend adapter-name list. Shell remains
 false.
 
-## Drawer presentation (noise reduction)
+## Header and panel presentation
 
-Every children list in the drawer (the top-level sibling list included) is
-partitioned into attention → working → idle → finished groups, classified
-by the `sessionDotState` precedence so a row's dot and its group never
-disagree: error and unread demand attention (unread is not alive-gated —
-unseen output pings until viewed, dead or not), active work is working,
-and only quiet sessions land in idle/finished. A node sorts into the
-highest-urgency bucket found in its entire subtree, so collapsed summaries
-can never hide urgent descendants. Groups are capped (attention ∞,
-working 20, idle 10, finished 3) behind `+N …` summary rows with
-per-(parent, bucket) expansion that resets when the drawer closes. The
-projection is frozen against ordinary live updates while the drawer is
-open — dots update in place, rows never re-sort under the cursor — and
-re-projects from current facts on the two explicit user actions: selecting
-another session and expanding/collapsing a group.
+The header speaks one control language: ghost icon buttons (borderless,
+`--bg-hover` on hover, sized to the ⋮ menu trigger). For family members
+the title row is the ancestor breadcrumb — `[family icon] ●root › ●parent
+› title` — where each crumb is a ghost link carrying that ancestor's live
+`sessionDotState` dot; the current session stays a plain bold title (its
+state lives in the status chip). Depth > 3 collapses the middle to a
+static `…`. On narrow screens the crumbs wrap onto their own row above
+the title. The family trigger (3-node tree SVG) shows the family's
+aggregated dot as a corner badge and toggles the panel; there is no cwd,
+no member count, and no separate parent/root buttons.
 
-Outside the drawer a root row stands in for its whole family:
+The panel is a non-modal popover in the ⋮ dropdown's visual language
+(width `max-content` clamped 320–440px on desktop, full-width sheet on
+mobile). It closes on outside mousedown, Escape, or the trigger; clicking
+a row navigates without closing it. Content is a counts line (`N error ·
+N working · N unread · N total`, dot-precedence tallies) plus the family
+tree. Every children level is one flat list in sidebar activity-mode
+order: recency of `last_output_at ?? created_at`, no status buckets, no
+alive/dead distinction — state is only the row's five-state dot. The
+panel renders live; like the sidebar, a row moves only when new output
+arrives. Levels are capped at 15 rows behind a two-state `+N more` /
+`show fewer` summary keyed per parent (recency does the triage: unread
+members have recent output by definition, so they surface within the
+cap while long-dead noise sinks below the fold).
+
+Outside the panel a root row stands in for its whole family:
 `familyDotById` aggregates the highest-precedence member dot onto the
-presentation root, and `unreadCount` adds alive unread descendants to their
-folder-visible root (the count keeps its existing alive gate). Processes
-render with a `$` glyph and are excluded from the header pill's
-`Agents · N` count.
+presentation root, and `unreadCount` adds alive unread descendants to
+their folder-visible root (the count keeps its existing alive gate).
+Processes render with a `$` glyph in place of the dot.
 
 ## Unresolved capability seam
 
