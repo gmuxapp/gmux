@@ -8,19 +8,26 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
-// ErrAckNotDurable marks an acknowledgement that could not be recorded
-// durably after bounded stale retries.
-var ErrAckNotDurable = errors.New("sessioncoord: could not durably acknowledge session")
+var (
+	// ErrAckNotDurable marks an acknowledgement that could not be recorded
+	// durably after bounded stale retries.
+	ErrAckNotDurable = errors.New("sessioncoord: could not durably acknowledge session")
+	// ErrAckOwnerChanged tells the caller to resolve ownership again. A token-
+	// bound acknowledgement must never report success while a live generation
+	// owns the result or a replacement is inside commit-to-install.
+	ErrAckOwnerChanged = errors.New("sessioncoord: acknowledgement owner changed")
+)
 
 // AcknowledgeDead durably clears the user-facing unread/error indicators of a
 // dead session (the `.../read` route and presence-driven selection clears).
 //
 // Live sessions are acknowledged by the runner on WS attach — a daemon write
-// would violate runner ownership (ADR 0026 §3) — so a live or fenced target
-// is a deliberate silent no-op: today's UI calls this opportunistically on
-// every selection. Each attempt (liveness check + row read + conditional
-// acknowledge) runs under the lifecycle mutex, exactly like
-// ensureDurableExit, so it can never interleave with a registration's
+// would violate runner ownership (ADR 0026 §3). The legacy unconditional form
+// remains a silent no-op for live targets. The token-bound form instead returns
+// ErrAckOwnerChanged so its caller can acknowledge the runner and can never
+// mistake a replacement fence for consumption. Each attempt (liveness check +
+// row read + conditional acknowledge) runs under the lifecycle mutex, exactly
+// like ensureDurableExit, so it cannot interleave with registration's
 // commit-to-install window; the store call is a short DB transaction with no
 // runner I/O. Bounded stale retries mirror ensureDurableExit's budget.
 func (c *Coordinator) AcknowledgeDead(ctx context.Context, id centralstore.SessionID) error {
@@ -37,13 +44,30 @@ type durableTokenAcknowledger interface {
 	AcknowledgeDeadSessionToken(context.Context, centralstore.SessionID, centralstore.RowVersion, string) (centralstore.MutationResult, error)
 }
 
+// AcknowledgementRuntime resolves the installed owner under the lifecycle
+// mutex. If registration is between durable commit and registry install, this
+// blocks until the replacement is installed (or the old generation restored),
+// so callers never route a read from a transient registry absence.
+func (c *Coordinator) AcknowledgementRuntime(id centralstore.SessionID) (Runtime, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.registry.current(id)
+	if !ok {
+		return Runtime{}, false
+	}
+	return e.Runtime, true
+}
+
 func (c *Coordinator) acknowledgeDead(ctx context.Context, id centralstore.SessionID, token *string) error {
 	var version centralstore.RowVersion
 	for range 3 {
 		c.mu.Lock()
 		if _, live := c.registry.current(id); live || c.registry.fenced(id) {
 			c.mu.Unlock()
-			return nil // runner-owned while live (or being replaced): no-op
+			if token != nil {
+				return ErrAckOwnerChanged
+			}
+			return nil // legacy unconditional acknowledgement remains opportunistic
 		}
 		s, ok, err := c.durable.Session(ctx, id)
 		if err != nil {

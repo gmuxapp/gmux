@@ -48,6 +48,60 @@ func TestAcknowledgeDeadLiveTargetIsSilentNoOp(t *testing.T) {
 	}
 }
 
+func TestAcknowledgeDeadTokenNeverSucceedsForLiveOrFencedOwner(t *testing.T) {
+	for _, fenced := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "fenced"}[fenced], func(t *testing.T) {
+			dur := newFakeDurable(0)
+			coord := ackCoord(dur, &fakeDirtySink{})
+			entry := registryEntry{Runtime: Runtime{SessionID: "1mw5c5n9", Generation: 1}, dead: make(chan struct{})}
+			coord.registry.install(entry)
+			if fenced && !coord.registry.supersede(entry.SessionID, entry.Generation) {
+				t.Fatal("failed to establish replacement fence")
+			}
+			if err := coord.AcknowledgeDeadToken(context.Background(), entry.SessionID, "result-1"); !errors.Is(err, ErrAckOwnerChanged) {
+				t.Fatalf("token acknowledgement error=%v, want ErrAckOwnerChanged", err)
+			}
+			if len(dur.ackCalls) != 0 {
+				t.Fatal("runner-owned result was written through the durable path")
+			}
+		})
+	}
+}
+
+func TestAcknowledgementRuntimeWaitsForReplacementInstall(t *testing.T) {
+	coord := ackCoord(newFakeDurable(0), &fakeDirtySink{})
+	id := centralstore.SessionID("1mw5c5n9")
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: id, Generation: 1, Endpoint: "old", Incarnation: "old-inc"}, dead: make(chan struct{})})
+
+	// Reproduce Register's commit-to-install window exactly: c.mu remains held
+	// while the old generation is fenced and until generation 2 is installed.
+	coord.mu.Lock()
+	if !coord.registry.supersede(id, 1) {
+		coord.mu.Unlock()
+		t.Fatal("failed to establish replacement fence")
+	}
+	started := make(chan struct{})
+	resolved := make(chan Runtime, 1)
+	go func() {
+		close(started)
+		runtime, _ := coord.AcknowledgementRuntime(id)
+		resolved <- runtime
+	}()
+	<-started
+	select {
+	case got := <-resolved:
+		coord.mu.Unlock()
+		t.Fatalf("owner resolved inside commit-to-install: %+v", got)
+	default:
+	}
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: id, Generation: 2, Endpoint: "new", Incarnation: "new-inc"}, dead: make(chan struct{})})
+	coord.mu.Unlock()
+
+	if got := <-resolved; got.Generation != 2 || got.Endpoint != "new" || got.Incarnation != "new-inc" {
+		t.Fatalf("resolved owner=%+v, want installed generation 2", got)
+	}
+}
+
 func TestAcknowledgeDeadAlreadyClearSkipsWrite(t *testing.T) {
 	dur := newFakeDurable(0)
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {

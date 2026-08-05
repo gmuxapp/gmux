@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +42,22 @@ func hasPendingNotification(r *centralNotifyRouter, id string) bool {
 	defer r.mu.Unlock()
 	_, ok := r.pending[id]
 	return ok
+}
+
+type readCommitFenceStore struct {
+	*centralstore.Store
+	committed chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (s *readCommitFenceStore) RegisterRunner(ctx context.Context, reg centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error) {
+	row, result, err := s.Store.RegisterRunner(ctx, reg)
+	if err == nil {
+		s.once.Do(func() { close(s.committed) })
+		<-s.release
+	}
+	return row, result, err
 }
 
 // These cases drive the committed-outcome consumer directly. Their ordering is
@@ -219,6 +239,112 @@ func TestCentralNotifyHiddenOrUnfocusedSelectionDoesNotSuppress(t *testing.T) {
 				t.Fatal("selection without focused visibility suppressed delivery")
 			}
 		})
+	}
+}
+
+func TestCentralReadRouteWaitsForCommitToInstallFenceBeforeCancellation(t *testing.T) {
+	ctx := context.Background()
+	store, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fencedStore := &readCommitFenceStore{Store: store, committed: make(chan struct{}), release: make(chan struct{})}
+
+	id := centralstore.SessionID("1eadfenc")
+	token := "result-1"
+	incarnation := "replacement-incarnation"
+	endpoint := filepath.Join(t.TempDir(), "replacement.sock")
+	ln, err := net.Listen("unix", endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := make(chan struct{})
+	allowResponse := make(chan struct{})
+	var unread atomic.Bool
+	unread.Store(true)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /read", func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("X-Gmux-Expect-Incarnation") != incarnation || req.URL.Query().Get("token") != token {
+			http.Error(w, "wrong acknowledgement owner", http.StatusConflict)
+			return
+		}
+		unread.Store(false)
+		close(cleared)
+		<-allowResponse
+		w.WriteHeader(http.StatusNoContent)
+	})
+	runnerServer := &http.Server{Handler: mux}
+	go func() { _ = runnerServer.Serve(ln) }()
+	t.Cleanup(func() { _ = runnerServer.Close(); _ = ln.Close() })
+
+	fleet := newHarnessFleet(0)
+	unreadFact := true
+	fleet.metas[endpoint] = sessioncoord.RunnerMeta{
+		Incarnation: incarnation,
+		Registration: centralstore.RunnerRegistration{
+			ID: id, Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1,
+			Facts: centralstore.RunnerFacts{Unread: &unreadFact, UnreadToken: &token},
+		},
+	}
+	fleet.streams[endpoint] = &harnessStream{events: make(chan sessioncoord.RunnerEvent, 8), incarnation: incarnation}
+	coord := sessioncoord.New(nil, fleet, fencedStore, nil, nil)
+	defer coord.Close()
+	boot := &Bootstrap{Store: store, Coordinator: coord, Registry: coord.Registry()}
+
+	registerDone := make(chan error, 1)
+	go func() {
+		_, err := coord.Register(ctx, sessioncoord.RegisterRequest{Endpoint: endpoint, AssertedID: id})
+		registerDone <- err
+	}()
+	<-fencedStore.committed // durable commit landed; live owner is not installed
+
+	router := newParentNotifyTestRouter(t)
+	router.scheduleNotification(string(id), "unread", "Child", "New output")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+string(id)+"/read?token="+token, nil)
+	originalOwnerResolution := acknowledgementRuntime
+	ownerResolutionStarted := make(chan struct{})
+	var ownerResolutionOnce sync.Once
+	acknowledgementRuntime = func(c *sessioncoord.Coordinator, target centralstore.SessionID) (sessioncoord.Runtime, bool) {
+		ownerResolutionOnce.Do(func() { close(ownerResolutionStarted) })
+		return originalOwnerResolution(c, target)
+	}
+	t.Cleanup(func() { acknowledgementRuntime = originalOwnerResolution })
+
+	routeDone := make(chan struct{})
+	go func() {
+		handleCentralSessionAction(rec, req, boot, newSSEFanout(), nil, nil, nil, "", router)
+		close(routeDone)
+	}()
+	<-ownerResolutionStarted // route is now resolving while c.mu is fence-held
+	select {
+	case <-cleared:
+		t.Fatal("read reached a runner inside commit-to-install")
+	default:
+	}
+	if !hasPendingNotification(router, string(id)) {
+		t.Fatal("delivery canceled before any owner acknowledged the result")
+	}
+
+	close(fencedStore.release) // install the committed live generation
+	if err := <-registerDone; err != nil {
+		t.Fatal(err)
+	}
+	<-cleared
+	if unread.Load() {
+		t.Fatal("installed live owner did not clear the valid token")
+	}
+	if !hasPendingNotification(router, string(id)) {
+		t.Fatal("delivery canceled before the live acknowledgement completed")
+	}
+	close(allowResponse)
+	<-routeDone
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if hasPendingNotification(router, string(id)) {
+		t.Fatal("successful installed-owner acknowledgement did not cancel delivery")
 	}
 }
 
