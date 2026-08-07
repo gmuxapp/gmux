@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   descendantTree, familyAncestors, familyCounts, familyIndex,
-  familyRoot, hasFamily, isFamilyChild, projectFamily,
+  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, hasFamilyActivity,
+  isFamilyChild, NO_FAMILY_ACTIVITY, projectFamily,
 } from './family'
 import { makeSession } from './test-helpers'
 
@@ -180,5 +181,51 @@ describe('flat panel projection', () => {
     expect(projection.ancestors.map(s => s.id)).toEqual(['root', 'parent'])
     // Ancestors are breadcrumb context in the header, not counted rows.
     expect(familyCounts(projection.siblingTrees)).toEqual({ error: 0, working: 0, unread: 0, total: 2 })
+  })
+})
+
+describe('family activity line', () => {
+  const activity = (over = {}) => ({ ...NO_FAMILY_ACTIVITY, ...over })
+
+  it('shows nothing for an idle family', () => {
+    expect(hasFamilyActivity(NO_FAMILY_ACTIVITY)).toBe(false)
+  })
+
+  it('shows for any single non-zero state', () => {
+    expect(hasFamilyActivity(activity({ error: 1 }))).toBe(true)
+    expect(hasFamilyActivity(activity({ unread: 1 }))).toBe(true)
+    expect(hasFamilyActivity(activity({ workingAgents: 1 }))).toBe(true)
+    expect(hasFamilyActivity(activity({ workingProcesses: 1 }))).toBe(true)
+  })
+
+  it('spells the glyph row out for screen readers, attention first', () => {
+    expect(familyActivityLabel(activity({ error: 1, unread: 2, workingAgents: 1, workingProcesses: 3 })))
+      .toBe('Family: 1 member with an error, 2 unread members, 1 working subagent, 3 running processes. Open the family tree.')
+  })
+
+  it('omits zero states from the label', () => {
+    expect(familyActivityLabel(activity({ unread: 1 })))
+      .toBe('Family: 1 unread member. Open the family tree.')
+  })
+})
+
+describe('childTrailTitle', () => {
+  const root = agent('root')
+  const mid = agent('mid', 'root')
+  const leaf = agent('leaf', 'mid')
+
+  it('reads root › … › child for a deep descendant', () => {
+    const sessions = [root, mid, leaf]
+    expect(childTrailTitle(root, familyAncestors(leaf, sessions), leaf)).toBe('root › mid › leaf')
+  })
+
+  it('collapses to root › child for a direct child', () => {
+    const sessions = [root, mid]
+    expect(childTrailTitle(root, familyAncestors(mid, sessions), mid)).toBe('root › mid')
+  })
+
+  it('never repeats the root when the spine already starts with it', () => {
+    // familyAncestors is root-first; the trail must not print it twice.
+    expect(childTrailTitle(root, [root], mid)).toBe('root › mid')
   })
 })

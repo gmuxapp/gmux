@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { needsReveal } from './sidebar-reveal'
-import { hasSessionSlugCollision, sessionPath } from './routing'
+import { hasSessionSlugCollision, sessionPath, viewToPath } from './routing'
 import { selectorLabel, folderMatchesFilter, type Selector } from './tab-filter'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -17,7 +17,8 @@ import {
   activityMap, projects, connState, health, peers,
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
-  peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState, familyDotById,
+  peerStatusByName, isSessionUnavailable, localPeerNames, ownDotState, selectedId,
+  familyActivityById, selectedFamilyChild, familyPanelOpen,
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
@@ -26,6 +27,10 @@ import {
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
+import {
+  childTrailTitle, familyActivityLabel, hasFamilyActivity, isProcessSession,
+  NO_FAMILY_ACTIVITY, type FamilyActivity,
+} from './family'
 import type { Session, Folder } from './types'
 
 // ── Types ──
@@ -108,6 +113,13 @@ function DevcontainerMarker({ peer }: { peer: string }) {
       <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
     </svg>
   )
+}
+
+/** Deep link to any session by id (the child rows can't reuse the
+ *  folder's slug: a descendant may live in another project). */
+function sessionHref(session: Session): string | undefined {
+  const path = viewToPath({ kind: 'session', sessionId: session.id }, projects.value, sessions.value)
+  return path ? tabHref(path) : undefined
 }
 
 function reorder<T>(arr: T[], from: number, to: number): T[] {
@@ -216,6 +228,115 @@ function SessionItem({
   )
 }
 
+/** The sidebar's family entry: one root row plus, indented under the
+ *  root title, an optional selected-child row and an activity row.
+ *
+ *  Four rules hold this together:
+ *   - the root row's dot is the *root session's own* status, so a
+ *     working child never masquerades as a working root;
+ *   - the activity row speaks in the sidebar's existing dot vocabulary
+ *     — error, unread, working subagent, running process — and only
+ *     appears when at least one of them is non-zero. An idle family
+ *     adds no line at all;
+ *   - selection highlight lives on the card, not the inner rows, so a
+ *     selected child reads as "this family, this member" instead of a
+ *     standalone sidebar item, while the row under the pointer still
+ *     highlights as the click target;
+ *   - a root with no descendants renders no card at all — standalone
+ *     sessions stay exactly as compact as before.
+ */
+function FamilyEntry({
+  selected,
+  activity,
+  rootHref,
+  child,
+  childHref,
+  childPath,
+  onClick,
+  onOpenTree,
+  children,
+}: {
+  selected: boolean
+  activity: FamilyActivity
+  /** The root row's own href; the activity row navigates there too. */
+  rootHref: string
+  /** Selected descendant of this root, when the selection is a child. */
+  child?: Session
+  childHref?: string
+  /** Root › … › child trail, for the child row's hover title. */
+  childPath?: string
+  onClick?: () => void
+  /** Click on the activity row: select the root and open the tree. */
+  onOpenTree?: () => void
+  /** The root's own `SessionItem`. */
+  children: preact.ComponentChildren
+}) {
+  const childDot = child ? ownDotState(child, activityMap.value, child.id) : 'none'
+  const showActivity = hasFamilyActivity(activity)
+  // The branch glyph marks the first sub-row only; the second aligns
+  // under it with an empty span of the same width.
+  const branch = (first: boolean) => (
+    <span class="family-sub-branch" aria-hidden="true">{first ? '↳' : ''}</span>
+  )
+  return (
+    <div class={`session-family${selected ? ' selected' : ''}`}>
+      {children}
+      {child && (
+        <a
+          class="family-sub-row family-selected-child"
+          href={childHref}
+          aria-current="page"
+          title={childPath}
+          onClick={() => onClick?.()}
+        >
+          {branch(true)}
+          {/* No reserved dot column: a quiet member spends the space on
+            * its title instead. */}
+          {isProcessSession(child)
+            ? <span class={`family-child-proc${child.alive && child.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
+            : childDot !== 'none' && <span class={`session-dot-indicator ${childDot}`} aria-hidden="true" />}
+          <span class="family-child-title">{child.title}</span>
+        </a>
+      )}
+      {showActivity && (
+        <a
+          class="family-sub-row family-activity"
+          href={rootHref}
+          aria-label={familyActivityLabel(activity)}
+          title={familyActivityLabel(activity)}
+          onClick={() => { onOpenTree?.(); onClick?.() }}
+        >
+          {branch(!child)}
+          {activity.error > 0 && (
+            <span class="family-activity-seg">
+              <span class="session-dot-indicator error" aria-hidden="true" />
+              {activity.error}
+            </span>
+          )}
+          {activity.unread > 0 && (
+            <span class="family-activity-seg">
+              <span class="session-dot-indicator unread" aria-hidden="true" />
+              {activity.unread}
+            </span>
+          )}
+          {activity.workingAgents > 0 && (
+            <span class="family-activity-seg">
+              <span class="session-dot-indicator working" aria-hidden="true" />
+              {activity.workingAgents}
+            </span>
+          )}
+          {activity.workingProcesses > 0 && (
+            <span class="family-activity-seg">
+              <span class="family-child-proc working" aria-hidden="true">$</span>
+              {activity.workingProcesses}
+            </span>
+          )}
+        </a>
+      )}
+    </div>
+  )
+}
+
 function FolderGroup({
   folder,
   selId,
@@ -237,6 +358,12 @@ function FolderGroup({
   onClick?: () => void
 }) {
   const [drag, setDrag] = useState<DragState | null>(null)
+  // Snapshot-wide family derivations, read once per folder render. All
+  // three are O(n) maps built once per session-list identity in the
+  // store, so a folder's rows stay O(rows) lookups.
+  const activityById = familyActivityById.value
+  const selChild = selectedFamilyChild.value
+  const rawSelId = selectedId.value
 
   const handleDragStart = useCallback((idx: number) => {
     setDrag({ from: idx, over: idx })
@@ -347,25 +474,51 @@ function FolderGroup({
       </div>
       {shown.length > 0 && (
       <div class="folder-sessions">
-        {shown.map((s, i) => (
-          <SessionItem
-            key={s.id}
-            session={s}
-            href={tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))}
-            selected={selId === s.id}
-            resuming={resumingId === s.id}
-            dotState={familyDotById.value.get(s.id) ?? sessionDotState(s, am)}
-            unavailable={isSessionUnavailable(s, peerStatus)}
-            showHostMarker={mixedHosts}
-            dragging={drag !== null && s.id === visible[drag.from]?.id}
-            dropTarget={drag !== null && drag.over === i && drag.from !== i}
-            onClose={() => onCloseSession(s)}
-            onClick={onClick}
-            onDragStart={dragDisabled ? undefined : () => handleDragStart(i)}
-            onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
-            onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
-          />
-        ))}
+        {shown.map((s, i) => {
+          const href = tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))
+          const item = (
+            <SessionItem
+              key={s.id}
+              session={s}
+              href={href}
+              selected={selId === s.id}
+              resuming={resumingId === s.id}
+              // Root row = root's own status. The family roll-up lives on
+              // the summary line below it (see FamilyEntry).
+              dotState={ownDotState(s, am, rawSelId)}
+              unavailable={isSessionUnavailable(s, peerStatus)}
+              showHostMarker={mixedHosts}
+              dragging={drag !== null && s.id === visible[drag.from]?.id}
+              dropTarget={drag !== null && drag.over === i && drag.from !== i}
+              onClose={() => onCloseSession(s)}
+              onClick={onClick}
+              onDragStart={dragDisabled ? undefined : () => handleDragStart(i)}
+              onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
+              onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
+            />
+          )
+          const activity = activityById.get(s.id) ?? NO_FAMILY_ACTIVITY
+          const child = selChild?.rootId === s.id ? selChild.session : undefined
+          // No selected child and nothing happening: a plain row. This
+          // is every standalone session and every idle family.
+          if (!child && !hasFamilyActivity(activity)) return item
+          const childPath = child ? childTrailTitle(s, selChild?.ancestors ?? [], child) : undefined
+          return (
+            <FamilyEntry
+              key={s.id}
+              selected={selId === s.id}
+              activity={activity}
+              rootHref={href}
+              child={child}
+              childHref={child ? sessionHref(child) : undefined}
+              childPath={childPath}
+              onClick={onClick}
+              onOpenTree={() => { familyPanelOpen.value = true }}
+            >
+              {item}
+            </FamilyEntry>
+          )
+        })}
       </div>
       )}
     </div>

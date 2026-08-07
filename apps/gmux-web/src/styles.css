@@ -962,6 +962,9 @@ body {
   transition: background 0.1s, color 0.1s, opacity 0.15s;
   padding: 0;
 }
+/* The family card owns hover, so hovering its summary line must still
+   reveal the root row's close button. */
+.session-family:hover .session-close-btn,
 .session-item:hover .session-close-btn,
 .session-item.selected .session-close-btn,
 .session-row:hover .session-close-btn,
@@ -982,6 +985,144 @@ body {
  * .session-close-btn class, so one rule hides both in screenshots. */
 .mock-mode .session-close-btn {
   display: none;
+}
+
+/* ── Sidebar family entry ──
+   An active family is one sidebar entry: the root row, an optional
+   selected-child row, and an activity row. The card owns selection and
+   the ambient hover so the stack reads as a unit — inner rows drop
+   their own selected background and accent bar (they'd draw a second
+   card inside this one) — while the row actually under the pointer
+   steps up one tone so the click target stays unambiguous. */
+.session-family {
+  position: relative;
+  border-radius: 3px;
+}
+.session-family:hover {
+  background: var(--bg-hover);
+}
+.session-family.selected {
+  background: var(--bg-selected);
+}
+.session-family.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 0 1px 1px 0;
+}
+.session-family .session-item.selected {
+  background: none;
+}
+/* One tone above the card in each state (card: --bg-hover /
+   --bg-selected), so the row under the pointer is unmistakable
+   without breaking the card apart. */
+.session-family .session-item:hover,
+.session-family .family-sub-row:hover {
+  background: oklch(26% 0.02 250);
+}
+.session-family.selected .session-item:hover,
+.session-family.selected .family-sub-row:hover {
+  background: oklch(30% 0.02 250);
+}
+.session-family .session-item.selected::before {
+  display: none;
+}
+.session-family .session-item {
+  padding-bottom: 2px;
+}
+
+/* Sub-rows hang off the root title, not the status-dot column: the
+   branch glyph starts where the title does (14px pad + 7px dot + 8px
+   gap = 29px). They span the full card so hovering one highlights a
+   row, not a text fragment. */
+.family-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 8px 3px 29px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.35;
+  border-radius: 3px;
+}
+.family-sub-row:last-child {
+  margin-bottom: 4px;
+}
+.family-sub-branch {
+  flex: 0 0 auto;
+  width: 9px;
+  color: var(--text-muted);
+  opacity: 0.55;
+  font-size: 10px;
+  line-height: 1;
+}
+/* A quiet member reserves no dot column — the title takes the space. */
+.family-child-proc {
+  flex: 0 0 auto;
+  width: 7px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.family-child-proc.working { color: var(--accent); }
+.family-child-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* Activity row: dot/ring/$ glyph + count, one segment per state, each
+   dropped at zero. Clicking it selects the root and opens the tree. */
+.family-activity {
+  gap: 10px;
+  /* Four segments only overflow on an extremely narrow sidebar; clip
+     rather than spill past the card. Attention states come first, so
+     what survives the clip is what matters. */
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.family-activity .family-sub-branch {
+  margin-right: -4px;
+}
+.family-activity-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+/* States that belong to the root row are the whole card's states — the
+   card is one entry, so it dims, drags and takes a drop line as a unit. */
+.session-family:has(.session-item.unavailable) .family-sub-row {
+  opacity: 0.55;
+}
+.session-family:has(.session-item.session-dragging) {
+  opacity: 0.4;
+}
+.session-family:has(.session-item.session-drop-target) {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+.session-family .session-item.session-dragging {
+  opacity: 1;
+}
+.session-family .session-item.session-drop-target {
+  box-shadow: none;
+}
+
+/* Keyboard focus must be visible on the inner links even though the
+   card carries the selected background. */
+.session-family a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 3px;
 }
 
 /* Session drag-to-reorder */
@@ -2933,6 +3074,12 @@ body {
 
   .session-item {
     padding: 8px 10px 8px 14px;
+  }
+
+  /* Family sub-rows are real tap targets on touch. */
+  .family-sub-row {
+    padding-top: 9px;
+    padding-bottom: 9px;
   }
 }
 
