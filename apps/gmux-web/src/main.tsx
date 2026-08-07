@@ -32,6 +32,7 @@ import {
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
   sessionStaleness, sessionDotState, activityMap, familyDotById, tabHref,
+  familyPanelOpen,
 } from './store'
 import { viewToPath } from './routing'
 
@@ -179,12 +180,14 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   onResume?: (id: string) => void
   resuming?: boolean
 }) {
-  const [familyOpen, setFamilyOpen] = useState(false)
+  // Open state lives in the store: the sidebar's family activity row
+  // opens this same panel (see familyPanelOpen).
+  const familyOpen = familyPanelOpen.value
   const familyTriggerRef = useRef<HTMLButtonElement>(null)
-  const closeFamily = useCallback(() => setFamilyOpen(false), [])
+  const closeFamily = useCallback(() => { familyPanelOpen.value = false }, [])
   const showFamily = session ? hasFamily(session, sessions.value) : false
   useEffect(() => {
-    if (!showFamily) setFamilyOpen(false)
+    if (!showFamily) familyPanelOpen.value = false
   }, [showFamily])
 
   if (!session) {
@@ -205,7 +208,7 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
             session={session}
             open={familyOpen}
             triggerRef={familyTriggerRef}
-            onToggle={() => setFamilyOpen(open => !open)}
+            onToggle={() => { familyPanelOpen.value = !familyPanelOpen.value }}
           />
         )}
         {showFamily && <HeaderCrumbs session={session} />}

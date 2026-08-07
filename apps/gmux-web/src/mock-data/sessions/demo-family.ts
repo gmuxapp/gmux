@@ -41,7 +41,32 @@ export const DEMO_FAMILY: MockSession[] = [
     title: 'investigate a really long descendant title that should truncate somewhere sensible',
     parent_session_id: 'fam3kid', status: { active: false, error: true }, last_output_at: ago(5),
   }),
+  // Processes owned by agents in the chain: the sidebar's family
+  // activity row counts a running one under `$` (subagents get a dot),
+  // and the family drawer shows them with the same `$` glyph.
+  fam({
+    id: 'fam0proc', title: 'pnpm test --watch', parent_session_id: 'fam0root',
+    semantic_agent: false, adapter: 'shell', command: ['pnpm', 'test'],
+    status: { active: true }, last_output_at: ago(3),
+  }),
+  fam({
+    id: 'fam1proc', title: 'tail -f daemon.log', parent_session_id: 'fam1kid',
+    semantic_agent: false, adapter: 'shell', command: ['tail', '-f', 'daemon.log'],
+    last_output_at: ago(30),
+  }),
   // Long-titled one-parent chain (shallow case).
   fam({ id: 'famAroot', title: 'a genuinely very long root agent title for truncation checks', last_output_at: ago(60) }),
   fam({ id: 'famAkid', title: 'child of the long-titled root with its own long title', parent_session_id: 'famAroot', unread: true, last_output_at: ago(4) }),
+  // Process-only family: the summary line drops the empty segment and
+  // reads just "2 processes".
+  fam({ id: 'famBroot', title: 'build watcher agent', last_output_at: ago(90) }),
+  fam({
+    id: 'famBproc1', title: 'vite build --watch', parent_session_id: 'famBroot',
+    semantic_agent: false, adapter: 'shell', command: ['vite', 'build'],
+    status: { active: true }, last_output_at: ago(11),
+  }),
+  fam({
+    id: 'famBproc2', title: 'gofmt -l ./...', parent_session_id: 'famBroot',
+    semantic_agent: false, adapter: 'shell', command: ['gofmt'], unread: true, last_output_at: ago(9),
+  }),
 ]

@@ -13,6 +13,7 @@ import {
   view, duplicateConversationFiles,
   sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
   sidebarActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
+  familyActivityById, selectedFamilyChild, ownDotState,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -1309,6 +1310,201 @@ describe('familyDotById (family-aggregated row dot)', () => {
     expect(familyDotById.value.get('root')).toBe('unread')
     _rawSessions.value = _rawSessions.value.map(s => s.id === 'b' ? { ...s, unread: false } : s)
     expect(familyDotById.value.get('root')).toBe('none')
+  })
+})
+
+describe('sidebar family entry derivations', () => {
+  beforeEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    urlPath.value = '/'
+    activityMap.value = new Map()
+  })
+
+  const agent = (id: string, extra: Partial<Session> = {}) => makeSession({
+    id, cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj', ...extra,
+  })
+  const proc = (id: string, parent: string, extra: Partial<Session> = {}) => makeSession({
+    id, cwd: '/work', adapter: 'shell', parent_session_id: parent, project_slug: 'proj', ...extra,
+  })
+
+  describe('familyActivityById (live activity counts)', () => {
+    it('buckets every descendant once, by dot precedence, kind-split for working', () => {
+      _rawSessions.value = [
+        agent('root', { status: { active: true } }),
+        agent('kid', { parent_session_id: 'root', status: { active: true } }),
+        agent('grandkid', { parent_session_id: 'kid', status: { active: true } }),
+        // Error wins over its own unread; working wins over unread.
+        agent('boom', { parent_session_id: 'root', status: { active: false, error: true }, unread: true }),
+        agent('waiting', { parent_session_id: 'root', unread: true }),
+        proc('p1', 'root', { status: { active: true } }),
+        proc('p2', 'grandkid', { status: { active: true }, unread: true }),
+      ]
+      expect(familyActivityById.value.get('root')).toEqual({
+        error: 1, unread: 1, workingAgents: 2, workingProcesses: 2,
+      })
+      // The root's own working state is never in its family's counts.
+      expect(familyActivityById.value.get('kid')).toBeUndefined()
+    })
+
+    it('ignores members the alive-only filter is hiding', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('live', { parent_session_id: 'root', unread: true }),
+        agent('dead', { parent_session_id: 'root', unread: true, alive: false, resumable: true }),
+      ]
+      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      // The line counts what the list shows: a filtered-out member's
+      // unread would point at a row that isn't there.
+      setAliveOnly(true)
+      expect(familyActivityById.value.get('root')?.unread).toBe(1)
+      setAliveOnly(false)
+    })
+
+    it('omits idle families entirely (no line, no entry)', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('kid', { parent_session_id: 'root' }),
+        proc('p', 'root'),
+      ]
+      expect(familyActivityById.value.has('root')).toBe(false)
+    })
+
+    it('ignores a dead member that is merely alive-gated', () => {
+      // status.active/error only count while alive; unread still does,
+      // matching sessionDotState's vocabulary.
+      _rawSessions.value = [
+        agent('root'),
+        agent('zombie', { parent_session_id: 'root', alive: false, status: { active: true } }),
+        agent('gone', { parent_session_id: 'root', alive: false, status: { active: false, error: true } }),
+        agent('unseen', { parent_session_id: 'root', alive: false, unread: true }),
+      ]
+      expect(familyActivityById.value.get('root')).toEqual({
+        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
+      })
+    })
+
+    it('mutes the selected member\u2019s attention but keeps its work', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
+        agent('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
+      ]
+      urlPath.value = '/proj/pi/aa'
+      expect(selectedId.value).toBe('a')
+      // Only the sibling still counts as unread.
+      expect(familyActivityById.value.get('root')?.unread).toBe(1)
+      // A selected member that is *working* still counts: you can watch
+      // it work.
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'a' ? { ...s, unread: false, status: { active: true } } : s)
+      expect(familyActivityById.value.get('root')).toEqual({
+        error: 0, unread: 1, workingAgents: 1, workingProcesses: 0,
+      })
+    })
+
+    it('drops the whole entry when the only activity is the selected member', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
+      ]
+      expect(familyActivityById.value.has('root')).toBe(true)
+      urlPath.value = '/proj/pi/aa'
+      expect(familyActivityById.value.has('root')).toBe(false)
+    })
+
+    it('gives a promoted descendant its own counts, not its old family\u2019s', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('kid', { parent_session_id: 'root', promoted_to_root: true }),
+        proc('p', 'kid', { status: { active: true } }),
+      ]
+      expect(familyActivityById.value.has('root')).toBe(false)
+      expect(familyActivityById.value.get('kid')?.workingProcesses).toBe(1)
+    })
+  })
+
+  describe('root-dot semantics', () => {
+    it('shows the root\u2019s own status, never the family roll-up', () => {
+      _rawSessions.value = [
+        agent('root', { unread: true }),
+        agent('kid', { parent_session_id: 'root', status: { active: true, error: true } }),
+      ]
+      const root = sessions.value.find(s => s.id === 'root')!
+      // The aggregate would say "error"; the row dot stays the root's own.
+      expect(familyDotById.value.get('root')).toBe('error')
+      expect(ownDotState(root, activityMap.value, selectedId.value)).toBe('unread')
+    })
+
+    it('mutes the root\u2019s own attention while the root is selected', () => {
+      _rawSessions.value = [agent('root', { slug: 'rooty', unread: true }), agent('kid', { parent_session_id: 'root' })]
+      const root = () => sessions.value.find(s => s.id === 'root')!
+      expect(ownDotState(root(), activityMap.value, selectedId.value)).toBe('unread')
+      urlPath.value = '/proj/pi/rooty'
+      expect(selectedId.value).toBe('root')
+      expect(ownDotState(root(), activityMap.value, selectedId.value)).toBe('none')
+    })
+
+    it('keeps working/active states visible while selected (only attention mutes)', () => {
+      _rawSessions.value = [agent('root', { slug: 'rooty', status: { active: true } })]
+      urlPath.value = '/proj/pi/rooty'
+      const root = sessions.value.find(s => s.id === 'root')!
+      expect(ownDotState(root, activityMap.value, selectedId.value)).toBe('working')
+    })
+  })
+
+  describe('selectedFamilyChild (selected-child projection)', () => {
+    it('is null when nothing or a root is selected', () => {
+      _rawSessions.value = [agent('root', { slug: 'rooty' }), agent('kid', { slug: 'kiddo', parent_session_id: 'root' })]
+      expect(selectedFamilyChild.value).toBeNull()
+      urlPath.value = '/proj/pi/rooty'
+      expect(selectedFamilyChild.value).toBeNull()
+    })
+
+    it('reports the child, its root row, and the ancestor trail', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty', title: 'orchestrator' }),
+        agent('kid', { slug: 'kiddo', parent_session_id: 'root', title: 'implement' }),
+        agent('grandkid', { slug: 'grandkiddo', parent_session_id: 'kid', title: 'refactor' }),
+      ]
+      urlPath.value = '/proj/pi/grandkiddo'
+      const projection = selectedFamilyChild.value!
+      expect(projection.session.id).toBe('grandkid')
+      expect(projection.rootId).toBe('root')
+      // Root first, immediate parent last — the sidebar renders the
+      // trail as a hover title on the child row.
+      expect(projection.ancestors.map(a => a.id)).toEqual(['root', 'kid'])
+    })
+
+    it('follows a selected process child too', () => {
+      _rawSessions.value = [agent('root'), proc('p', 'root', { slug: 'pp', title: 'pnpm test' })]
+      urlPath.value = '/proj/shell/pp'
+      expect(selectedFamilyChild.value?.session.id).toBe('p')
+      expect(selectedFamilyChild.value?.rootId).toBe('root')
+    })
+
+    it('is null for a promoted child (it owns a sidebar row of its own)', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty' }),
+        agent('kid', { slug: 'kiddo', parent_session_id: 'root', promoted_to_root: true }),
+      ]
+      urlPath.value = '/proj/pi/kiddo'
+      expect(selectedId.value).toBe('kid')
+      expect(selectedFamilyChild.value).toBeNull()
+      expect(familySelectedId.value).toBe('kid')
+    })
+
+    it('keeps the sidebar row selection on the root while a child is selected', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty' }),
+        agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
+      ]
+      urlPath.value = '/proj/pi/kiddo'
+      expect(familySelectedId.value).toBe('root')
+      expect(selectedFamilyChild.value?.session.id).toBe('kid')
+    })
   })
 })
 

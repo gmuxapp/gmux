@@ -168,6 +168,61 @@ export function isProcessSession(session: Session): boolean {
   return session.semantic_agent !== true
 }
 
+/** What a family is *doing right now*, counted over the descendants of
+ * one presentation root. Idle members are deliberately not counted: the
+ * sidebar line exists to surface live work, not to take a census.
+ *
+ * Every counted member lands in exactly one bucket, under the same
+ * precedence `sessionDotState` uses (error > working > unread), so the
+ * line and the family drawer can never disagree. */
+export interface FamilyActivity {
+  /** Alive members whose last turn failed. */
+  readonly error: number
+  /** Members with output you haven't seen. */
+  readonly unread: number
+  /** Semantic-agent members mid-turn ("subagents"). */
+  readonly workingAgents: number
+  /** Non-agent members running a command ("processes"). */
+  readonly workingProcesses: number
+}
+
+export const NO_FAMILY_ACTIVITY: FamilyActivity = {
+  error: 0, unread: 0, workingAgents: 0, workingProcesses: 0,
+}
+
+/** True when a family has something worth a second sidebar line. */
+export function hasFamilyActivity(activity: FamilyActivity): boolean {
+  return activity.error > 0 || activity.unread > 0
+    || activity.workingAgents > 0 || activity.workingProcesses > 0
+}
+
+/** Accessible name for the icon row, which is otherwise pure glyphs. */
+export function familyActivityLabel(activity: FamilyActivity): string {
+  const parts: string[] = []
+  // 'process' takes -es; everything else here takes -s.
+  const plural = (n: number, word: string) =>
+    `${n} ${word}${n === 1 ? '' : word.endsWith('s') ? 'es' : 's'}`
+  if (activity.error > 0) parts.push(`${plural(activity.error, 'member')} with an error`)
+  if (activity.unread > 0) parts.push(plural(activity.unread, 'unread member'))
+  if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'working subagent'))
+  if (activity.workingProcesses > 0) parts.push(plural(activity.workingProcesses, 'running process'))
+  return `Family: ${parts.join(', ')}. Open the family tree.`
+}
+
+/** Hover title for the sidebar's selected-child row: the path from the
+ * family's root row down to the selected member, e.g.
+ * `orchestrator › implement drawer › wire up the adapter`. `ancestors`
+ * is the root-first spine from `familyAncestors` (its first entry is
+ * the root itself), so a direct child collapses to `root › child`. */
+export function childTrailTitle(
+  root: Session,
+  ancestors: readonly Session[],
+  child: Session,
+): string {
+  const middle = ancestors.filter(a => a.id !== root.id).map(a => a.title)
+  return [root.title, ...middle, child.title].join(' › ')
+}
+
 /** Complete descendant tree for a presentation root. Promoted descendants are
  * intentionally excluded: each starts a new family, while provenance remains
  * available on the raw session. */

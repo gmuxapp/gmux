@@ -19,7 +19,10 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
-import { familyIndex, familyRootId, isFamilyChild } from './family'
+import {
+  familyAncestors, familyIndex, familyRootId, isFamilyChild, isProcessSession,
+  type FamilyActivity,
+} from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
 import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
 import { pushError } from './toasts'
@@ -938,6 +941,93 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
   }
   return map
 })
+
+/** Dot state for a single session's *own* status, with the same
+ *  "you're already looking at it" muting `familyDotById` applies per
+ *  member. The sidebar's Projects rows use this so a family root's
+ *  primary dot always answers "how is the root itself doing?" — the
+ *  family's own attention is carried separately by
+ *  `familyActivityById` on the family activity row. */
+export function ownDotState(
+  session: Session,
+  am: ReadonlyMap<string, 'active' | 'fading'>,
+  sel: string | null,
+): DotState {
+  const own = sessionDotState(session, am)
+  return session.id === sel && (own === 'error' || own === 'unread') ? 'none' : own
+}
+
+/** What each family is doing right now, keyed by presentation-root id.
+ *
+ * Descendants only — the root answers for itself through its own row
+ * dot. Members are tallied once each under dot precedence (error >
+ * working > unread), and the selected member's error/unread is muted
+ * exactly as it is on the dots ("nothing is unread if you're already
+ * looking at it"), so the icon row can never claim attention the dots
+ * don't. Idle members are not counted and roots with nothing happening
+ * are absent from the map: their sidebar entry stays a single row. */
+export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
+  const sel = selectedId.value
+  const onlyAlive = aliveOnly.value
+  const index = familyIndex(sessions.value)
+  const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
+  for (const s of sessions.value) {
+    if (!index.childIds.has(s.id)) continue
+    const rootId = index.rootById.get(s.id)?.id
+    if (!rootId || rootId === s.id) continue
+    // The line counts what the list would show you. With alive-only on,
+    // a dead member is filtered out of the sidebar, so reporting its
+    // unread here would point at a row that isn't there.
+    if (onlyAlive && !s.alive) continue
+    const muted = s.id === sel
+    let bucket: keyof FamilyActivity
+    if (s.alive && s.status?.error) {
+      if (muted) continue
+      bucket = 'error'
+    } else if (s.alive && s.status?.active) {
+      bucket = isProcessSession(s) ? 'workingProcesses' : 'workingAgents'
+    } else if (s.unread && !muted) {
+      bucket = 'unread'
+    } else continue
+    const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
+    entry[bucket]++
+    map.set(rootId, entry)
+  }
+  return map
+})
+
+/** The selected session projected onto its family's sidebar row.
+ *
+ * Non-null only when the selection is a family *child*: the sidebar row
+ * belongs to the root, so the row has to say which member you're
+ * actually looking at. `ancestors` is root-first, immediate parent last
+ * (empty for a direct child of the root) and lets a deep descendant
+ * render its path without a second tree. */
+export interface SelectedFamilyChild {
+  readonly session: Session
+  readonly rootId: string
+  readonly ancestors: readonly Session[]
+}
+
+export const selectedFamilyChild = computed<SelectedFamilyChild | null>(() => {
+  const sel = selectedId.value
+  if (!sel) return null
+  const index = familyIndex(sessions.value)
+  const session = index.byId.get(sel)
+  if (!session || !index.childIds.has(sel)) return null
+  const rootId = index.rootById.get(sel)?.id
+  if (!rootId || rootId === sel) return null
+  return { session, rootId, ancestors: familyAncestors(session, index) }
+})
+
+/** Whether the header's family tree panel is open.
+ *
+ * Owned here rather than in `MainHeader`'s local state because two
+ * surfaces open the same panel: its own trigger, and the sidebar's
+ * family activity row (which navigates to the root *and* opens the
+ * tree in one click). The header still owns closing it, and clears
+ * this whenever the selected session has no family. */
+export const familyPanelOpen = signal(false)
 
 // ── Home dashboard partitioning ─────────────────────────────────────────────
 //
