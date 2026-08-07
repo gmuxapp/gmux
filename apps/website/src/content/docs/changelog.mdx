@@ -38,6 +38,85 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.0 - 2026-08-07
+
+The biggest release yet, and the first with breaking changes. 2.0 makes agent status authoritative, hardens multi-machine access, moves the CLI to a stable verb-first grammar, and ships a rebuilt web app. A few things moved, so read the **[Migrating to 2.0 guide](https://gmux.app/migrating-to-2/)** before updating a fleet. Your agent can help migrate your projects and sidebar items if you'd prefer not to start with a clean slate.
+
+### Agents can now orchestrate other agents
+
+The new machine-oriented `gmux agent` surface launches, prompts, observes, and cancels subagents without scraping terminal output. `gmux agent prompt --new --no-wait` returns an addressable session immediately; `gmux wait <id>...` waits on several agents concurrently and prints source-attributed exchange reports in argument order. Stable exit codes and delivery errors distinguish completed work, agent failure, interruption, timeout, safe retry, and indeterminate delivery — enough structure to build reliable agent swarms from shell scripts and other tools. See **[Orchestrating agents](https://gmux.app/orchestrating-agents/)** for the complete workflow.
+
+### A rebuilt web app
+
+- **Home is an activity dashboard** — Waiting and Active first, then recency buckets; project and host management moved into a proper **Settings** modal.
+- **Mobile, seriously reworked** — new key row (arm-and-highlight ctrl/alt, always-present arrows and word-jump), copy/paste including images, long-press links to copy or open, and fixed reconnect storms on flaky data.
+- **Find in terminal** (Cmd/Ctrl+F), **error toasts** for failures that used to be silent, and rendering fixes (WebGL artifacts, GPU context loss, scrollbars, stale-tab auto-reload).
+
+### Verb-first CLI
+
+`gmux -- <cmd>` to run, `gmux open` for the UI, and `ls` / `attach` / `tail` / `send` / `wait` / `kill` / `edit` as verbs. The old flags and bare-command shorthand are gone, but every removed form prints its exact replacement. If you had aliases defined, you'll need to change them: `alias gm='gmux --'`; `alias pi='gmux -- pi'`
+
+### Multi-machine, locked down
+
+Being on your tailnet now only lets a machine *reach* a host; the host's token authorizes it. Autodiscovery is replaced by explicit, token-authenticated hosts (`gmux auth` → **Settings → Hosts → Connect to host**), and cookie-authed requests are same-origin enforced. Upgrading carries existing hosts forward as "Auth needed" so nothing silently disappears.
+
+### Agents report their own state
+
+pi, Claude Code, and Codex no longer have their status guessed from terminal output. A small hook in each launch lets the agent report its conversation, turn boundaries, and title directly — so working/idle, unread, and session names are exact, not inferred. Opt out with `GMUX_NO_AGENT_HOOK=1`. (Codex live status needs Codex CLI ≥ 0.135.0.)
+
+### One state store
+
+All daemon state — sessions, projects, hosts, read/unread — now lives in a single SQLite database instead of scattered JSON files (ADR 0026). State changes are transactional, so nothing resurrects or goes stale after a restart, and the API always reflects your last write. New `gmuxd state check | backup | export` commands cover integrity checks, backups (backups contain host tokens — treat them as secrets), and redacted exports for bug reports.
+
+### `gmux edit`
+
+Managed editor tabs that work as `$EDITOR` — `git commit` inside a session opens a real gmux tab and blocks until you're done. Currently opens in a terminal, UI coming in a followup release.
+
+### Under the hood
+
+The daemon↔browser protocol moved to coalesced snapshots, adapters own their conversation discovery, peering runs on shared `sseclient`/`apiclient` packages, and a terminology cleanup landed (`kind` → `adapter`, session files → conversation files). Runner sockets moved off `/tmp` so they survive logout.
+
+### Upgrade notes
+
+Upgrade every machine (and rebuild devcontainers) together — 2.0 can't peer with 1.x. The state store starts fresh: running sessions keep running, but dead-session history, sidebar projects, and connected hosts don't carry over — re-add hosts and projects after upgrading. Scripts parsing `gmux ls --json`: `kind` → `adapter`. Full details in the **[migration guide](https://gmux.app/migrating-to-2/)**.
+
+### Features
+- **(website)** new landing page ([#440](https://github.com/gmuxapp/gmux/pull/440))
+- **(adapter)** render Codex rollout exchanges for agent logs ([#450](https://github.com/gmuxapp/gmux/pull/450))
+- add root-led agent families ([#453](https://github.com/gmuxapp/gmux/pull/453))
+- **(gmuxd)** cache resume commands for session lists ([#458](https://github.com/gmuxapp/gmux/pull/458))
+- **(gmuxd)** skip indexing in autostart contenders ([#461](https://github.com/gmuxapp/gmux/pull/461))
+- **(web)** index family projections once ([#462](https://github.com/gmuxapp/gmux/pull/462))
+- **(family)** processes join the family tree ([#464](https://github.com/gmuxapp/gmux/pull/464))
+- **(web)** family drawer noise reduction and status roll-up ([#467](https://github.com/gmuxapp/gmux/pull/467))
+- add session drive-mode axis and ADR 0033 capability refusals ([#468](https://github.com/gmuxapp/gmux/pull/468))
+- **(web)** family header breadcrumbs and floating panel redesign ([#474](https://github.com/gmuxapp/gmux/pull/474))
+- session promote, demote, and reparent ([#475](https://github.com/gmuxapp/gmux/pull/475))
+- child session attention semantics ([#472](https://github.com/gmuxapp/gmux/pull/472))
+
+### Fixes
+- **(website)** refine landing copy and mobile wrapping ([#442](https://github.com/gmuxapp/gmux/pull/442))
+- **(web)** centralize routing state; keep sidebar mode stable on Back ([#436](https://github.com/gmuxapp/gmux/pull/436))
+- **(test)** read scrollback through daemon broker ([#445](https://github.com/gmuxapp/gmux/pull/445))
+- **(website)** landing polish pass (fonts, wrapping, OS detection, copy) ([#444](https://github.com/gmuxapp/gmux/pull/444))
+- **(adapter)** render Claude observational logs safely ([#448](https://github.com/gmuxapp/gmux/pull/448))
+- **(adapter)** align Claude and Codex conversation rendering ([#454](https://github.com/gmuxapp/gmux/pull/454))
+- **(snapshot)** redact git remote userinfo on session wire ([#456](https://github.com/gmuxapp/gmux/pull/456))
+- **(adapter)** re-watch removed-then-recreated directories ([#457](https://github.com/gmuxapp/gmux/pull/457))
+- **(peering)** harden reconciliation and surface adapter errors ([#459](https://github.com/gmuxapp/gmux/pull/459))
+- **(daemon)** prevent slow incumbents from triggering takeover ([#460](https://github.com/gmuxapp/gmux/pull/460))
+- **(web)** ignore collapsed terminal resize measurements ([#463](https://github.com/gmuxapp/gmux/pull/463))
+- wave-2 sweep — exit metadata, index slug retention, mock timestamps ([#470](https://github.com/gmuxapp/gmux/pull/470))
+- **(web)** prevent terminal pane collapse instead of guarding measurement ([#466](https://github.com/gmuxapp/gmux/pull/466))
+
+### Docs
+- correct post-2.0 behavior and migration guidance ([#437](https://github.com/gmuxapp/gmux/pull/437))
+- post-2.0 docs pass — review fixes, README overview, UI tour ([#446](https://github.com/gmuxapp/gmux/pull/446))
+- **(adr)** ADR 0033 drive modes & capability boundaries + ADR 0034 model resolution ([#449](https://github.com/gmuxapp/gmux/pull/449))
+- add ACP host program document consolidating plan and decisions ([#455](https://github.com/gmuxapp/gmux/pull/455))
+- record settled ACP program decisions ([#465](https://github.com/gmuxapp/gmux/pull/465))
+
+---
 ## v2.0.0 - 2026-07-31
 
 The biggest release yet, and the first with breaking changes. 2.0 makes agent status authoritative, hardens multi-machine access, moves the CLI to a stable verb-first grammar, and ships a rebuilt web app. A few things moved, so read the **[Migrating to 2.0 guide](https://gmux.app/migrating-to-2/)** before updating a fleet. Your agent can help migrate your projects and sidebar items if you'd prefer not to start with a clean slate.
