@@ -36,7 +36,8 @@ func acknowledgeSession(ctx context.Context, boot *Bootstrap, id centralstore.Se
 
 		err := discovery.AcknowledgeUnread(ctx, runtime.Endpoint, runtime.Incarnation, token)
 		current, stillLive := acknowledgementRuntime(boot.Coordinator, id)
-		sameOwner := stillLive && current.Incarnation == runtime.Incarnation && current.Endpoint == runtime.Endpoint
+		sameOwner := stillLive && current.Generation == runtime.Generation &&
+			current.Incarnation == runtime.Incarnation && current.Endpoint == runtime.Endpoint
 		if sameOwner {
 			return err
 		}
