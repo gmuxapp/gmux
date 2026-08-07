@@ -18,7 +18,7 @@ import {
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, ownDotState, selectedId,
-  familyActivityById, selectedFamilyChild, familyPanelOpen,
+  familyActivityById, familySlotById, familyPanelOpen, type FamilySlot,
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
@@ -139,6 +139,7 @@ function SessionItem({
   dropTarget,
   unavailable,
   showHostMarker,
+  meta,
   onClose,
   onClick,
   onDragStart,
@@ -156,9 +157,13 @@ function SessionItem({
   unavailable?: boolean
   /** Folder spans multiple hosts; render this session's host marker. */
   showHostMarker?: boolean
+  /** Second line inside this row (family activity). Part of the row's
+   *  own link: one target, one hover, one thing in the a11y tree. */
+  meta?: preact.ComponentChildren
   onClose?: () => void
-  /** Extra side-effects on click (e.g. close mobile sidebar). */
-  onClick?: () => void
+  /** Extra side-effects on click (e.g. close mobile sidebar). The event
+   *  lets a caller react to *where* in the row the click landed. */
+  onClick?: (event: MouseEvent) => void
   onDragStart?: () => void
   onDragOver?: () => void
   onDragEnd?: () => void
@@ -185,8 +190,8 @@ function SessionItem({
       class={cls}
       href={href}
       draggable={canDrag && !!onDragStart}
-      onClick={() => {
-        onClick?.()
+      onClick={(e) => {
+        onClick?.(e)
       }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
       onDragStart={(e) => {
@@ -209,6 +214,7 @@ function SessionItem({
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
         </div>
+        {meta}
         {duplicateOpen && (
           <div class="session-meta">
             <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
@@ -228,111 +234,101 @@ function SessionItem({
   )
 }
 
-/** The sidebar's family entry: one root row plus, indented under the
- *  root title, an optional selected-child row and an activity row.
+/** The family activity line: the second line *inside* a root row, in
+ *  the sidebar's own dot vocabulary — error, unread, working subagent,
+ *  running process — each segment dropped at zero. It belongs to the
+ *  root's link rather than being its own hit area: one target, one
+ *  hover, one entry in the a11y tree. Clicking it still opens the
+ *  family tree (see FolderGroup) because you clearly asked about the
+ *  family, but it lands you on the root either way. */
+function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
+  const label = familyActivityLabel(activity)
+  return (
+    <>
+      {/* Glyphs are decoration; the sentence below carries the meaning
+        * into the root link's accessible name. */}
+      <div class="family-activity" aria-hidden="true" title={label}>
+        <span class="family-branch">↳</span>
+        {activity.error > 0 && (
+          <span class="family-activity-seg">
+            <span class="session-dot-indicator error" />
+            {activity.error}
+          </span>
+        )}
+        {activity.unread > 0 && (
+          <span class="family-activity-seg">
+            <span class="session-dot-indicator unread" />
+            {activity.unread}
+          </span>
+        )}
+        {activity.workingAgents > 0 && (
+          <span class="family-activity-seg">
+            <span class="session-dot-indicator working" />
+            {activity.workingAgents}
+          </span>
+        )}
+        {activity.workingProcesses > 0 && (
+          <span class="family-activity-seg">
+            <span class="family-child-proc working">$</span>
+            {activity.workingProcesses}
+          </span>
+        )}
+      </div>
+      <span class="sr-only">{label}</span>
+    </>
+  )
+}
+
+/** The sidebar's family entry: a root row with one family member kept
+ *  beneath it — the member you're viewing, or the last one you did.
  *
- *  Four rules hold this together:
+ *  Three rules hold this together:
  *   - the root row's dot is the *root session's own* status, so a
  *     working child never masquerades as a working root;
- *   - the activity row speaks in the sidebar's existing dot vocabulary
- *     — error, unread, working subagent, running process — and only
- *     appears when at least one of them is non-zero. An idle family
- *     adds no line at all;
- *   - selection highlight lives on the card, not the inner rows, so a
- *     selected child reads as "this family, this member" instead of a
- *     standalone sidebar item, while the row under the pointer still
- *     highlights as the click target;
- *   - a root with no descendants renders no card at all — standalone
- *     sessions stay exactly as compact as before.
+ *   - the slot row is the way back into the family. It's a real link of
+ *     its own, but the selection highlight lives on the card, so it
+ *     reads as "this family, this member" rather than a standalone
+ *     sidebar item;
+ *   - exactly one member ever shows. A second one would grow this into
+ *     the family tree, which is a different surface.
  */
 function FamilyEntry({
   selected,
-  activity,
-  rootHref,
-  child,
-  childHref,
-  childPath,
+  slot,
+  slotHref,
+  slotTrail,
   onClick,
-  onOpenTree,
   children,
 }: {
   selected: boolean
-  activity: FamilyActivity
-  /** The root row's own href; the activity row navigates there too. */
-  rootHref: string
-  /** Selected descendant of this root, when the selection is a child. */
-  child?: Session
-  childHref?: string
-  /** Root › … › child trail, for the child row's hover title. */
-  childPath?: string
+  slot: FamilySlot
+  slotHref?: string
+  /** Root › … › member trail, for the slot row's hover title. */
+  slotTrail?: string
   onClick?: () => void
-  /** Click on the activity row: select the root and open the tree. */
-  onOpenTree?: () => void
   /** The root's own `SessionItem`. */
   children: preact.ComponentChildren
 }) {
-  const childDot = child ? ownDotState(child, activityMap.value, child.id) : 'none'
-  const showActivity = hasFamilyActivity(activity)
-  // The branch glyph marks the first sub-row only; the second aligns
-  // under it with an empty span of the same width.
-  const branch = (first: boolean) => (
-    <span class="family-sub-branch" aria-hidden="true">{first ? '↳' : ''}</span>
-  )
+  const member = slot.session
+  const dot = ownDotState(member, activityMap.value, selectedId.value)
   return (
     <div class={`session-family${selected ? ' selected' : ''}`}>
       {children}
-      {child && (
-        <a
-          class="family-sub-row family-selected-child"
-          href={childHref}
-          aria-current="page"
-          title={childPath}
-          onClick={() => onClick?.()}
-        >
-          {branch(true)}
-          {/* No reserved dot column: a quiet member spends the space on
-            * its title instead. */}
-          {isProcessSession(child)
-            ? <span class={`family-child-proc${child.alive && child.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
-            : childDot !== 'none' && <span class={`session-dot-indicator ${childDot}`} aria-hidden="true" />}
-          <span class="family-child-title">{child.title}</span>
-        </a>
-      )}
-      {showActivity && (
-        <a
-          class="family-sub-row family-activity"
-          href={rootHref}
-          aria-label={familyActivityLabel(activity)}
-          title={familyActivityLabel(activity)}
-          onClick={() => { onOpenTree?.(); onClick?.() }}
-        >
-          {branch(!child)}
-          {activity.error > 0 && (
-            <span class="family-activity-seg">
-              <span class="session-dot-indicator error" aria-hidden="true" />
-              {activity.error}
-            </span>
-          )}
-          {activity.unread > 0 && (
-            <span class="family-activity-seg">
-              <span class="session-dot-indicator unread" aria-hidden="true" />
-              {activity.unread}
-            </span>
-          )}
-          {activity.workingAgents > 0 && (
-            <span class="family-activity-seg">
-              <span class="session-dot-indicator working" aria-hidden="true" />
-              {activity.workingAgents}
-            </span>
-          )}
-          {activity.workingProcesses > 0 && (
-            <span class="family-activity-seg">
-              <span class="family-child-proc working" aria-hidden="true">$</span>
-              {activity.workingProcesses}
-            </span>
-          )}
-        </a>
-      )}
+      <a
+        class={`family-slot${slot.selected ? ' current' : ''}`}
+        href={slotHref}
+        aria-current={slot.selected ? 'page' : undefined}
+        title={slotTrail}
+        onClick={() => onClick?.()}
+      >
+        <span class="family-branch" aria-hidden="true">↳</span>
+        {/* No reserved dot column: a quiet member spends the space on
+          * its title instead. */}
+        {isProcessSession(member)
+          ? <span class={`family-child-proc${member.alive && member.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
+          : dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
+        <span class="family-slot-title">{member.title}</span>
+      </a>
     </div>
   )
 }
@@ -362,7 +358,7 @@ function FolderGroup({
   // three are O(n) maps built once per session-list identity in the
   // store, so a folder's rows stay O(rows) lookups.
   const activityById = familyActivityById.value
-  const selChild = selectedFamilyChild.value
+  const slots = familySlotById.value
   const rawSelId = selectedId.value
 
   const handleDragStart = useCallback((idx: number) => {
@@ -476,6 +472,8 @@ function FolderGroup({
       <div class="folder-sessions">
         {shown.map((s, i) => {
           const href = tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))
+          const activity = activityById.get(s.id) ?? NO_FAMILY_ACTIVITY
+          const slot = slots.get(s.id)
           const item = (
             <SessionItem
               key={s.id}
@@ -488,32 +486,33 @@ function FolderGroup({
               dotState={ownDotState(s, am, rawSelId)}
               unavailable={isSessionUnavailable(s, peerStatus)}
               showHostMarker={mixedHosts}
+              meta={hasFamilyActivity(activity) ? <FamilyActivityLine activity={activity} /> : undefined}
               dragging={drag !== null && s.id === visible[drag.from]?.id}
               dropTarget={drag !== null && drag.over === i && drag.from !== i}
               onClose={() => onCloseSession(s)}
-              onClick={onClick}
+              // Clicking the activity line asked about the family, so
+              // bring the tree up with it. Every click still lands on
+              // the root: same link, same destination.
+              onClick={(e) => {
+                if ((e.target as HTMLElement | null)?.closest('.family-activity')) familyPanelOpen.value = true
+                onClick?.()
+              }}
               onDragStart={dragDisabled ? undefined : () => handleDragStart(i)}
               onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
               onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
             />
           )
-          const activity = activityById.get(s.id) ?? NO_FAMILY_ACTIVITY
-          const child = selChild?.rootId === s.id ? selChild.session : undefined
-          // No selected child and nothing happening: a plain row. This
-          // is every standalone session and every idle family.
-          if (!child && !hasFamilyActivity(activity)) return item
-          const childPath = child ? childTrailTitle(s, selChild?.ancestors ?? [], child) : undefined
+          // No remembered/selected member: the row stands alone (its
+          // activity line, if any, is already inside it).
+          if (!slot) return item
           return (
             <FamilyEntry
               key={s.id}
               selected={selId === s.id}
-              activity={activity}
-              rootHref={href}
-              child={child}
-              childHref={child ? sessionHref(child) : undefined}
-              childPath={childPath}
+              slot={slot}
+              slotHref={sessionHref(slot.session)}
+              slotTrail={childTrailTitle(s, slot.ancestors, slot.session)}
               onClick={onClick}
-              onOpenTree={() => { familyPanelOpen.value = true }}
             >
               {item}
             </FamilyEntry>
