@@ -1622,7 +1622,7 @@ func TestPeerRefsAreRefusedNotForwarded(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/v1/sessions/abc@box/"+action, strings.NewReader(`{"prompt":"hi","mode":"prompt"}`))
 		req.Header.Set("Content-Type", "application/json")
-		handleCentralSessionAction(rec, req, nil, newSSEFanout(), nil, pm, nil, "")
+		handleCentralSessionAction(rec, req, nil, newSSEFanout(), nil, pm, nil, "", nil)
 		got := parseRecorded(t, rec)
 		if got.code != http.StatusBadRequest || got.errCode() != codeLocalOnly {
 			t.Fatalf("%s: code=%d body=%v", action, got.code, got.body)
@@ -1829,7 +1829,7 @@ func TestProductionRoutingDeliversToARealRunnerSocket(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+string(productionSessionID)+"/prompt",
 		strings.NewReader(`{"prompt":"stop that","mode":"steer","wait":false}`))
 	req.Header.Set("Content-Type", "application/json")
-	handleCentralSessionAction(rec, req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux")
+	handleCentralSessionAction(rec, req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux", nil)
 	got := parseRecorded(t, rec)
 	if got.code != http.StatusAccepted || got.data()["admission"] != admissionDelivered {
 		t.Fatalf("code=%d body=%v", got.code, got.body)
@@ -1848,7 +1848,7 @@ func TestProductionRoutingDeliversToARealRunnerSocket(t *testing.T) {
 	// And cancel over the same wiring.
 	rec = httptest.NewRecorder()
 	handleCentralSessionAction(rec, httptest.NewRequest(http.MethodPost, "/v1/sessions/"+string(productionSessionID)+"/cancel", nil),
-		boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux")
+		boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux", nil)
 	if cancelGot := parseRecorded(t, rec); cancelGot.code != http.StatusAccepted {
 		t.Fatalf("cancel code=%d body=%v", cancelGot.code, cancelGot.body)
 	}
@@ -1898,7 +1898,7 @@ func TestProductionRoutingMapsARunnersIncarnationRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			handleCentralSessionAction(rec, tc.req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux")
+			handleCentralSessionAction(rec, tc.req, boot, fanout, &wire.Converter{}, nil, dirs, "/usr/bin/gmux", nil)
 			got := parseRecorded(t, rec)
 			if got.code != http.StatusConflict || got.errCode() != codeIncarnationMismatch {
 				t.Fatalf("code=%d body=%v, want 409/%s", got.code, got.body, codeIncarnationMismatch)

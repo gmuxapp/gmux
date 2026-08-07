@@ -131,7 +131,7 @@ func (t *Table) AnyViewing(sessionID string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, c := range t.clients {
-		if c.Focused && c.SelectedSessionID == sessionID {
+		if c.Focused && c.Visibility == "visible" && c.SelectedSessionID == sessionID {
 			return true
 		}
 	}

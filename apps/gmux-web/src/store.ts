@@ -120,7 +120,7 @@ export function _setRawWorld(patch: Partial<RawWorld>) {
 //      silently drops the request can't pin a stale optimistic value.
 
 export type PendingMutation =
-  | { kind: 'mark-read'; id: string; at: number }
+  | { kind: 'mark-read'; id: string; token: string; at: number }
   | { kind: 'dismiss'; id: string; at: number }
 
 export const _pendingMutations = signal<PendingMutation[]>([])
@@ -138,7 +138,7 @@ export function applyPending(
   for (const m of pending) {
     switch (m.kind) {
       case 'mark-read':
-        sess = sess.map(s => s.id !== m.id ? s : ({
+        sess = sess.map(s => s.id !== m.id || (s.unread_token ?? '') !== m.token ? s : ({
           ...s,
           unread: false,
           status: s.status?.error ? { ...s.status, error: false } : s.status,
@@ -160,6 +160,7 @@ function isResolved(m: PendingMutation, rawSessions: Session[]): boolean {
     case 'mark-read': {
       const s = rawSessions.find(x => x.id === m.id)
       if (!s) return true
+      if ((s.unread_token ?? '') !== m.token) return true
       return !s.unread && !s.status?.error
     }
     case 'dismiss':
@@ -879,8 +880,8 @@ export const backgroundActivity = computed((): DotState => {
  * dedup.
  *
  * Family children have no folder row of their own — their presentation
- * root stands in — so each folder-visible root also counts its alive
- * unread descendants. Without this, an unread child is invisible: no
+ * root stands in — so each folder-visible root also counts its unread
+ * descendants, alive or retained-dead. Without this, an unread child is invisible: no
  * logo blink, no hamburger badge.
  *
  * Scoped to the tab's `?filter=` selectors: a tab pinned to a project
@@ -892,14 +893,14 @@ export const unreadCount = computed(() => {
   const index = familyIndex(sessions.value)
   const childUnread = new Map<string, number>()
   for (const s of sessions.value) {
-    if (s.id === sel || !s.alive || !s.unread || !index.childIds.has(s.id)) continue
+    if (s.id === sel || !s.unread || !index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
   }
   let n = 0
   for (const f of foldersFrom(filteredSessions.value)) {
     for (const s of f.sessions) {
-      if (s.id !== sel && s.alive && s.unread) n++
+      if (s.id !== sel && s.unread) n++
       n += childUnread.get(s.id) ?? 0
     }
   }
@@ -1093,6 +1094,7 @@ export function toUISession(s: ProtocolSession): Session {
     subtitle: s.subtitle ?? '',
     status: s.status ?? null,
     unread: s.unread ?? false,
+    unread_token: s.unread_token ?? '',
     resumable: s.resumable ?? false,
     conversation_file: s.conversation_file ?? undefined,
     last_output_at: s.last_output_at ?? undefined,
@@ -1253,12 +1255,37 @@ export function removeSession(id: string) {
   _rawSessions.value = _rawSessions.value.filter(s => s.id !== id)
 }
 
-export function markSessionRead(id: string) {
-  // Optimistic mark-as-read. The server's next session update overwrites
-  // raw with the authoritative state and `isResolved` clears the
-  // mutation; if the server stays silent the TTL drops it eventually.
-  addPending({ kind: 'mark-read', id, at: Date.now() })
-  fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
+export function markSessionRead(id: string, observedToken?: string) {
+  const raw = _rawSessions.peek().find(s => s.id === id)
+  const token = observedToken ?? raw?.unread_token ?? ''
+  // Optimism is token-bound too: a newer completion must immediately escape
+  // an older pending overlay even before the delayed /read returns.
+  addPending({ kind: 'mark-read', id, token, at: Date.now() })
+  fetch(`/v1/sessions/${id}/read?token=${encodeURIComponent(token)}`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
+}
+
+type ReadObservation = { id: string; token: string }
+
+export function createViewConsumptionTracker() {
+  let establishedSelection: string | null = null
+  const unreadObservation = (id: string | null, sess: Session | null): ReadObservation | null =>
+    id && sess && (sess.unread || sess.status?.error)
+      ? { id, token: sess.unread_token ?? '' }
+      : null
+  return {
+    selection(id: string | null, sess: Session | null): ReadObservation | null {
+      if (!id || !sess) {
+        establishedSelection = null
+        return null
+      }
+      if (id === establishedSelection) return null
+      establishedSelection = id
+      return unreadObservation(id, sess)
+    },
+    interaction(id: string | null, sess: Session | null): ReadObservation | null {
+      return unreadObservation(id, sess)
+    },
+  }
 }
 
 // ── Project mutations (used by manage-projects) ─────────────────────────────
@@ -1827,16 +1854,31 @@ export function initStore(): () => void {
   })
   cleanups.push(disposeUrlNorm)
 
-  // Mark-as-read effect: clear unread/error flags when viewing a session.
+  // Entering a session consumes what was already there. A completion that
+  // arrives while this same session remains open is different: unread must be
+  // observable first, and is consumed only by the next deliberate page
+  // interaction. Presence still suppresses delivery while focused+visible.
+  const viewConsumption = createViewConsumptionTracker()
   const disposeMarkRead = effect(() => {
-    const id = selectedId.value
-    const sess = selected.value
-    if (!id || !sess) return
-    if (sess.unread || sess.status?.error) {
-      markSessionRead(id)
-    }
+    const observed = viewConsumption.selection(selectedId.value, selected.value)
+    if (observed) markSessionRead(observed.id, observed.token)
   })
   cleanups.push(disposeMarkRead)
+
+  const consumeSelectedOnInteraction = () => {
+    const observed = viewConsumption.interaction(selectedId.peek(), selected.peek())
+    if (observed) markSessionRead(observed.id, observed.token)
+  }
+  if (typeof document !== 'undefined') {
+    // Capture so terminal/keybinding handlers cannot stop the interaction
+    // before it reaches this consumption boundary.
+    document.addEventListener('click', consumeSelectedOnInteraction, true)
+    document.addEventListener('keydown', consumeSelectedOnInteraction, true)
+    cleanups.push(() => {
+      document.removeEventListener('click', consumeSelectedOnInteraction, true)
+      document.removeEventListener('keydown', consumeSelectedOnInteraction, true)
+    })
+  }
 
   return () => cleanups.forEach(fn => { fn() })
 }

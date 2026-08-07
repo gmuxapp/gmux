@@ -154,6 +154,8 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 			Error       bool                    `json:"error"`
 			Interrupted bool                    `json:"interrupted"`
 			Frame       *sessioncoord.TurnFrame `json:"turn_frame"`
+			Unread      *bool                   `json:"unread"`
+			UnreadToken *string                 `json:"unread_token"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
@@ -161,6 +163,8 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.Active = &v.Active
 		f.Error = &v.Error
 		f.Interrupted = &v.Interrupted
+		f.Unread = v.Unread
+		f.UnreadToken = v.UnreadToken
 		if v.Frame != nil {
 			return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Frame: v.Frame}, true
 		}
@@ -176,6 +180,7 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 			Subtitle     *string `json:"subtitle"`
 			Slug         *string `json:"slug"`
 			Unread       *bool   `json:"unread"`
+			UnreadToken  *string `json:"unread_token"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
@@ -185,6 +190,7 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.Subtitle = v.Subtitle
 		f.Slug = v.Slug
 		f.Unread = v.Unread
+		f.UnreadToken = v.UnreadToken
 	case "conversation_file", "session_file":
 		var v struct {
 			Path string `json:"path"`
@@ -204,8 +210,10 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.TerminalSize = centralstore.NullablePatch[centralstore.TerminalSize]{Set: &v}
 	case "exit":
 		var v struct {
-			ExitCode int    `json:"exit_code"`
-			ExitedAt string `json:"exited_at"`
+			ExitCode    int     `json:"exit_code"`
+			ExitedAt    string  `json:"exited_at"`
+			Unread      *bool   `json:"unread"`
+			UnreadToken *string `json:"unread_token"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
@@ -219,6 +227,8 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		alive := false
 		f.ExitCode = centralstore.NullablePatch[int]{Set: &v.ExitCode}
 		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &exitedAt}
+		f.Unread = v.Unread
+		f.UnreadToken = v.UnreadToken
 		return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Alive: &alive}, true
 	case "turn_frame":
 		// A frame update with no status transition to ride: a mid-turn injection,
@@ -312,6 +322,7 @@ type runnerMetaWire struct {
 		Interrupted bool `json:"interrupted"`
 	} `json:"status"`
 	Unread       bool   `json:"unread"`
+	UnreadToken  string `json:"unread_token"`
 	TerminalCols uint16 `json:"terminal_cols"`
 	TerminalRows uint16 `json:"terminal_rows"`
 }
@@ -324,6 +335,7 @@ func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
 		f.Interrupted = &s.Status.Interrupted
 	}
 	f.Unread = &s.Unread
+	f.UnreadToken = &s.UnreadToken
 	// started_at is the runner's SetRunning stamp — the persisted "this session
 	// was actually observed running" proxy (legacy store.go:40). It is the
 	// only source of this fact; dropping it (as the initial cutover did) leaves

@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 func TestInheritLaunchParentOnlyForFreshUnboundLaunch(t *testing.T) {
@@ -59,12 +63,10 @@ func collectEvents(t *testing.T, ch chan session.Event, n int) []session.Event {
 
 // TestFinalizeSessionStateClosesLifetimeTurnBeforeExit pins the
 // event ordering the daemon's wait machinery depends on (ADR 0023): a
-// lifetime-turn session's exit must emit the turn-close status and the
-// unread flag BEFORE the exit event. A subscriber that resolves on the
-// first terminal signal it sees must observe the closed turn, and the
-// store's exit handling must persist the final Status — emitting the
-// exit first would resolve waits as "died" and persist a stale
-// mid-turn Active=true.
+// lifetime-turn session's exit must emit the turn-close status and unread
+// generation in ONE event before exit. A subscriber that resolves on the
+// first terminal signal it sees must observe both the closed turn and its
+// result token; the store must also persist the final Status.
 func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 	st := session.New(session.Config{ID: "1uo92yti", Adapter: "shell"})
 	st.SetStatus(&adapter.Status{Active: true}) // launch state, pre-subscription
@@ -73,46 +75,111 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 
 	finalizeSessionState(st, true, 3)
 
-	got := collectEvents(t, ch, 3)
-	wantTypes := []string{"status", "meta", "exit"}
-	for i, ev := range got {
-		if ev.Type != wantTypes[i] {
-			t.Fatalf("event %d = %q, want %q (order: %v)", i, ev.Type, wantTypes[i], got)
-		}
+	got := collectEvents(t, ch, 2)
+	if got[0].Type != "status" || got[1].Type != "exit" {
+		t.Fatalf("events = %+v, want fused status/unread before exit", got)
 	}
-	status, ok := got[0].Data.(*adapter.Status)
-	if !ok || status == nil || status.Active {
-		t.Errorf("turn-close status = %#v, want Active=false", got[0].Data)
+	raw, err := json.Marshal(got[0].Data)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !status.Error {
-		t.Error("Error = false for exit code 3, want true (failed one-shot shows the error dot)")
+	var edge struct {
+		Active      bool   `json:"active"`
+		Error       bool   `json:"error"`
+		Unread      bool   `json:"unread"`
+		UnreadToken string `json:"unread_token"`
+	}
+	if err := json.Unmarshal(raw, &edge); err != nil {
+		t.Fatal(err)
+	}
+	if edge.Active || !edge.Error || !edge.Unread || edge.UnreadToken == "" {
+		t.Fatalf("fused completion edge = %+v", edge)
 	}
 	if !st.UnreadSnapshot() {
 		t.Error("unread not set; a completed lifetime turn is 'waiting on you'")
 	}
 }
 
-// TestFinalizeSessionStateLeavesUpgradedTurnAlone: a session whose
-// turns are mark-delimited (lifetimeTurnOpen == false) must get only
-// the exit event — its last mark-derived Status is the truth. A shell
-// killed mid-command stays Active=true and resolves as "died"; one
-// that exited at its prompt already reads idle.
-func TestFinalizeSessionStateLeavesUpgradedTurnAlone(t *testing.T) {
+// TestFinalizeSessionStateOSCCommandCrashSetsUnread reproduces an OSC C
+// command-start followed by child exit before D. The mark-derived Active bit
+// remains authoritative (wait resolves as died), while process completion is
+// still universally unread and is fused into the exit event.
+func TestFinalizeSessionStateOSCCommandCrashSetsUnread(t *testing.T) {
 	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell"})
-	st.SetStatus(&adapter.Status{Active: true}) // mid-command
+	marks := adapter.NewPromptMarkTracker(func(active bool) {
+		st.SetStatus(&adapter.Status{Active: active})
+	})
+	marks.Feed([]byte("\x1b]133;C\a"))
+	if !marks.SawMark() {
+		t.Fatal("OSC C did not upgrade the terminal turn source")
+	}
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
 
-	finalizeSessionState(st, false, 0)
+	finalizeSessionState(st, false, 7)
 
 	got := collectEvents(t, ch, 1)
 	if got[0].Type != "exit" {
-		t.Fatalf("first event = %q, want exit (and nothing before it)", got[0].Type)
+		t.Fatalf("events = %+v, want fused unread exit", got)
+	}
+	data, ok := got[0].Data.(map[string]any)
+	if !ok || data["unread"] != true || data["unread_token"] == "" {
+		t.Fatalf("exit payload = %#v, want unread result token", got[0].Data)
 	}
 	if s := st.StatusSnapshot(); s == nil || !s.Active {
-		t.Errorf("Status = %+v, want the mark-derived Active=true preserved", s)
+		t.Errorf("Status = %+v, want OSC-derived Active=true preserved", s)
 	}
-	if st.UnreadSnapshot() {
-		t.Error("unread set on a mid-turn death; nothing completed")
+	if !st.UnreadSnapshot() {
+		t.Error("OSC C → crash completion did not set unread")
+	}
+}
+
+func TestRunnerOSCCommandCrashBeforeDCompletesUnread(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "runner.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "shell", SocketPath: socketPath})
+	srv, err := ptyserver.New(ptyserver.Config{
+		Command: []string{"/bin/sh", "-c", `printf '\033]133;C\a'; exit 7`},
+		Cwd:     "/tmp", Listener: ln, SocketPath: socketPath, Adapter: adapters.NewShell(), State: st,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	select {
+	case <-srv.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner child did not exit")
+	}
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner PTY did not drain")
+	}
+	if srv.LifetimeTurnOpen() {
+		t.Fatal("OSC C did not replace the lifetime turn")
+	}
+	finalizeSessionState(st, srv.LifetimeTurnOpen(), srv.ExitCode())
+	if status := st.StatusSnapshot(); status == nil || !status.Active {
+		t.Fatalf("crash status = %+v, want OSC-derived active retained", status)
+	}
+	if !st.UnreadSnapshot() || st.ExitCode == nil || *st.ExitCode != 7 {
+		t.Fatalf("crash state unread=%v exit=%v", st.UnreadSnapshot(), st.ExitCode)
+	}
+}
+
+func TestFinalizeSessionStateInterruptedExitDoesNotCreateUnread(t *testing.T) {
+	st := session.New(session.Config{ID: "10gxyrcs", Adapter: "pi"})
+	st.SetStatus(&adapter.Status{Interrupted: true})
+	ch := st.Subscribe()
+	defer st.Unsubscribe(ch)
+
+	finalizeSessionState(st, false, 130)
+	got := collectEvents(t, ch, 1)
+	if got[0].Type != "exit" || st.UnreadSnapshot() {
+		t.Fatalf("interrupted exit = events %+v unread=%v", got, st.UnreadSnapshot())
 	}
 }

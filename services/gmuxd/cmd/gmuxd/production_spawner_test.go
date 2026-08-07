@@ -29,7 +29,7 @@ func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 		{"ShellTitle", "shell_title"}, {"AdapterTitle", "adapter_title"},
 		{"Subtitle", "subtitle"}, {"Command", "command"}, {"Remotes", "remotes"},
 		{"ParentSessionID", "parent_session_id"}, {"Status", "status"}, {"Unread", "unread"},
-		{"TerminalCols", "terminal_cols"}, {"TerminalRows", "terminal_rows"},
+		{"UnreadToken", "unread_token"}, {"TerminalCols", "terminal_cols"}, {"TerminalRows", "terminal_rows"},
 	}
 	typeOf := reflect.TypeOf(runnerMetaWire{})
 	if typeOf.NumField() != len(want) {

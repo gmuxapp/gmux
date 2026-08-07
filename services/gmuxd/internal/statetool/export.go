@@ -39,6 +39,7 @@ type ExportSession struct {
 	Active                bool              `json:"active"`
 	Interrupted           bool              `json:"interrupted"`
 	Unread                bool              `json:"unread"`
+	UnreadToken           string            `json:"unread_token,omitempty"`
 	Error                 bool              `json:"error"`
 	StatusReported        bool              `json:"status_reported"`
 	CreatedAtMs           int64             `json:"created_at_ms"`
@@ -141,7 +142,7 @@ func exportSession(s centralstore.SessionExport) ExportSession {
 		CWD:     s.CWD, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: map[string]string{},
 		Slug:    s.Slug, ShellTitle: s.ShellTitle, AdapterTitle: s.AdapterTitle, Subtitle: s.Subtitle,
-		Active: s.Active, Interrupted: s.Interrupted, Unread: s.Unread, Error: s.Error, StatusReported: s.StatusReported,
+		Active: s.Active, Interrupted: s.Interrupted, Unread: s.Unread, UnreadToken: s.UnreadToken, Error: s.Error, StatusReported: s.StatusReported,
 		CreatedAtMs:    int64(s.CreatedAt),
 		StartedAtMs:    millis(s.StartedAt),
 		ExitedAtMs:     millis(s.ExitedAt),

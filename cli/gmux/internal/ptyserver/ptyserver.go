@@ -703,11 +703,16 @@ func New(cfg Config) (*Server, error) {
 	if !adapter.HookDriven(cfg.Adapter) && cfg.State != nil {
 		sawActive := false
 		s.promptMarks = adapter.NewPromptMarkTracker(func(active bool) {
-			s.state.SetStatus(&adapter.Status{Active: active})
+			if !active && sawActive {
+				// Fuse the result token with the idle edge: waits receive the
+				// observed generation without exposing unread before direct-parent
+				// notification suppression is decided.
+				s.state.SetStatusUnreadResult(&adapter.Status{Active: false})
+			} else {
+				s.state.SetStatus(&adapter.Status{Active: active})
+			}
 			if active {
 				sawActive = true
-			} else if sawActive {
-				s.state.SetUnread(true)
 			}
 		})
 	}
@@ -968,6 +973,9 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
+	// Reading is an explicit consumption boundary. Unlike WebSocket attach it
+	// carries no terminal stream; it only clears the runner-owned unread bit.
+	mux.HandleFunc("POST /read", s.handleRead)
 	// Semantic agent actions, permanently separate from raw /input (ADR 0027).
 	mux.HandleFunc("POST /prompt", s.handlePrompt)
 	mux.HandleFunc("POST /cancel", s.handleCancel)
@@ -1238,7 +1246,8 @@ func (s *Server) applyTurnEnd(ev hookEvent) {
 	}
 	// One atomic check-and-close: concurrent hook POSTs are served on
 	// independent goroutines, so a snapshot-then-set would race.
-	closed := s.state.CloseTurnFrame(session.TurnClose{
+	consumable := outcome == "completed" || outcome == "error"
+	s.state.CloseTurnFrameUnread(session.TurnClose{
 		TurnSeq:    ev.TurnSeq,
 		Outcome:    outcome,
 		Output:     ev.Output,
@@ -1248,10 +1257,7 @@ func (s *Server) applyTurnEnd(ev hookEvent) {
 		Active:      false,
 		Error:       outcome == "error",
 		Interrupted: outcome == "interrupted",
-	})
-	if closed && outcome == "completed" {
-		s.state.SetUnread(true)
-	}
+	}, consumable)
 }
 
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
@@ -1267,6 +1273,11 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.ptmx.Write(body); err != nil {
 		http.Error(w, "write pty: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Successful input means the caller consumed the previous result before
+	// supplying more work, regardless of whether these bytes start a turn.
+	if s.state != nil {
+		s.state.SetUnread(false)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1347,6 +1358,28 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 //
 // The expectation is mandatory here -- an unconditional reap is not a thing
 // this endpoint offers.
+func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
+	want := r.Header.Get(ExpectIncarnationHeader)
+	if want == "" {
+		http.Error(w, "read requires "+ExpectIncarnationHeader, http.StatusBadRequest)
+		return
+	}
+	if want != s.incarnation {
+		log.Printf("ptyserver: refusing /read meant for incarnation %s; this runner is %s", want, s.incarnation)
+		http.Error(w, "incarnation mismatch: this pathname is owned by a different runner", http.StatusConflict)
+		return
+	}
+	if !r.URL.Query().Has("token") {
+		http.Error(w, "read requires a token", http.StatusBadRequest)
+		return
+	}
+	if s.state != nil && !s.state.AcknowledgeUnread(r.URL.Query().Get("token")) {
+		http.Error(w, "unread token changed", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleReap(w http.ResponseWriter, r *http.Request) {
 	want := r.Header.Get(ExpectIncarnationHeader)
 	if want == "" {

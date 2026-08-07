@@ -48,7 +48,7 @@ func TestAnyViewing(t *testing.T) {
 	c := nilClient("a", "desktop", "granted", nowSecs())
 	tbl.Add(c)
 
-	tbl.Update("a", ClientState{Focused: true, SelectedSessionID: "1vshk4fu"})
+	tbl.Update("a", ClientState{Visibility: "visible", Focused: true, SelectedSessionID: "1vshk4fu"})
 
 	if !tbl.AnyViewing("1vshk4fu") {
 		t.Fatal("should detect client viewing 1vshk4fu")
@@ -57,8 +57,12 @@ func TestAnyViewing(t *testing.T) {
 		t.Fatal("should not detect client viewing 155mk8b7")
 	}
 
-	// Unfocused client viewing a session should not count.
-	tbl.Update("a", ClientState{Focused: false, SelectedSessionID: "1vshk4fu"})
+	// Hidden or unfocused clients should not count.
+	tbl.Update("a", ClientState{Visibility: "hidden", Focused: true, SelectedSessionID: "1vshk4fu"})
+	if tbl.AnyViewing("1vshk4fu") {
+		t.Fatal("hidden client should not count as viewing")
+	}
+	tbl.Update("a", ClientState{Visibility: "visible", Focused: false, SelectedSessionID: "1vshk4fu"})
 	if tbl.AnyViewing("1vshk4fu") {
 		t.Fatal("unfocused client should not count as viewing")
 	}

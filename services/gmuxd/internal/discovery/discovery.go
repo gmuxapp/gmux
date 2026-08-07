@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -474,8 +475,36 @@ var ErrRunnerIncarnationMismatch = errors.New("discovery: runner declined a requ
 // untouched.
 var ErrRunnerReapUnsupported = errors.New("discovery: runner does not implement conditional reaping")
 
+var ErrRunnerUnreadTokenChanged = errors.New("discovery: runner unread token changed")
+
 // expectIncarnationHeader must match ptyserver.ExpectIncarnationHeader.
 const expectIncarnationHeader = "X-Gmux-Expect-Incarnation"
+
+// AcknowledgeUnread clears the unread bit owned by one exact live runner.
+// The incarnation requirement prevents a recycled socket path from consuming
+// a replacement generation's result.
+func AcknowledgeUnread(ctx context.Context, socketPath, expectIncarnation, token string) error {
+	if expectIncarnation == "" {
+		return errors.New("discovery: runner read acknowledgement requires an expected incarnation")
+	}
+	header := http.Header{expectIncarnationHeader: []string{expectIncarnation}}
+	resp, err := runnerRequestHeaders(ctx, socketPath, http.MethodPost, "/read?token="+url.QueryEscape(token), nil, header)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode == http.StatusConflict {
+			if strings.Contains(string(msg), "unread token changed") {
+				return ErrRunnerUnreadTokenChanged
+			}
+			return ErrRunnerIncarnationMismatch
+		}
+		return fmt.Errorf("runner /read: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
 
 // SendInput POSTs body bytes to a runner's /input endpoint, delivering
 // them to the child PTY as if typed at the terminal. Backs the

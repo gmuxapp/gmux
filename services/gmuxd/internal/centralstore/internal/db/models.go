@@ -44,6 +44,7 @@ type LocalSession struct {
 	PromotedToRoot        int64
 	DriveMode             string
 	LaunchedFromSessionID sql.NullString
+	UnreadToken           string
 }
 
 type ManualPeer struct {

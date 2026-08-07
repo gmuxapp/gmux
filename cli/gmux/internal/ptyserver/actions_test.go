@@ -272,6 +272,65 @@ func promptFor(t *testing.T, srv *Server, body string) *http.Request {
 	return req
 }
 
+func TestSuccessfulRawInputConsumesUnread(t *testing.T) {
+	f := piFixture(t)
+	f.state.SetUnread(true)
+	code, _ := f.post(t, "/input", "next")
+	if code != http.StatusNoContent || f.state.UnreadSnapshot() {
+		t.Fatalf("input = %d unread=%v", code, f.state.UnreadSnapshot())
+	}
+}
+
+func TestReadEndpointConsumesUnreadForExactRunner(t *testing.T) {
+	f := piFixture(t)
+	f.state.SetUnread(true)
+	first := f.state.UnreadToken
+	code, ec := f.post(t, "/read?token="+first, "")
+	if code != http.StatusNoContent || ec != "" || f.state.UnreadSnapshot() {
+		t.Fatalf("read = %d/%s unread=%v", code, ec, f.state.UnreadSnapshot())
+	}
+	f.state.SetUnread(true)
+	second := f.state.UnreadToken
+	if first == second {
+		t.Fatal("completion reused an unread token")
+	}
+	code, _ = f.post(t, "/read?token="+first, "")
+	if code != http.StatusConflict || !f.state.UnreadSnapshot() {
+		t.Fatal("delayed first-token acknowledgement consumed the second result")
+	}
+	code, _ = f.postExpect(t, "another-runner", "/read?token="+second, "")
+	if code != http.StatusConflict || !f.state.UnreadSnapshot() {
+		t.Fatal("incarnation mismatch consumed unread")
+	}
+}
+
+func TestSuccessfulCancelPreservesUnread(t *testing.T) {
+	f := piFixture(t)
+	f.ready(t)
+	f.state.SetStatus(&adapter.Status{Active: true})
+	f.state.SetUnread(true)
+	code, ec := f.post(t, "/cancel", "")
+	if code != http.StatusNoContent || ec != "" {
+		t.Fatalf("cancel = %d/%s", code, ec)
+	}
+	if !f.state.UnreadSnapshot() {
+		t.Fatal("cancel consumed an earlier unread result")
+	}
+}
+
+func TestSuccessfulPromptConsumesUnread(t *testing.T) {
+	f := piFixture(t)
+	f.ready(t)
+	f.state.SetUnread(true)
+	code, ec := f.post(t, "/prompt", `{"prompt":"next","delivery":"now","require":"inactive"}`)
+	if code != http.StatusNoContent || ec != "" {
+		t.Fatalf("prompt = %d/%s", code, ec)
+	}
+	if f.state.UnreadSnapshot() {
+		t.Fatal("successful prompt delivery must consume the previous result")
+	}
+}
+
 // --- readiness --------------------------------------------------------------
 
 // TestReadyHookEventIsIdempotentAndUnblocksAll pins the three properties the

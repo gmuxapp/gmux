@@ -48,6 +48,7 @@ export interface Session {
   subtitle: string
   status: SessionStatus | null
   unread: boolean
+  unread_token?: string
   resumable?: boolean
   /**
    * RFC3339 timestamp of the session's most recent noteworthy state

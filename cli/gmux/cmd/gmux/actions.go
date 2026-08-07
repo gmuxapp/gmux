@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -37,6 +38,7 @@ type cliSession struct {
 	// (e.g. `gmux edit` as $EDITOR inside a session). Must round-trip
 	// through `gmux ls --json` for scripts to see the relationship.
 	ParentSessionID string   `json:"parent_session_id,omitempty"`
+	UnreadToken     string   `json:"unread_token,omitempty"`
 	SocketPath      string   `json:"socket_path,omitempty"`
 	Command         []string `json:"command,omitempty"`
 	StartedAt       string   `json:"started_at,omitempty"`
@@ -537,21 +539,57 @@ func cmdSession(cmd *command) int {
 // peer-live, and peer-dead uniformly (scrollback requests are
 // forwarded to the owning gmuxd for peer sessions).
 func cmdTail(ref string, n int) int {
+	return cmdTailTo(ref, n, os.Stdout)
+}
+
+func cmdTailTo(ref string, n int, stdout io.Writer) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
-	data, code := fetchScrollback(sess, n)
+	data, token, code := fetchScrollback(sess, n)
 	if code != 0 {
 		return code
 	}
 	data = stripANSI(data)
-	if _, err := os.Stdout.Write(data); err != nil {
+	if _, err := stdout.Write(data); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
+	if err := consumeSession(sess, token); err != nil {
+		fmt.Fprintf(os.Stderr, "gmux: tail could not mark %s read: %v\n", displayID(sess), err)
+		return 1
+	}
 	return 0
+}
+
+const unreadTokenHeader = "X-Gmux-Unread-Token"
+
+// consumeSession marks a successfully observed session result read. It routes
+// through gmuxd so local/peer and live/dead ownership use one contract.
+func consumeSession(sess cliSession, tokens ...string) error {
+	token := sess.UnreadToken
+	if len(tokens) > 0 {
+		token = tokens[0]
+	}
+	client := gmuxdClient()
+	endpoint := fmt.Sprintf("%s/v1/sessions/%s/read?token=%s", gmuxdBaseURL(), sess.ID, url.QueryEscape(token))
+	resp, err := client.Post(endpoint, "application/json", http.NoBody)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// The observed result was consumed, but a newer result won the race and
+		// correctly remains unread. That is success for this read operation.
+		if resp.StatusCode == http.StatusConflict && errorCode(body) == "result_changed" {
+			return nil
+		}
+		return fmt.Errorf("%s: %s", resp.Status, extractMessage(body))
+	}
+	return nil
 }
 
 // errorCode extracts the machine-readable code from a gmuxd error
@@ -570,38 +608,43 @@ func errorCode(body []byte) string {
 
 // fetchScrollback pulls the last n lines of a session's scrollback from
 // gmuxd's broker. Returns the raw bytes and a process exit code (0 ok).
-func fetchScrollback(sess cliSession, n int) ([]byte, int) {
+func fetchScrollback(sess cliSession, n int) ([]byte, string, int) {
 	client := gmuxdClient()
 	url := fmt.Sprintf("%s/v1/sessions/%s/scrollback?tail=%d", gmuxdBaseURL(), sess.ID, n)
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return nil, 1
+		return nil, "", 1
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusNotFound {
 			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
-			return nil, 1
+			return nil, "", 1
 		}
 		if resp.StatusCode == http.StatusUnprocessableEntity {
 			// A capability refusal (e.g. an ACP session has no terminal
 			// screen, ADR 0033) arrives with a self-contained message.
 			if msg := extractMessage(body); msg != "" {
 				fmt.Fprintf(os.Stderr, "gmux: %s\n", msg)
-				return nil, 1
+				return nil, "", 1
 			}
 		}
 		fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
-		return nil, 1
+		return nil, "", 1
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return nil, 1
+		return nil, "", 1
 	}
-	return data, 0
+	values := resp.Header.Values(unreadTokenHeader)
+	if len(values) == 0 {
+		fmt.Fprintln(os.Stderr, "gmux: daemon response has no unread token; restart gmuxd to resolve version skew")
+		return nil, "", 1
+	}
+	return data, values[0], 0
 }
 
 // cmdSend implements `gmux send <id> [text] [Key...]`.

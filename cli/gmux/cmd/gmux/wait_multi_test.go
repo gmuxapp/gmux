@@ -77,6 +77,45 @@ func TestWaitSingleKeepsHeaderlessOutput(t *testing.T) {
 	if code != 0 || strings.Contains(stdout, "=== ") || !strings.Contains(stdout, "[AGENT]: done") {
 		t.Fatalf("exit=%d stdout=%q", code, stdout)
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	read := false
+	for _, req := range d.requests {
+		read = read || strings.HasSuffix(req.path, "/read")
+	}
+	if !read {
+		t.Fatal("successful wait did not acknowledge unread")
+	}
+}
+
+func TestWaitDelayedAcknowledgementCannotClearNewerCompletion(t *testing.T) {
+	d := startStubDaemon(t, waitTestSessions()[:1])
+	currentToken := "turn-1"
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/wait") {
+			writeEnvelope(w, http.StatusOK, map[string]any{
+				"reason": "idle", "outcome": waitOutcomeCompleted,
+				"output": "turn one", "unread_token": "turn-1",
+			})
+			// Deterministic interleaving: N+1 completes after wait observed N but
+			// before its acknowledgement reaches /read.
+			currentToken = "turn-2"
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/read") {
+			if r.URL.Query().Get("token") == "turn-1" && currentToken == "turn-2" {
+				writeErrEnvelope(w, http.StatusConflict, "result_changed", "newer result")
+				return
+			}
+			t.Fatalf("unexpected read schedule: %s current token=%s", r.URL.String(), currentToken)
+		}
+	})
+	if code := cmdWait([]string{"alpha"}, 0, "", "", false); code != waitExitOK {
+		t.Fatalf("wait exit=%d, want observed turn success with newer result retained", code)
+	}
+	if currentToken != "turn-2" {
+		t.Fatal("delayed wait acknowledgement cleared the newer token")
+	}
 }
 
 func TestWaitMultiExitAggregation(t *testing.T) {
@@ -183,6 +222,13 @@ func TestWaitMultiReceivesAuthoritativeTimeoutWithinWholeDeadline(t *testing.T) 
 	}
 	if strings.Contains(stdout, "session state unknown") {
 		t.Fatalf("authoritative timeout report was replaced by local fallback: %q", stdout)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, req := range d.requests {
+		if strings.HasSuffix(req.path, "/read") {
+			t.Fatalf("timed-out wait consumed unread: %+v", d.requests)
+		}
 	}
 }
 

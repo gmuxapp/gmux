@@ -35,9 +35,9 @@ func TestRunnerEventProjectionMetaParsesRunnerWireShape(t *testing.T) {
 	}
 
 	// unread-only meta events (state.go SetUnread) keep working.
-	ev, ok = runnerEventProjection("meta", []byte(`{"unread":true}`))
-	if !ok || ev.Facts.Unread == nil || !*ev.Facts.Unread {
-		t.Fatal("unread meta event not parsed")
+	ev, ok = runnerEventProjection("meta", []byte(`{"unread":true,"unread_token":"result-1"}`))
+	if !ok || ev.Facts.Unread == nil || !*ev.Facts.Unread || ev.Facts.UnreadToken == nil || *ev.Facts.UnreadToken != "result-1" {
+		t.Fatal("unread meta event/token not parsed")
 	}
 }
 
@@ -49,15 +49,24 @@ func TestRunnerEventProjectionMetaParsesRunnerWireShape(t *testing.T) {
 // every wait result-free — "completed, exit 0, no answer", the phenotype this
 // stack exists to kill — while every test that stamps frames by hand still
 // passed, so the wire shape is pinned here.
+func TestRunnerEventProjectionExitCarriesUnreadGeneration(t *testing.T) {
+	ev, ok := runnerEventProjection("exit", []byte(`{"exit_code":7,"unread":true,"unread_token":"result-8"}`))
+	if !ok || ev.Alive == nil || *ev.Alive || ev.Facts.Unread == nil || !*ev.Facts.Unread ||
+		ev.Facts.UnreadToken == nil || *ev.Facts.UnreadToken != "result-8" {
+		t.Fatalf("exit/unread facts not parsed atomically: %+v ok=%v", ev, ok)
+	}
+}
+
 func TestRunnerEventProjectionStatusCarriesTheTurnFrame(t *testing.T) {
-	raw := []byte(`{"active":false,"error":false,"interrupted":false,` +
+	raw := []byte(`{"active":false,"error":false,"interrupted":false,"unread":true,"unread_token":"result-7",` +
 		`"turn_frame":{"seq":12,"last":{"turn_seq":7,"outcome":"completed","trigger":"old ask","output":"4","truncated":true}}}`)
 	ev, ok := runnerEventProjection("status", raw)
 	if !ok {
 		t.Fatal("coupled status event rejected")
 	}
-	if ev.Facts.Active == nil || *ev.Facts.Active {
-		t.Fatalf("status facts not parsed: %+v", ev.Facts)
+	if ev.Facts.Active == nil || *ev.Facts.Active || ev.Facts.Unread == nil || !*ev.Facts.Unread ||
+		ev.Facts.UnreadToken == nil || *ev.Facts.UnreadToken != "result-7" {
+		t.Fatalf("status/unread facts not parsed atomically: %+v", ev.Facts)
 	}
 	if ev.FrameOnly {
 		t.Fatal("a turn edge must be applied durably, not treated as frame-only")

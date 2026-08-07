@@ -103,7 +103,7 @@ export function usePresence(): UsePresenceResult {
   useEffect(() => {
     const sel = selectedId.value
     const count = sessions.value.filter(s =>
-      s.id !== sel && s.alive && s.unread
+      s.id !== sel && s.unread
     ).length
     document.title = count > 0 ? `(${count}) gmux` : 'gmux'
   }, [sessions.value, selectedId.value])

@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"nhooyr.io/websocket"
@@ -38,15 +37,14 @@ func defaultNotifyConfig() notifyConfig {
 }
 
 type notifySessionSnapshot struct {
-	Active        bool
-	Interrupted   bool
-	Unread        bool
-	Alive         bool
-	Title         string
-	Start         string
-	ParentID      string
-	Promoted      bool
-	SemanticAgent bool
+	Active      bool
+	Interrupted bool
+	Unread      bool
+	UnreadToken string
+	Alive       bool
+	Title       string
+	Start       string
+	ParentID    string
 }
 
 type pendingCentralNotif struct {
@@ -118,15 +116,14 @@ func (r *centralNotifyRouter) Run(ctx context.Context, seed []sessioncoord.Outco
 func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 	snap := notifySessionSnapshot{Alive: o.Alive}
 	if o.Session != nil {
-		snap.Active = o.Session.StatusReported && o.Session.Active
+		snap.Active = o.Alive && o.Session.StatusReported && o.Session.Active
 		snap.Interrupted = o.Session.StatusReported && o.Session.Interrupted
 		snap.Unread = o.Session.Unread
+		snap.UnreadToken = o.Session.UnreadToken
 		snap.Title = o.Session.Title
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
-		snap.Promoted = o.Session.PromotedToRoot
-		snap.SemanticAgent = semanticAgentAdapter(adapters.FindByAdapter(o.Session.Adapter))
-		if o.Session.ParentSessionID != nil {
-			snap.ParentID = string(*o.Session.ParentSessionID)
+		if o.Session.LaunchedFromSessionID != nil {
+			snap.ParentID = string(*o.Session.LaunchedFromSessionID)
 		}
 	}
 	return snap
@@ -158,9 +155,9 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 		delete(r.suppressedInactive, id)
 	} else if transitionedInactive {
 		delete(r.suppressedInactive, id)
-		if !cur.Promoted && cur.ParentID != "" {
+		if cur.ParentID != "" {
 			parent, parentExists := r.prevState[cur.ParentID]
-			r.suppressedInactive[id] = parentExists && parent.SemanticAgent && parent.Active
+			r.suppressedInactive[id] = parentExists && parent.Active
 		}
 	}
 	// Runner facts can arrive in separate committed outcomes (for example the
@@ -171,6 +168,12 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	r.mu.Unlock()
 	if !existed {
 		return
+	}
+	// Consumption is also a cancellation boundary. Serialize it through the
+	// same delivery lock as suppression so an unread-clear cannot lose to a
+	// timer already moving pending attention into active delivery.
+	if prev.Unread && !cur.Unread {
+		r.CancelForSession(id)
 	}
 	if suppress {
 		// Remove attention already pending for this child as well as the
@@ -183,7 +186,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start))
 	}
-	if !prev.Unread && cur.Unread {
+	if cur.Unread && (!prev.Unread || prev.UnreadToken != cur.UnreadToken) {
 		r.scheduleNotification(id, "unread", cur.Title, "New output")
 	}
 }
@@ -217,7 +220,7 @@ func (r *centralNotifyRouter) genID() string {
 }
 
 func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, body string) {
-	if r.presence.AnyViewing(sessionID) || r.presence.AnyFocused() {
+	if r.presence.AnyViewing(sessionID) {
 		return
 	}
 	r.mu.Lock()
@@ -262,7 +265,7 @@ func (r *centralNotifyRouter) firePending(sessionID string) {
 	if r.afterPendingDequeue != nil {
 		r.afterPendingDequeue()
 	}
-	if r.presence.AnyFocused() || r.presence.AnyViewing(sessionID) {
+	if r.presence.AnyViewing(sessionID) {
 		return
 	}
 	target := r.presence.BestNotifyTarget(r.config.IdleThreshold)

@@ -25,15 +25,72 @@ func TestTailIsAlwaysRaw(t *testing.T) {
 	if stdout != "$ ls\nfile.txt\n" {
 		t.Errorf("stdout = %q", stdout)
 	}
-	req := d.lastRequest(t)
-	if req.path != "/v1/sessions/1va8lvdv/scrollback" || req.query != "tail=42" {
-		t.Fatalf("request = %s?%s, want the scrollback read with tail=42", req.path, req.query)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var sawScrollback, sawRead bool
+	for _, r := range d.requests {
+		if r.path == "/v1/sessions/1va8lvdv/scrollback" && r.query == "tail=42" {
+			sawScrollback = true
+		}
+		if r.path == "/v1/sessions/1va8lvdv/read" {
+			sawRead = true
+		}
+		if strings.Contains(r.path, "conversation") {
+			t.Errorf("tail must never read the conversation, got %s", r.path)
+		}
+	}
+	if !sawScrollback || !sawRead {
+		t.Fatalf("requests = %+v, want scrollback followed by read acknowledgement", d.requests)
+	}
+}
+
+func TestTailDelayedAcknowledgementCannotClearNewerCompletion(t *testing.T) {
+	sessions := localSession()
+	sessions[0].UnreadToken = "turn-1"
+	d := startStubDaemon(t, sessions)
+	currentToken := "turn-1"
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/scrollback"):
+			_, _ = w.Write([]byte("turn one\n"))
+			// N+1 completes after tail observed N's bytes and token but before
+			// the command sends its acknowledgement.
+			currentToken = "turn-2"
+		case strings.HasSuffix(r.URL.Path, "/read"):
+			if r.URL.Query().Get("token") != "turn-1" || currentToken != "turn-2" {
+				t.Fatalf("unexpected read schedule: %s current token=%s", r.URL.String(), currentToken)
+			}
+			writeErrEnvelope(w, http.StatusConflict, "result_changed", "newer result")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	var out strings.Builder
+	if code := cmdTailTo("1va8lvdv", 10, &out); code != 0 || out.String() != "turn one\n" {
+		t.Fatalf("exit=%d output=%q", code, out.String())
+	}
+	if currentToken != "turn-2" {
+		t.Fatal("delayed tail acknowledgement cleared the newer result")
+	}
+}
+
+func TestTailOutputFailurePreservesUnread(t *testing.T) {
+	d := startStubDaemon(t, localSession())
+	d.on(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/scrollback") {
+			_, _ = w.Write([]byte("result\n"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	if code := cmdTailTo("1va8lvdv", 10, failingOutputWriter{}); code == 0 {
+		t.Fatal("tail succeeded despite output failure")
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, r := range d.requests {
-		if strings.Contains(r.path, "conversation") {
-			t.Errorf("tail must never read the conversation, got %s", r.path)
+	for _, req := range d.requests {
+		if strings.HasSuffix(req.path, "/read") {
+			t.Fatalf("failed tail consumed unread: %+v", d.requests)
 		}
 	}
 }

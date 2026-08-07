@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
-	"nhooyr.io/websocket"
 )
 
 func TestProductionContainerE2E(t *testing.T) {
@@ -259,6 +259,11 @@ func post(t *testing.T, e *prodEnv, path string, body string) {
 	t.Helper()
 	request(t, e, http.MethodPost, path, body)
 }
+func consumeResult(t *testing.T, e *prodEnv, id string) {
+	t.Helper()
+	token, _ := session(t, e, id)["unread_token"].(string)
+	post(t, e, "/v1/sessions/"+id+"/read?token="+url.QueryEscape(token), "")
+}
 func request(t *testing.T, e *prodEnv, method, path, body string) []byte {
 	t.Helper()
 	req, _ := http.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
@@ -367,8 +372,10 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 	d := startDaemon(t, bin, e)
 	r.exit(true)
 	waitFor(t, "dead unread", func() bool { s := session(t, e, r.id); return s["alive"] == false && s["unread"] == true })
-	selectDeadSession(t, e, r.id)
-	waitFor(t, "presence read ack", func() bool { return session(t, e, r.id)["unread"] == false })
+	// Selection/focus reports suppress delivery only. The web interaction
+	// boundary explicitly acknowledges through the same route as CLI readers.
+	consumeResult(t, e, r.id)
+	waitFor(t, "web interaction read ack", func() bool { return session(t, e, r.id)["unread"] == false })
 	stopDaemon(t, d, e)
 	r.close()
 	d = startDaemon(t, bin, e)
@@ -387,23 +394,6 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 		t.Fatalf("sqlite row=%+v ok=%v err=%v", row, ok, err)
 	}
 }
-func selectDeadSession(t *testing.T, e *prodEnv, id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws://localhost/v1/presence", &websocket.DialOptions{HTTPClient: unixipc.Client(e.socket())})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if err = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"client-hello","device_type":"desktop"}`)); err != nil {
-		t.Fatal(err)
-	}
-	msg := fmt.Sprintf(`{"type":"client-state","visibility":"visible","focused":true,"selected_session_id":%q,"last_interaction":1}`, id)
-	if err = conn.Write(ctx, websocket.MessageText, []byte(msg)); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func assertInitialSSE(t *testing.T, e *prodEnv, id string, unread bool) {
 	req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
 	ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
@@ -894,7 +884,7 @@ func scenarioAdminStress(t *testing.T, bin string) {
 		waitFor(t, "stress runner live", func() bool { return session(t, e, r.id)["alive"] == true })
 		r.exit(true)
 		waitFor(t, "stress runner dead", func() bool { return session(t, e, r.id)["alive"] == false })
-		post(t, e, "/v1/sessions/"+r.id+"/read", "")
+		consumeResult(t, e, r.id)
 		waitFor(t, "stress read durable", func() bool { return session(t, e, r.id)["unread"] == false })
 		r.close()
 		if i%2 == 0 {

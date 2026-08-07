@@ -47,6 +47,22 @@ func TestAcknowledgeDeadSessionClearsUnreadAndErrorOnly(t *testing.T) {
 	}
 }
 
+func TestAcknowledgeDeadSessionTokenRejectsDelayedResult(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	row, _, err := s.InsertSession(ctx, NewSession{ID: "dead", Adapter: "shell", Command: []string{"sh"}, CWD: "/", Remotes: map[string]string{}, Unread: true, UnreadToken: "result-2", CreatedAt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AcknowledgeDeadSessionToken(ctx, row.ID, row.Version, "result-1"); !errors.Is(err, ErrUnreadTokenChanged) {
+		t.Fatalf("delayed acknowledgement error=%v", err)
+	}
+	got, ok, err := s.Session(ctx, row.ID)
+	if err != nil || !ok || !got.Unread || got.UnreadToken != "result-2" {
+		t.Fatalf("newer result was consumed: %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
 func TestAcknowledgeDeadSessionSingleIndicatorAndNoop(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

@@ -25,6 +25,7 @@ const (
 	modeSend                   // gmux send <id> <text> [keys...]
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                   // gmux wait <id>...
+	modeRead                   // gmux read <id>... | --family <root-id>
 	modeAgent                  // gmux agent prompt|cancel|output <id>
 	modeSession                // gmux session promote|demote|reparent <id>
 	modeEdit                   // gmux edit [file]
@@ -51,8 +52,10 @@ type command struct {
 	initialRows int      // internal: pre-size PTY height
 
 	// session-addressing verbs (attach/tail/kill/send/send-keys/wait)
-	ref      string   // session reference; may carry an @peer suffix
-	waitRefs []string // wait accepts one or more references, in argv order
+	ref       string   // session reference; may carry an @peer suffix
+	waitRefs  []string // wait accepts one or more references, in argv order
+	readRefs  []string // read accepts one or more references, in argv order
+	familyRef string   // read --family root
 
 	// ls
 	all  bool
@@ -105,8 +108,9 @@ type command struct {
 	codexHookEvent string // the codex hook event name (SessionStart, ...)
 }
 
-// reservedVerbs is the closed top-level namespace (ADR 0009). Growth
-// happens under namespace groups, not new top-level verbs. Used to give
+// reservedVerbs is the top-level namespace from ADR 0009 plus the explicit
+// `read` consumption/remediation command. Other growth happens under namespace
+// groups, not new top-level verbs. Used to give
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
 //
@@ -114,7 +118,7 @@ type command struct {
 // under `gmux <group> <verb>` without reopening the frozen action list.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "agent", "session", "edit", "daemon", "auth", "remote", "version", "help",
+	"wait", "read", "agent", "session", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -212,6 +216,8 @@ func parseCLI(args []string) (*command, error) {
 		return dispatchVerb("send-keys", rest, parseSendKeys)
 	case "wait":
 		return dispatchVerb("wait", rest, parseWait)
+	case "read":
+		return dispatchVerb("read", rest, parseRead)
 	case "agent":
 		c, err := parseAgent(rest)
 		if err != nil {
@@ -376,6 +382,24 @@ func parseLs(args []string) (*command, error) {
 	if len(fs.Args()) > 0 {
 		return nil, errors.New("ls takes no positional arguments")
 	}
+	return c, nil
+}
+
+func parseRead(args []string) (*command, error) {
+	c := &command{mode: modeRead}
+	fs := newFlagSet("read")
+	fs.StringVar(&c.familyRef, "family", "", "mark a root and all descendants read")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		return nil, err
+	}
+	if c.familyRef != "" && len(pos) > 0 {
+		return nil, errors.New("read accepts either session ids or --family <root-id>, not both")
+	}
+	if c.familyRef == "" && len(pos) == 0 {
+		return nil, errors.New("read requires one or more session ids, or --family <root-id>")
+	}
+	c.readRefs = pos
 	return c, nil
 }
 

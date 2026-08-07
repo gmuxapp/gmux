@@ -64,6 +64,7 @@ type RunnerFacts struct {
 	Command                                                                       *[]string
 	Remotes                                                                       *map[string]string
 	Active, Unread, Error, Interrupted                                            *bool
+	UnreadToken                                                                   *string
 	// ResetStatus starts a new conversation binding without inventing an idle
 	// status report for it. It clears all prior outcome facts atomically.
 	ResetStatus         bool
@@ -226,7 +227,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			ID: string(current.ID), Adapter: current.Adapter, DriveMode: current.DriveMode, ConversationRef: nullString(current.ConversationRef),
 			CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 			Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-			Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
+			Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), UnreadToken: current.UnreadToken, HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
 			StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt), LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode),
 			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
 			ParentSessionID: func() sql.NullString {
@@ -304,7 +305,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			n, updateErr := q.UpdateRunnerRegistration(ctx, db.UpdateRunnerRegistrationParams{
 				ConversationRef: nullString(current.ConversationRef), CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 				Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-				Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
+				Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), UnreadToken: current.UnreadToken, HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
 				LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode), TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
 				ID: string(reg.ID), RowVersion: int64(before.Version),
 			})
@@ -529,6 +530,9 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 	}
 	if f.Unread != nil {
 		v.Unread = *f.Unread
+	}
+	if f.UnreadToken != nil {
+		v.UnreadToken = *f.UnreadToken
 	}
 	if f.Error != nil {
 		v.Error = *f.Error

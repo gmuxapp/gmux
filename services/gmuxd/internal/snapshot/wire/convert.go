@@ -115,6 +115,7 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Title:           c.resolveTitle(v),
 		Subtitle:        v.Subtitle,
 		Unread:          v.Unread,
+		UnreadToken:     v.UnreadToken,
 		Slug:            v.Slug,
 		ConversationRef: v.ConversationRef,
 		LastOutputAt:    fmtMillisPtr(v.LastActivityAt),

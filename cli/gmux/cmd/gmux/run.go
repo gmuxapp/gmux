@@ -706,12 +706,12 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // finalizeSessionState records the child's exit on the session state,
 // closing the lifetime turn first when it is still open. For sessions
 // that never emitted prompt marks the exit IS the turn end (`gmux --
-// pnpm test`): emit idle (+error on a non-zero exit code) and flag
-// unread, so waits resolve as "idle" and the sidebar shows "waiting on
-// you" — exactly like an agent finishing its turn. Sessions upgraded
-// to prompt-cycle turns keep their last mark-derived state: exiting at
-// the prompt already reads idle, dying mid-command stays active and
-// resolves as "died" (ADR 0023).
+// pnpm test`): emit idle (+error on a non-zero exit code), then unread.
+// Sessions upgraded to OSC prompt-cycle turns keep their mark-derived
+// status, but exit still records unread: C followed by a crash before D
+// is a completed terminal process result even though status stays active
+// and waits resolve as "died" (ADR 0023). An explicitly interrupted
+// semantic turn is the exception: exit preserves its existing unread bit.
 //
 // The ordering is load-bearing: the turn-close status and unread
 // events must be emitted before the exit event, so a subscriber (the
@@ -719,11 +719,21 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // it sees observes the closed turn, and the store's exit handling
 // persists the final Status rather than a stale mid-turn one.
 func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode int) {
-	if lifetimeTurnOpen {
-		state.SetStatus(&adapter.Status{Active: false, Error: exitCode != 0})
-		state.SetUnread(true)
+	status := state.StatusSnapshot()
+	if status != nil && status.Interrupted {
+		state.SetExited(exitCode)
+		return
 	}
-	state.SetExited(exitCode)
+	if lifetimeTurnOpen {
+		// Fuse the token with the idle edge that can resolve a waiter and decide
+		// direct-parent suppression, then publish the plain exit.
+		state.SetStatusUnreadResult(&adapter.Status{Active: false, Error: exitCode != 0})
+		state.SetExited(exitCode)
+		return
+	}
+	// Hook/OSC sessions may die while still active. Fuse unread with exit so
+	// completion suppression is committed before attention can be delivered.
+	state.SetExitedUnreadResult(exitCode)
 }
 
 // sessionEditorEnv returns EDITOR/VISUAL entries pointing at `gmux
