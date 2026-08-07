@@ -14,6 +14,7 @@ import {
   sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
   sidebarActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
   familyActivityById, selectedFamilyChild, ownDotState,
+  familySlotById, recentFamilyChildren, rememberFamilyChild,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -1455,6 +1456,154 @@ describe('sidebar family entry derivations', () => {
     })
   })
 
+  describe('familySlotById (the one member a family entry shows)', () => {
+    beforeEach(() => { recentFamilyChildren.value = [] })
+
+    const slot = (rootId: string) => familySlotById.value.get(rootId)
+
+    it('is empty for a family you have never descended into', () => {
+      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
+      expect(familySlotById.value.size).toBe(0)
+    })
+
+    it('shows the selected member, marked as current', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty' }),
+        agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
+      ]
+      urlPath.value = '/proj/pi/kiddo'
+      expect(slot('root')).toMatchObject({ selected: true })
+      expect(slot('root')?.session.id).toBe('kid')
+    })
+
+    it('keeps the member as a way back after you navigate to the root', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty' }),
+        agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
+      ]
+      rememberFamilyChild('kid')
+      urlPath.value = '/proj/pi/rooty'
+      expect(slot('root')?.session.id).toBe('kid')
+      // No longer current: it is a memory, not the selection.
+      expect(slot('root')?.selected).toBe(false)
+    })
+
+    it('keeps it after you leave the family entirely', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('kid', { parent_session_id: 'root' }),
+        agent('elsewhere', { slug: 'far' }),
+      ]
+      rememberFamilyChild('kid')
+      urlPath.value = '/proj/pi/far'
+      expect(slot('root')?.session.id).toBe('kid')
+    })
+
+    it('gives the slot to the selection over an older visit', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('a', { slug: 'aa', parent_session_id: 'root' }),
+        agent('b', { slug: 'bb', parent_session_id: 'root' }),
+      ]
+      rememberFamilyChild('a')
+      urlPath.value = '/proj/pi/bb'
+      expect(slot('root')?.session.id).toBe('b')
+      expect(slot('root')?.selected).toBe(true)
+    })
+
+    it('keeps only the most recent visit per family (one slot)', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('a', { parent_session_id: 'root' }),
+        agent('b', { parent_session_id: 'root' }),
+      ]
+      rememberFamilyChild('a')
+      rememberFamilyChild('b')
+      expect(familySlotById.value.size).toBe(1)
+      expect(slot('root')?.session.id).toBe('b')
+    })
+
+    it('drops a member that left the family: promoted or reparented', () => {
+      _rawSessions.value = [
+        agent('root'),
+        agent('kid', { parent_session_id: 'root' }),
+        agent('other'),
+      ]
+      rememberFamilyChild('kid')
+      expect(slot('root')?.session.id).toBe('kid')
+      // Promotion gives it its own sidebar row; a duplicate would lie.
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, promoted_to_root: true } : s)
+      expect(familySlotById.value.size).toBe(0)
+      // Reparenting moves the memory to the new family, no re-keying.
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, promoted_to_root: false, parent_session_id: 'other' } : s)
+      expect(slot('other')?.session.id).toBe('kid')
+      expect(familySlotById.value.has('root')).toBe(false)
+    })
+
+    it('drops a member that is gone, or a corpse you cannot reopen', () => {
+      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
+      rememberFamilyChild('kid')
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, alive: false, resumable: false } : s)
+      expect(familySlotById.value.size).toBe(0)
+      // Resumable corpses stay: they are still a way back.
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, resumable: true } : s)
+      expect(slot('root')?.session.id).toBe('kid')
+      // …unless the alive-only toggle is hiding dead sessions.
+      setAliveOnly(true)
+      expect(familySlotById.value.size).toBe(0)
+      setAliveOnly(false)
+    })
+
+    it('never shows a member that vanished from the snapshot', () => {
+      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
+      rememberFamilyChild('kid')
+      _rawSessions.value = [agent('root')]
+      expect(familySlotById.value.size).toBe(0)
+      // The id is still remembered; only its resolution failed. If the
+      // session comes back (peer reconnect), so does the row.
+      expect(recentFamilyChildren.value).toEqual(['kid'])
+    })
+
+    it('remembers a bounded number of families, most recent first', () => {
+      const sessions: Session[] = []
+      for (let i = 0; i < 7; i++) {
+        sessions.push(agent(`root${i}`), agent(`kid${i}`, { parent_session_id: `root${i}` }))
+      }
+      _rawSessions.value = sessions
+      for (let i = 0; i < 7; i++) rememberFamilyChild(`kid${i}`)
+      // Cap is 5; the two oldest families lost their memory.
+      expect(recentFamilyChildren.value).toEqual(['kid6', 'kid5', 'kid4', 'kid3', 'kid2'])
+      expect(familySlotById.value.size).toBe(5)
+      expect(familySlotById.value.has('root0')).toBe(false)
+    })
+
+    it('keeps one member per family, so one family cannot evict the rest', () => {
+      _rawSessions.value = [
+        agent('rootA'), agent('rootB'),
+        ...['a0', 'a1', 'a2', 'a3', 'a4'].map(id => agent(id, { parent_session_id: 'rootA' })),
+        agent('b0', { parent_session_id: 'rootB' }),
+      ]
+      rememberFamilyChild('b0')
+      for (const id of ['a0', 'a1', 'a2', 'a3', 'a4']) rememberFamilyChild(id)
+      // Family A occupies exactly one entry however many members you
+      // bounce through, so B's way back survives.
+      expect(recentFamilyChildren.value).toEqual(['a4', 'b0'])
+      expect(slot('rootA')?.session.id).toBe('a4')
+      expect(slot('rootB')?.session.id).toBe('b0')
+    })
+
+    it('is idempotent for the member already at the head', () => {
+      rememberFamilyChild('a')
+      const first = recentFamilyChildren.value
+      rememberFamilyChild('a')
+      expect(recentFamilyChildren.value).toBe(first)
+    })
+  })
+
   describe('selectedFamilyChild (selected-child projection)', () => {
     it('is null when nothing or a root is selected', () => {
       _rawSessions.value = [agent('root', { slug: 'rooty' }), agent('kid', { slug: 'kiddo', parent_session_id: 'root' })]
@@ -1680,6 +1829,28 @@ describe('sidebar-mode repair effect (initStore)', () => {
     cleanup = null
     setNavigate(() => {/* no-op */})
     vi.unstubAllGlobals()
+  })
+
+  it('records the family member you are viewing (the recorder effect runs)', () => {
+    // Every other MRU test calls rememberFamilyChild directly, which
+    // proves the list but not the wiring. This one pins the wiring: an
+    // effect registered by initStore, above the mock-mode early return
+    // that would otherwise leave it dead in ?mock previews.
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    _rawSessions.value = [
+      makeSession({ id: 'root', slug: 'rooty', cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'kid', slug: 'kiddo', cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj', parent_session_id: 'root' }),
+    ]
+    recentFamilyChildren.value = []
+    // A resolvable selection wakes the mark-as-read effect, which reads
+    // `selected` — and that computed pokes `window` for debugging.
+    vi.stubGlobal('window', {})
+    cleanup = initStore()
+    urlPath.value = '/proj/pi/kiddo'
+    expect(selectedFamilyChild.value?.session.id).toBe('kid')
+    expect(recentFamilyChildren.value).toEqual(['kid'])
   })
 
   it('rewrites a stale ?sidebar entry in place; the signal never adopts from the URL', () => {
@@ -1961,5 +2132,36 @@ describe('conversation_file (duplicate-open warning)', () => {
     const dups = duplicateConversationFiles.value
     expect(dups.has('/conv.jsonl')).toBe(true)
     expect(dups.has('/other.jsonl')).toBe(false)
+  })
+})
+
+describe('mock-mode boot (?mock)', () => {
+  // `?mock` is the surface design work is reviewed on, and initStore
+  // returns early for it — anything registered below that return is dead
+  // in mock previews while looking perfectly wired in production. The
+  // recorder effect was, once. This boots a *fresh* store module with
+  // ?mock in the URL, which is the only way to see that difference.
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  it('records the family member you are viewing in a mock preview too', async () => {
+    vi.stubGlobal('location', { search: '?mock', hash: '', pathname: '/' })
+    vi.stubGlobal('window', {})
+    vi.resetModules()
+    const store = await import('./store')
+    // Stand in for the router: the store navigates through this.
+    store.setNavigate((url: string) => { store.urlPath.value = url.split('?')[0] })
+    const cleanup = store.initStore()
+    try {
+      const kid = store.sessions.value.find(s => s.parent_session_id && s.semantic_agent)
+      expect(kid, 'the mock fixtures should contain a family child').toBeDefined()
+      store.navigateToSession(kid!.id)
+      expect(store.selectedFamilyChild.value?.session.id).toBe(kid!.id)
+      expect(store.recentFamilyChildren.value).toEqual([kid!.id])
+    } finally {
+      cleanup()
+    }
   })
 })

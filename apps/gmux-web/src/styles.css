@@ -10,6 +10,19 @@ code {
   border-radius: 4px;
 }
 
+/* Visually hidden, still announced. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 :root {
   /* Surfaces — widened gaps for clearer distinction */
   --bg: oklch(12% 0.015 250);
@@ -988,12 +1001,11 @@ body {
 }
 
 /* ── Sidebar family entry ──
-   An active family is one sidebar entry: the root row, an optional
-   selected-child row, and an activity row. The card owns selection and
-   the ambient hover so the stack reads as a unit — inner rows drop
-   their own selected background and accent bar (they'd draw a second
-   card inside this one) — while the row actually under the pointer
-   steps up one tone so the click target stays unambiguous. */
+   A family is one sidebar entry. The activity line lives *inside* the
+   root row (same link, same hover, one thing in the a11y tree); the
+   slot row below it — the member you're viewing, or the last one you
+   viewed — is its own link, but the card owns selection so the pair
+   never reads as two unrelated sidebar items. */
 .session-family {
   position: relative;
   border-radius: 3px;
@@ -1017,79 +1029,67 @@ body {
 .session-family .session-item.selected {
   background: none;
 }
+.session-family .session-item.selected::before {
+  display: none;
+}
 /* One tone above the card in each state (card: --bg-hover /
    --bg-selected), so the row under the pointer is unmistakable
    without breaking the card apart. */
 .session-family .session-item:hover,
-.session-family .family-sub-row:hover {
+.session-family .family-slot:hover {
   background: oklch(26% 0.02 250);
 }
 .session-family.selected .session-item:hover,
-.session-family.selected .family-sub-row:hover {
+.session-family.selected .family-slot:hover {
   background: oklch(30% 0.02 250);
-}
-.session-family .session-item.selected::before {
-  display: none;
 }
 .session-family .session-item {
   padding-bottom: 2px;
 }
 
-/* Sub-rows hang off the root title, not the status-dot column: the
-   branch glyph starts where the title does (14px pad + 7px dot + 8px
-   gap = 29px). They span the full card so hovering one highlights a
-   row, not a text fragment. */
-.family-sub-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 3px 8px 3px 29px;
-  text-decoration: none;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.35;
-  border-radius: 3px;
+/* A two-line row centers its dot over both lines; pin it to the title. */
+.session-item:has(.family-activity) {
+  align-items: flex-start;
 }
-.family-sub-row:last-child {
-  margin-bottom: 4px;
+.session-item:has(.family-activity) > .session-dot-indicator {
+  margin-top: 6px;
 }
-.family-sub-branch {
+.session-item:has(.family-activity) > .session-close-btn {
+  /* Absolutely positioned at 50% of the row; pin it to the title line
+     instead so it doesn't drift down when the activity line appears. */
+  top: 5px;
+  transform: none;
+}
+
+/* Branch glyph, shared by the activity line and the slot row: same
+   muted tone as the counts it introduces. */
+.family-branch {
   flex: 0 0 auto;
   width: 9px;
-  color: var(--text-muted);
-  opacity: 0.55;
+  color: var(--text-secondary);
   font-size: 10px;
   line-height: 1;
 }
-/* A quiet member reserves no dot column — the title takes the space. */
-.family-child-proc {
-  flex: 0 0 auto;
-  width: 7px;
-  font-family: 'Fira Code', monospace;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-muted);
-}
-.family-child-proc.working { color: var(--accent); }
-.family-child-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-/* Activity row: dot/ring/$ glyph + count, one segment per state, each
-   dropped at zero. Clicking it selects the root and opens the tree. */
+
+/* Activity line: dot/ring/$ glyph + count, one segment per state, each
+   dropped at zero. Numbers sit a touch under the title size; the
+   glyphs keep their standard sizes. */
 .family-activity {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  min-width: 0;
+  padding-top: 1px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
   /* Four segments only overflow on an extremely narrow sidebar; clip
-     rather than spill past the card. Attention states come first, so
+     rather than spill past the row. Attention states come first, so
      what survives the clip is what matters. */
   overflow: hidden;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
-.family-activity .family-sub-branch {
+.family-activity .family-branch {
   margin-right: -4px;
 }
 .family-activity-seg {
@@ -1099,9 +1099,46 @@ body {
   flex: 0 0 auto;
 }
 
+/* Slot row: the family member you're viewing, or the last one you did.
+   Title-sized, because it's a peer of the root row you navigate to —
+   hangs off the root title column (14px pad + 7px dot + 8px gap). */
+.family-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 8px 3px 29px;
+  margin-bottom: 4px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.35;
+  border-radius: 3px;
+}
+/* A remembered member is a memory, not a state: quieter than the one
+   you're actually in. */
+.family-slot:not(.current) .family-slot-title {
+  color: var(--text-secondary);
+}
+.family-child-proc {
+  flex: 0 0 auto;
+  width: 7px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.family-child-proc.working { color: var(--accent); }
+.family-slot-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 /* States that belong to the root row are the whole card's states — the
    card is one entry, so it dims, drags and takes a drop line as a unit. */
-.session-family:has(.session-item.unavailable) .family-sub-row {
+.session-family:has(.session-item.unavailable) .family-slot {
   opacity: 0.55;
 }
 .session-family:has(.session-item.session-dragging) {
@@ -3076,8 +3113,8 @@ body {
     padding: 8px 10px 8px 14px;
   }
 
-  /* Family sub-rows are real tap targets on touch. */
-  .family-sub-row {
+  /* The slot row is a real tap target on touch. */
+  .family-slot {
     padding-top: 9px;
     padding-bottom: 9px;
   }

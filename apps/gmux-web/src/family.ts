@@ -196,7 +196,8 @@ export function hasFamilyActivity(activity: FamilyActivity): boolean {
     || activity.workingAgents > 0 || activity.workingProcesses > 0
 }
 
-/** Accessible name for the icon row, which is otherwise pure glyphs. */
+/** Spoken form of the icon row, which is otherwise pure glyphs. Folded
+ * into the root row's accessible name — the row it lives in. */
 export function familyActivityLabel(activity: FamilyActivity): string {
   const parts: string[] = []
   // 'process' takes -es; everything else here takes -s.
@@ -206,7 +207,7 @@ export function familyActivityLabel(activity: FamilyActivity): string {
   if (activity.unread > 0) parts.push(plural(activity.unread, 'unread member'))
   if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'working subagent'))
   if (activity.workingProcesses > 0) parts.push(plural(activity.workingProcesses, 'running process'))
-  return `Family: ${parts.join(', ')}. Open the family tree.`
+  return `Family: ${parts.join(', ')}`
 }
 
 /** Hover title for the sidebar's selected-child row: the path from the
