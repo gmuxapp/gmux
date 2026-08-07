@@ -83,8 +83,8 @@ func TestProductionRunnerMetaPreservesLaunchParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Registration.LaunchParentID == nil || *meta.Registration.LaunchParentID != "parent" {
-		t.Fatalf("launch parent lost at runner boundary: %#v", meta.Registration.LaunchParentID)
+	if meta.Registration.ParentSessionID == nil || *meta.Registration.ParentSessionID != "parent" {
+		t.Fatalf("launch parent lost at runner boundary: %#v", meta.Registration.ParentSessionID)
 	}
 }
 

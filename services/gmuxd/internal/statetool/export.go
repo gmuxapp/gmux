@@ -24,33 +24,34 @@ type ExportDoc struct {
 // dismissed rows included (hidden-not-forgotten). Timestamps stay Unix-ms
 // integers: export is a diagnostic inventory, not the ADR 0001 wire shape.
 type ExportSession struct {
-	ID              string            `json:"id"`
-	Adapter         string            `json:"adapter"`
-	DriveMode       string            `json:"drive_mode,omitempty"`
-	ConversationRef string            `json:"conversation_ref,omitempty"`
-	Command         []string          `json:"command"`
-	CWD             string            `json:"cwd"`
-	WorkspaceRoot   string            `json:"workspace_root,omitempty"`
-	Remotes         map[string]string `json:"remotes"`
-	Slug            string            `json:"slug,omitempty"`
-	ShellTitle      string            `json:"shell_title,omitempty"`
-	AdapterTitle    string            `json:"adapter_title,omitempty"`
-	Subtitle        string            `json:"subtitle,omitempty"`
-	Active          bool              `json:"active"`
-	Interrupted     bool              `json:"interrupted"`
-	Unread          bool              `json:"unread"`
-	Error           bool              `json:"error"`
-	StatusReported  bool              `json:"status_reported"`
-	CreatedAtMs     int64             `json:"created_at_ms"`
-	StartedAtMs     *int64            `json:"started_at_ms,omitempty"`
-	ExitedAtMs      *int64            `json:"exited_at_ms,omitempty"`
-	LastActivityMs  *int64            `json:"last_activity_at_ms,omitempty"`
-	DismissedAtMs   *int64            `json:"dismissed_at_ms,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	TerminalCols    *uint16           `json:"terminal_cols,omitempty"`
-	TerminalRows    *uint16           `json:"terminal_rows,omitempty"`
-	LaunchParentID  string            `json:"launch_parent_id,omitempty"`
-	PromotedToRoot  bool              `json:"promoted_to_root"`
+	ID                    string            `json:"id"`
+	Adapter               string            `json:"adapter"`
+	DriveMode             string            `json:"drive_mode,omitempty"`
+	ConversationRef       string            `json:"conversation_ref,omitempty"`
+	Command               []string          `json:"command"`
+	CWD                   string            `json:"cwd"`
+	WorkspaceRoot         string            `json:"workspace_root,omitempty"`
+	Remotes               map[string]string `json:"remotes"`
+	Slug                  string            `json:"slug,omitempty"`
+	ShellTitle            string            `json:"shell_title,omitempty"`
+	AdapterTitle          string            `json:"adapter_title,omitempty"`
+	Subtitle              string            `json:"subtitle,omitempty"`
+	Active                bool              `json:"active"`
+	Interrupted           bool              `json:"interrupted"`
+	Unread                bool              `json:"unread"`
+	Error                 bool              `json:"error"`
+	StatusReported        bool              `json:"status_reported"`
+	CreatedAtMs           int64             `json:"created_at_ms"`
+	StartedAtMs           *int64            `json:"started_at_ms,omitempty"`
+	ExitedAtMs            *int64            `json:"exited_at_ms,omitempty"`
+	LastActivityMs        *int64            `json:"last_activity_at_ms,omitempty"`
+	DismissedAtMs         *int64            `json:"dismissed_at_ms,omitempty"`
+	ExitCode              *int              `json:"exit_code,omitempty"`
+	TerminalCols          *uint16           `json:"terminal_cols,omitempty"`
+	TerminalRows          *uint16           `json:"terminal_rows,omitempty"`
+	ParentSessionID       string            `json:"parent_session_id,omitempty"`
+	LaunchedFromSessionID string            `json:"launched_from_session_id,omitempty"`
+	PromotedToRoot        bool              `json:"promoted_to_root"`
 }
 
 // ExportProject is one catalog entry in sidebar order.
@@ -133,7 +134,7 @@ func Export(ctx context.Context, store *centralstore.Store) (ExportDoc, error) {
 	return doc, nil
 }
 
-func exportSession(s centralstore.Session) ExportSession {
+func exportSession(s centralstore.SessionExport) ExportSession {
 	out := ExportSession{
 		ID: string(s.ID), Adapter: s.Adapter, DriveMode: s.DriveMode, ConversationRef: s.ConversationRef,
 		Command: append([]string{}, s.Command...),
@@ -154,8 +155,11 @@ func exportSession(s centralstore.Session) ExportSession {
 	for name, u := range s.Remotes {
 		out.Remotes[name] = RedactURLUserinfo(u)
 	}
-	if s.LaunchParentID != nil {
-		out.LaunchParentID = string(*s.LaunchParentID)
+	if s.ParentSessionID != nil {
+		out.ParentSessionID = string(*s.ParentSessionID)
+	}
+	if s.LaunchedFromSessionID != nil {
+		out.LaunchedFromSessionID = string(*s.LaunchedFromSessionID)
 	}
 	return out
 }

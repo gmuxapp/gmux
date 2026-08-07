@@ -20,7 +20,7 @@ func treeSessions(exitless ...centralstore.SessionID) []centralstore.Session {
 		s := centralstore.Session{ID: id, Adapter: "shell", Version: 1}
 		if parent != "" {
 			p := parent
-			s.LaunchParentID = &p
+			s.ParentSessionID = &p
 		}
 		if !noExit[id] {
 			at := centralstore.UnixMillis(100)
@@ -252,6 +252,182 @@ func TestDismissSerializesWithRegisterCommitWindow(t *testing.T) {
 	}
 	if err := <-dismissErr; !errors.Is(err, ErrSessionAlive) {
 		t.Fatalf("dismiss after registration install: err=%v", err)
+	}
+}
+
+// gatedLifecycleStore exposes the point after Dismiss has checked its durable
+// subtree and runtime liveness but before DismissSessionTree commits. Reparent
+// entry is separately observable so the tests prove it is parked on the
+// coordinator mutex rather than merely not scheduled yet.
+type gatedLifecycleStore struct {
+	*centralstore.Store
+	dismissEntered  chan struct{}
+	dismissRelease  chan struct{}
+	reparentEntered chan struct{}
+}
+
+func (s *gatedLifecycleStore) DismissSessionTree(ctx context.Context, root centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
+	close(s.dismissEntered)
+	<-s.dismissRelease
+	return s.Store.DismissSessionTree(ctx, root, at)
+}
+
+func (s *gatedLifecycleStore) SetSessionParent(ctx context.Context, id centralstore.SessionID, parent *centralstore.SessionID) (centralstore.MutationResult, error) {
+	close(s.reparentEntered)
+	return s.Store.SetSessionParent(ctx, id, parent)
+}
+
+func newGatedLifecycleCoord(t *testing.T, rows ...centralstore.NewSession) (*Coordinator, *gatedLifecycleStore) {
+	t.Helper()
+	ctx := context.Background()
+	store, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for _, row := range rows {
+		if _, _, err := store.InsertSession(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gated := &gatedLifecycleStore{
+		Store:           store,
+		dismissEntered:  make(chan struct{}),
+		dismissRelease:  make(chan struct{}),
+		reparentEntered: make(chan struct{}),
+	}
+	return New(nil, nil, gated, &fakeDirtySink{}, nil,
+		WithClock(func() centralstore.UnixMillis { return 777 })), gated
+}
+
+// TestReparentSerializesWithDismissMoveIn reproduces the previously unsafe
+// schedule: a live root is adopted after Dismiss has checked an unrelated
+// dead root but before its subtree transaction. Reparent must wait until the
+// dismissal commits, leaving the live session visible.
+func TestReparentSerializesWithDismissMoveIn(t *testing.T) {
+	ctx := context.Background()
+	coord, store := newGatedLifecycleCoord(t,
+		centralstore.NewSession{ID: "root", Adapter: "shell", CreatedAt: 1},
+		centralstore.NewSession{ID: "live", Adapter: "shell", CreatedAt: 2},
+	)
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "live", Generation: 1}, dead: make(chan struct{})})
+
+	dismissDone := make(chan struct {
+		ids []centralstore.SessionID
+		err error
+	}, 1)
+	go func() {
+		ids, err := coord.Dismiss(ctx, "root")
+		dismissDone <- struct {
+			ids []centralstore.SessionID
+			err error
+		}{ids, err}
+	}()
+	<-store.dismissEntered
+	released := false
+	defer func() {
+		if !released {
+			close(store.dismissRelease)
+		}
+	}()
+
+	atMutex := make(chan struct{})
+	coord.beforeReparentLock = func() { close(atMutex) }
+	parent := centralstore.SessionID("root")
+	reparentDone := make(chan error, 1)
+	go func() {
+		_, err := coord.SetSessionParent(ctx, "live", &parent)
+		reparentDone <- err
+	}()
+	<-atMutex
+	select {
+	case <-store.reparentEntered:
+		t.Fatal("reparent entered the store inside dismissal's checked-subtree window")
+	case err := <-reparentDone:
+		t.Fatalf("reparent finished inside dismissal's checked-subtree window: %v", err)
+	default:
+	}
+
+	close(store.dismissRelease)
+	released = true
+	dismissed := <-dismissDone
+	if dismissed.err != nil || !reflect.DeepEqual(dismissed.ids, []centralstore.SessionID{"root"}) {
+		t.Fatalf("Dismiss: ids=%v err=%v", dismissed.ids, dismissed.err)
+	}
+	if err := <-reparentDone; err != nil {
+		t.Fatalf("SetSessionParent: %v", err)
+	}
+	<-store.reparentEntered
+	live, ok, err := store.Session(ctx, "live")
+	if err != nil || !ok {
+		t.Fatalf("live session lookup: ok=%v err=%v", ok, err)
+	}
+	if live.DismissedAt != nil {
+		t.Fatalf("live session was hidden: dismissed_at=%v", *live.DismissedAt)
+	}
+	if _, installed := coord.registry.current("live"); !installed {
+		t.Fatal("live generation disappeared")
+	}
+}
+
+// TestReparentSerializesWithDismissMoveOut proves the inverse schedule cannot
+// silently narrow the subtree the user confirmed: moving a checked child out
+// waits until both checked rows have been dismissed.
+func TestReparentSerializesWithDismissMoveOut(t *testing.T) {
+	ctx := context.Background()
+	root := centralstore.SessionID("root")
+	coord, store := newGatedLifecycleCoord(t,
+		centralstore.NewSession{ID: root, Adapter: "shell", CreatedAt: 1},
+		centralstore.NewSession{ID: "child", Adapter: "shell", CreatedAt: 2, ParentSessionID: &root},
+	)
+
+	dismissDone := make(chan struct {
+		ids []centralstore.SessionID
+		err error
+	}, 1)
+	go func() {
+		ids, err := coord.Dismiss(ctx, root)
+		dismissDone <- struct {
+			ids []centralstore.SessionID
+			err error
+		}{ids, err}
+	}()
+	<-store.dismissEntered
+	released := false
+	defer func() {
+		if !released {
+			close(store.dismissRelease)
+		}
+	}()
+
+	atMutex := make(chan struct{})
+	coord.beforeReparentLock = func() { close(atMutex) }
+	reparentDone := make(chan error, 1)
+	go func() {
+		_, err := coord.SetSessionParent(ctx, "child", nil)
+		reparentDone <- err
+	}()
+	<-atMutex
+	select {
+	case <-store.reparentEntered:
+		t.Fatal("move-out entered the store inside dismissal's checked-subtree window")
+	case err := <-reparentDone:
+		t.Fatalf("move-out finished inside dismissal's checked-subtree window: %v", err)
+	default:
+	}
+
+	close(store.dismissRelease)
+	released = true
+	dismissed := <-dismissDone
+	if dismissed.err != nil || !reflect.DeepEqual(dismissed.ids, []centralstore.SessionID{"root", "child"}) {
+		t.Fatalf("Dismiss: ids=%v err=%v", dismissed.ids, dismissed.err)
+	}
+	if err := <-reparentDone; err != nil {
+		t.Fatalf("SetSessionParent: %v", err)
+	}
+	child, ok, err := store.Session(ctx, "child")
+	if err != nil || !ok || child.DismissedAt == nil {
+		t.Fatalf("checked child escaped dismissal: row=%#v ok=%v err=%v", child, ok, err)
 	}
 }
 

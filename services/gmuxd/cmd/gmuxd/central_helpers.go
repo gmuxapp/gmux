@@ -457,8 +457,8 @@ func projectSessionTreeRows(rows []centralstore.Session, root centralstore.Sessi
 	for i := range rows {
 		row := &rows[i]
 		byID[row.ID] = i
-		if row.LaunchParentID != nil {
-			byParent[*row.LaunchParentID] = append(byParent[*row.LaunchParentID], row.ID)
+		if row.ParentSessionID != nil {
+			byParent[*row.ParentSessionID] = append(byParent[*row.ParentSessionID], row.ID)
 		}
 	}
 	if _, present := byID[root]; !present {

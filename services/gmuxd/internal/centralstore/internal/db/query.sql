@@ -11,8 +11,8 @@ INSERT INTO local_sessions (
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
     active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
-    launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    parent_session_id, launched_from_session_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetSession :one
@@ -65,8 +65,8 @@ DELETE FROM project_placements WHERE local_session_id = ?;
 
 -- name: ClearDirectChildParents :execrows
 UPDATE local_sessions
-SET launch_parent_id = NULL, row_version = row_version + 1
-WHERE launch_parent_id = ?;
+SET parent_session_id = NULL, row_version = row_version + 1
+WHERE parent_session_id = ?;
 
 -- name: DeleteSessionAtVersion :execrows
 DELETE FROM local_sessions WHERE id = ? AND row_version = ?;
@@ -75,6 +75,11 @@ DELETE FROM local_sessions WHERE id = ? AND row_version = ?;
 UPDATE local_sessions
 SET promoted_to_root = ?, row_version = row_version + 1
 WHERE id = ? AND promoted_to_root <> ?;
+
+-- name: SetSessionParent :execrows
+UPDATE local_sessions
+SET parent_session_id = ?, row_version = row_version + 1
+WHERE id = ? AND parent_session_id IS NOT ?;
 
 -- name: ListProjectEntries :many
 SELECT * FROM project_entries ORDER BY sidebar_order;
@@ -126,13 +131,13 @@ SELECT p.id, p.project_entry_id, p.local_session_id, p.local_peer_key,
        p.peer_session_id, p.peer_parent_session_id, p.sibling_scope, p.position,
        COALESCE(s.created_at_ms, 0) AS local_created_at_ms,
        COALESCE(s.promoted_to_root, 0) AS local_promoted_to_root,
-       s.launch_parent_id
+       s.parent_session_id
 FROM project_placements p
 LEFT JOIN local_sessions s ON s.id = p.local_session_id
 ORDER BY p.project_entry_id, p.sibling_scope, p.position, p.id;
 
 -- name: LocalSessionPlacementFacts :one
-SELECT created_at_ms, promoted_to_root, launch_parent_id
+SELECT created_at_ms, promoted_to_root, parent_session_id
 FROM local_sessions WHERE id = ?;
 
 -- name: ParkPlacement :execrows

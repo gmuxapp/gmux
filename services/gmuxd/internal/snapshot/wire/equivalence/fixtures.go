@@ -376,7 +376,7 @@ func RenderCentral(t *testing.T, w *World) (wire.Frames, *wire.Cache) {
 		}
 		if f.Parent != "" {
 			p := centralstore.SessionID(f.Parent)
-			ns.LaunchParentID = &p
+			ns.ParentSessionID = &p
 		}
 		if _, _, err := db.InsertSession(ctx, ns); err != nil {
 			t.Fatal(err)

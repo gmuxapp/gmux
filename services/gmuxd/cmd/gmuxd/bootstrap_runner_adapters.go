@@ -264,7 +264,7 @@ func (productionRunnerClient) Meta(ctx context.Context, endpoint string) (sessio
 	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, DriveMode: s.DriveMode, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
 	if s.ParentSessionID != "" {
 		parent := centralstore.SessionID(s.ParentSessionID)
-		reg.LaunchParentID = &parent
+		reg.ParentSessionID = &parent
 	}
 	reg.Facts = runnerMetaFacts(s)
 	// Prefer the header: it is stamped by the same middleware that stamps the

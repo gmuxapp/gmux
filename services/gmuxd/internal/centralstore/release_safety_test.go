@@ -223,6 +223,36 @@ DROP TABLE v2_upgrade_marker;
 	}
 }
 
+func TestV3MigrationBackfillsLaunchProvenance(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	database := createReleasedV1Database(t, dir)
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO local_sessions
+		(id, adapter, command_json, cwd, remotes_json, created_at_ms, launch_parent_id)
+		VALUES ('child', 'shell', '["sh"]', '/', '{}', 2, 'parent')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var parent, launchedFrom sql.NullString
+	if err := store.database.QueryRowContext(ctx, `
+		SELECT parent_session_id, launched_from_session_id
+		FROM local_sessions WHERE id='child'`).Scan(&parent, &launchedFrom); err != nil {
+		t.Fatal(err)
+	}
+	if !parent.Valid || parent.String != "parent" || !launchedFrom.Valid || launchedFrom.String != "parent" {
+		t.Fatalf("migrated parent/provenance = %#v / %#v", parent, launchedFrom)
+	}
+}
+
 func TestMigrationBackupFailureRefusesUpgrade(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "state")
@@ -331,22 +361,27 @@ func TestOpenRejectsCommittedMigrationForeignKeyViolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	v3, err := fs.ReadFile(migrationFiles, "migrations/00003_session_parent_provenance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
 	files := fstest.MapFS{
-		"migrations/00001_initial_schema.sql": {Data: v1},
-		"migrations/00002_drive_mode.sql":     {Data: v2},
-		"migrations/00003_orphan.sql":         {Data: []byte("-- +goose NO TRANSACTION\n-- +goose Up\nCREATE TABLE migration_parent (id INTEGER PRIMARY KEY);\nCREATE TABLE migration_child (parent_id INTEGER REFERENCES migration_parent(id));\nPRAGMA foreign_keys=OFF;\nINSERT INTO migration_child VALUES (99);\nPRAGMA foreign_keys=ON;\n")},
+		"migrations/00001_initial_schema.sql":            {Data: v1},
+		"migrations/00002_drive_mode.sql":                {Data: v2},
+		"migrations/00003_session_parent_provenance.sql": {Data: v3},
+		"migrations/00004_orphan.sql":                    {Data: []byte("-- +goose NO TRANSACTION\n-- +goose Up\nCREATE TABLE migration_parent (id INTEGER PRIMARY KEY);\nCREATE TABLE migration_child (parent_id INTEGER REFERENCES migration_parent(id));\nPRAGMA foreign_keys=OFF;\nINSERT INTO migration_child VALUES (99);\nPRAGMA foreign_keys=ON;\n")},
 	}
 	_, err = openWithMigrationFS(ctx, dir, files)
 	if !errors.Is(err, ErrForeignKeyIntegrity) {
 		t.Fatalf("open error = %v, want ErrForeignKeyIntegrity", err)
 	}
-	backups, globErr := filepath.Glob(filepath.Join(dir, "backups", "state-pre-migration-v2-to-v3-*.db"))
+	backups, globErr := filepath.Glob(filepath.Join(dir, "backups", "state-pre-migration-v3-to-v4-*.db"))
 	if globErr != nil || len(backups) != 1 || !strings.Contains(err.Error(), backups[0]) {
 		t.Fatalf("error/backups = %v / %v / %v; want retained path in post-migration diagnostic", err, backups, globErr)
 	}
 	database := openReleaseTestDB(t, DatabasePath(dir))
 	defer database.Close()
-	assertDBVersion(t, database, 3)
+	assertDBVersion(t, database, 4)
 }
 
 func TestQuickCheckFailureCarriesMigrationBackupPath(t *testing.T) {

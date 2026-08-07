@@ -12,7 +12,7 @@ func addSessionCwd(t *testing.T, s *Store, id, parent, cwd string, created UnixM
 	v := NewSession{ID: SessionID(id), Adapter: "shell", Command: []string{"sh"}, CWD: cwd, Remotes: map[string]string{}, CreatedAt: created}
 	if parent != "" {
 		p := SessionID(parent)
-		v.LaunchParentID = &p
+		v.ParentSessionID = &p
 	}
 	out, _, err := s.InsertSession(context.Background(), v)
 	if err != nil {

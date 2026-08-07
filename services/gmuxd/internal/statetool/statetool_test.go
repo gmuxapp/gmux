@@ -38,10 +38,15 @@ func seed(t *testing.T, s *centralstore.Store) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"beta", "alpha"} {
+		var parent *centralstore.SessionID
+		if id == "alpha" {
+			beta := centralstore.SessionID("beta")
+			parent = &beta
+		}
 		if _, _, err := s.InsertSession(ctx, centralstore.NewSession{
 			ID: centralstore.SessionID(id), Adapter: "shell", Command: []string{"sh"},
 			CWD: "/proj", Remotes: map[string]string{"origin": "https://user:secret@git.example/repo.git"},
-			CreatedAt: 1,
+			CreatedAt: 1, ParentSessionID: parent,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -99,6 +104,9 @@ func TestExportIsRedactedAndDeterministic(t *testing.T) {
 	}
 	if doc.Sessions[0].Remotes["origin"] != "https://REDACTED@git.example/repo.git" {
 		t.Fatalf("remote not scrubbed: %+v", doc.Sessions[0].Remotes)
+	}
+	if doc.Sessions[0].ParentSessionID != "beta" || doc.Sessions[0].LaunchedFromSessionID != "beta" {
+		t.Fatalf("parent provenance not exported: %+v", doc.Sessions[0])
 	}
 	if len(doc.Projects) != 1 || doc.Projects[0].Slug != "proj" || len(doc.Placements) != 2 {
 		t.Fatalf("projects/placements = %+v / %+v", doc.Projects, doc.Placements)

@@ -23,7 +23,7 @@ func evictFixture(t *testing.T, s *Store) Session {
 	parent := SessionID("loser")
 	child := registration("child", "pi", "/one", false, 12)
 	child.Facts.ExitedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(13))}
-	child.LaunchParentID = &parent
+	child.ParentSessionID = &parent
 	if _, _, err = s.RegisterRunner(ctx, child); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestRegisterRunnerEvictsTakeoverLosers(t *testing.T) {
 	// The loser's child was promoted to a genuine root: parent cleared,
 	// sticky promotion untouched, its own row retained.
 	child := mustSession(t, s, "child")
-	if child.LaunchParentID != nil || child.PromotedToRoot {
+	if child.ParentSessionID != nil || child.PromotedToRoot {
 		t.Fatalf("child not promoted to genuine root: %#v", child)
 	}
 	// Placement scope is densely renormalized: loser's placement is gone,
@@ -114,7 +114,7 @@ func TestRegisterRunnerEvictionSkipsStaleAndMissingLosers(t *testing.T) {
 		t.Fatal("stale eviction must be skipped, not applied")
 	}
 	child := mustSession(t, s, "child")
-	if child.LaunchParentID == nil || *child.LaunchParentID != "loser" {
+	if child.ParentSessionID == nil || *child.ParentSessionID != "loser" {
 		t.Fatalf("skipped eviction must not clear child parents: %#v", child)
 	}
 }
@@ -169,7 +169,7 @@ func TestRegisterRunnerEvictionRollsBackAtomically(t *testing.T) {
 		t.Fatal("rollback must not leave the winner row")
 	}
 	child := mustSession(t, s, "child")
-	if child.LaunchParentID == nil {
+	if child.ParentSessionID == nil {
 		t.Fatal("rollback must restore child provenance")
 	}
 	if p := localPlacement(t, s, "loser"); p == nil {
@@ -191,7 +191,7 @@ func TestRegisterRunnerEvictingOwnLaunchParent(t *testing.T) {
 
 	parent := SessionID("loser")
 	winner := registration("winner", "pi", "/one", true, 20)
-	winner.LaunchParentID = &parent
+	winner.ParentSessionID = &parent
 	ref := "conv-a"
 	winner.Facts.ConversationRef = &ref
 	winner.Evict = []TakeoverEviction{{ID: "loser", Version: loser.Version}}
@@ -199,12 +199,12 @@ func TestRegisterRunnerEvictingOwnLaunchParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LaunchParentID != nil {
-		t.Fatalf("returned session must not name the deleted loser as parent: %#v", got.LaunchParentID)
+	if got.ParentSessionID != nil {
+		t.Fatalf("returned session must not name the deleted loser as parent: %#v", got.ParentSessionID)
 	}
 	committed := mustSession(t, s, "winner")
-	if committed.LaunchParentID != nil {
-		t.Fatalf("committed parent=%#v", committed.LaunchParentID)
+	if committed.ParentSessionID != nil {
+		t.Fatalf("committed parent=%#v", committed.ParentSessionID)
 	}
 	if got.Version != committed.Version || result.SessionVersion != committed.Version {
 		t.Fatalf("returned=%d result=%d committed=%d", got.Version, result.SessionVersion, committed.Version)
@@ -243,7 +243,7 @@ func TestRegisterRunnerEvictionOfDismissedLoser(t *testing.T) {
 	}
 	// The dismissed child stays dismissed but becomes a genuine root.
 	child := mustSession(t, s, "child")
-	if child.LaunchParentID != nil || child.DismissedAt == nil {
+	if child.ParentSessionID != nil || child.DismissedAt == nil {
 		t.Fatalf("child=%#v", child)
 	}
 }

@@ -75,10 +75,10 @@ func (s *Store) PlaceUnplacedSessions(ctx context.Context, ids []SessionID, at U
 			continue
 		}
 		rec := &placementRec{project: int64(project), local: string(sess.ID), parent: func() string {
-			if sess.LaunchParentID == nil {
+			if sess.ParentSessionID == nil {
 				return ""
 			}
-			return string(*sess.LaunchParentID)
+			return string(*sess.ParentSessionID)
 		}(), created: int64(sess.CreatedAt), promoted: sess.PromotedToRoot, isNew: true}
 		all = append(all, rec)
 		placed[string(sess.ID)] = true

@@ -250,12 +250,12 @@ func domainInvariantFindings(ctx context.Context, tx *sql.Tx, q *db.Queries) ([]
 	// sidebar-scale state (do not put it on a hot path).
 	cyclic, err := stringColumn(ctx, tx, `
 		WITH RECURSIVE anc(start, cur) AS (
-			SELECT id, launch_parent_id FROM local_sessions
-			WHERE launch_parent_id IS NOT NULL
+			SELECT id, parent_session_id FROM local_sessions
+			WHERE parent_session_id IS NOT NULL
 			UNION
-			SELECT a.start, s.launch_parent_id
+			SELECT a.start, s.parent_session_id
 			FROM anc a JOIN local_sessions s ON s.id = a.cur
-			WHERE s.launch_parent_id IS NOT NULL
+			WHERE s.parent_session_id IS NOT NULL
 		)
 		SELECT DISTINCT start FROM anc WHERE cur = start ORDER BY start`)
 	if err != nil {
@@ -436,12 +436,19 @@ type PlacementExport struct {
 	Position            int64
 }
 
+// SessionExport is the state-tool-only session projection. Launch provenance
+// deliberately does not enter the ordinary Session model or behavioral paths.
+type SessionExport struct {
+	Session
+	LaunchedFromSessionID *SessionID
+}
+
 // StateExport is the raw, deterministic-ordered data for
 // `gmux daemon state export`. Peers are pre-redacted (RedactedManualPeer);
 // URL userinfo scrubbing and JSON shaping are statetool's job.
 type StateExport struct {
 	SchemaVersion int64
-	Sessions      []Session // ALL rows, dismissed included, sorted by ID
+	Sessions      []SessionExport // ALL rows, dismissed included, sorted by ID
 	Catalog       ProjectCatalog
 	Placements    []PlacementExport
 	Peers         []RedactedManualPeer // sorted by name
@@ -463,13 +470,18 @@ func (s *Store) ExportState(ctx context.Context) (StateExport, error) {
 	if err != nil {
 		return StateExport{}, err
 	}
-	out.Sessions = make([]Session, 0, len(rows))
+	out.Sessions = make([]SessionExport, 0, len(rows))
 	for _, r := range rows {
 		v, convErr := sessionFromDB(r)
 		if convErr != nil {
 			return StateExport{}, convErr
 		}
-		out.Sessions = append(out.Sessions, v)
+		exported := SessionExport{Session: v}
+		if r.LaunchedFromSessionID.Valid {
+			id := SessionID(r.LaunchedFromSessionID.String)
+			exported.LaunchedFromSessionID = &id
+		}
+		out.Sessions = append(out.Sessions, exported)
 	}
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].ID < out.Sessions[j].ID })
 

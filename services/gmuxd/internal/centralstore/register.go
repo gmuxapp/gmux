@@ -30,11 +30,11 @@ type RunnerRegistration struct {
 	// The singleton coordinator must serialize lifecycle operations and prove
 	// its reservation is still current immediately before this call. The
 	// generation itself remains runtime-only and is never persisted.
-	NewGeneration  bool
-	CreatedAt      UnixMillis
-	LaunchParentID *SessionID
-	ObservedAt     UnixMillis
-	Facts          RunnerFacts
+	NewGeneration   bool
+	CreatedAt       UnixMillis
+	ParentSessionID *SessionID
+	ObservedAt      UnixMillis
+	Facts           RunnerFacts
 	// Evict is the conversation-takeover loser set: dead retained rows whose
 	// conversation the registering live runner covers (same opaque ref, or an
 	// ancestor per the adapter's lineage — resolved by the coordinator, which
@@ -102,7 +102,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 	if reg.CreatedAt < 0 || reg.ObservedAt < 0 {
 		return Session{}, MutationResult{}, errors.New("centralstore: registration timestamps must be non-negative")
 	}
-	if reg.LaunchParentID != nil && (*reg.LaunchParentID == "" || *reg.LaunchParentID == reg.ID) {
+	if reg.ParentSessionID != nil && (*reg.ParentSessionID == "" || *reg.ParentSessionID == reg.ID) {
 		return Session{}, MutationResult{}, errors.New("centralstore: invalid launch parent")
 	}
 	if err := validateRunnerFacts(reg.Facts); err != nil {
@@ -194,12 +194,14 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 	}
 
 	if isNew {
+		launchedFrom := cloneSessionID(reg.ParentSessionID)
 		current = Session{
 			ID: reg.ID, Adapter: reg.Adapter, DriveMode: normalizeDriveMode(reg.DriveMode), CreatedAt: reg.CreatedAt,
-			Command: []string{}, Remotes: map[string]string{}, LaunchParentID: cloneSessionID(reg.LaunchParentID),
+			Command: []string{}, Remotes: map[string]string{},
+			ParentSessionID: cloneSessionID(reg.ParentSessionID),
 		}
-		if current.LaunchParentID != nil && evictedIDs[*current.LaunchParentID] {
-			current.LaunchParentID = nil
+		if current.ParentSessionID != nil && evictedIDs[*current.ParentSessionID] {
+			current.ParentSessionID = nil
 		}
 		if err = mergeRunnerFacts(&current, reg.Facts); err != nil {
 			return Session{}, MutationResult{}, err
@@ -226,11 +228,18 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
 			Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
 			StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt), LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode),
-			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows), LaunchParentID: func() sql.NullString {
-				if current.LaunchParentID == nil {
+			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
+			ParentSessionID: func() sql.NullString {
+				if current.ParentSessionID == nil {
 					return sql.NullString{}
 				}
-				return nullString(string(*current.LaunchParentID))
+				return nullString(string(*current.ParentSessionID))
+			}(),
+			LaunchedFromSessionID: func() sql.NullString {
+				if launchedFrom == nil {
+					return sql.NullString{}
+				}
+				return nullString(string(*launchedFrom))
 			}(),
 		})
 		if err != nil {
@@ -346,8 +355,8 @@ func orderTakeoverEvictions(ctx context.Context, q *db.Queries, evictions []Take
 	}
 	parent := make(map[SessionID]SessionID, len(rows))
 	for _, row := range rows {
-		if row.LaunchParentID.Valid {
-			parent[SessionID(row.ID)] = SessionID(row.LaunchParentID.String)
+		if row.ParentSessionID.Valid {
+			parent[SessionID(row.ID)] = SessionID(row.ParentSessionID.String)
 		}
 	}
 	depths := make(map[SessionID]int, len(evictions))
@@ -680,10 +689,10 @@ func rematchRegistration(ctx context.Context, q *db.Queries, fault func() error,
 	project := int64(project64)
 	if target == nil {
 		target = &placementRec{project: project, local: string(current.ID), parent: func() string {
-			if current.LaunchParentID == nil {
+			if current.ParentSessionID == nil {
 				return ""
 			}
-			return string(*current.LaunchParentID)
+			return string(*current.ParentSessionID)
 		}(), created: int64(current.CreatedAt), promoted: current.PromotedToRoot, isNew: true}
 		all = append(all, target)
 	} else {

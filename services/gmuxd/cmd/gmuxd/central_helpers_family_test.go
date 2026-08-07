@@ -13,10 +13,10 @@ func TestProjectSessionTreeRowsBreadthFirst(t *testing.T) {
 	childA := centralstore.SessionID("child-a")
 	rows := []centralstore.Session{
 		{ID: "unrelated"},
-		{ID: childB, LaunchParentID: &root},
-		{ID: "grandchild", LaunchParentID: &childA},
+		{ID: childB, ParentSessionID: &root},
+		{ID: "grandchild", ParentSessionID: &childA},
 		{ID: root},
-		{ID: childA, LaunchParentID: &root},
+		{ID: childA, ParentSessionID: &root},
 	}
 
 	got, err := projectSessionTreeRows(rows, root)
@@ -42,8 +42,8 @@ func BenchmarkProjectSessionTreeRows(b *testing.B) {
 	rows = append(rows, centralstore.Session{ID: root})
 	for i := 0; i < 500; i++ {
 		rows = append(rows, centralstore.Session{
-			ID:             centralstore.SessionID(fmt.Sprintf("child-%04d", i)),
-			LaunchParentID: &root,
+			ID:              centralstore.SessionID(fmt.Sprintf("child-%04d", i)),
+			ParentSessionID: &root,
 		})
 	}
 	for i := 0; i < 499; i++ {

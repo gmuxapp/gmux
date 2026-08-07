@@ -58,8 +58,8 @@ func (s *Store) DismissSessionTree(ctx context.Context, root SessionID, at UnixM
 			return nil, MutationResult{}, convErr
 		}
 		byID[v.ID] = v
-		if v.LaunchParentID != nil {
-			children[*v.LaunchParentID] = append(children[*v.LaunchParentID], v.ID)
+		if v.ParentSessionID != nil {
+			children[*v.ParentSessionID] = append(children[*v.ParentSessionID], v.ID)
 		}
 	}
 	if _, ok := byID[root]; !ok {

@@ -51,8 +51,8 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 	children := make(map[centralstore.SessionID][]centralstore.SessionID)
 	for _, s := range sessions {
 		byID[s.ID] = s
-		if s.LaunchParentID != nil {
-			children[*s.LaunchParentID] = append(children[*s.LaunchParentID], s.ID)
+		if s.ParentSessionID != nil {
+			children[*s.ParentSessionID] = append(children[*s.ParentSessionID], s.ID)
 		}
 	}
 	if _, ok := byID[root]; !ok {

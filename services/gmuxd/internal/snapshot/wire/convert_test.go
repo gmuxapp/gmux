@@ -40,7 +40,7 @@ func TestSessionConversionPreservesFamilyFacts(t *testing.T) {
 	parent := centralstore.SessionID("parent")
 	got := (&Converter{SemanticAgents: map[string]bool{"pi": true}}).session(central.SessionRow{
 		SessionView: centralstore.SessionView{Session: centralstore.Session{
-			ID: "child", Adapter: "pi", CreatedAt: 1, LaunchParentID: &parent, PromotedToRoot: true,
+			ID: "child", Adapter: "pi", CreatedAt: 1, ParentSessionID: &parent, PromotedToRoot: true,
 		}},
 	})
 	if got.ParentSessionID != "parent" || !got.SemanticAgent || !got.PromotedToRoot {

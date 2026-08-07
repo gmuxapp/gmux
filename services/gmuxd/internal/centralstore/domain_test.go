@@ -2,6 +2,7 @@ package centralstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -30,7 +31,7 @@ func addSessionAt(t *testing.T, s *Store, id, parent string, created UnixMillis)
 	v := NewSession{ID: SessionID(id), Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp", Remotes: map[string]string{}, CreatedAt: created, ShellTitle: "shell title"}
 	if parent != "" {
 		p := SessionID(parent)
-		v.LaunchParentID = &p
+		v.ParentSessionID = &p
 	}
 	out, result, err := s.InsertSession(context.Background(), v)
 	if err != nil {
@@ -102,14 +103,14 @@ func TestChildFirstAndLaterParentCycle(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
 	child := addSession(t, s, "child", "parent")
-	if child.LaunchParentID == nil || *child.LaunchParentID != "parent" {
+	if child.ParentSessionID == nil || *child.ParentSessionID != "parent" {
 		t.Fatalf("parent not preserved: %#v", child)
 	}
 	addSession(t, s, "parent", "")
 	s2 := openKernelStore(t)
 	addSession(t, s2, "a", "b")
 	p := SessionID("a")
-	_, _, err := s2.InsertSession(ctx, NewSession{ID: "b", Adapter: "shell", Command: []string{}, CWD: "/", Remotes: map[string]string{}, CreatedAt: 1, LaunchParentID: &p})
+	_, _, err := s2.InsertSession(ctx, NewSession{ID: "b", Adapter: "shell", Command: []string{}, CWD: "/", Remotes: map[string]string{}, CreatedAt: 1, ParentSessionID: &p})
 	if err == nil {
 		t.Fatal("cycle insertion succeeded")
 	}
@@ -482,10 +483,10 @@ func TestLaunchParentUpdateTriggerRejectsRebind(t *testing.T) {
 	s := openKernelStore(t)
 	addSession(t, s, "parent", "")
 	addSession(t, s, "child", "parent")
-	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launch_parent_id='child' WHERE id='parent'`); err == nil {
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET parent_session_id='child' WHERE id='parent'`); err == nil {
 		t.Fatal("non-NULL launch parent update accepted")
 	}
-	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launch_parent_id=NULL WHERE id='child'`); err != nil {
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET parent_session_id=NULL WHERE id='child'`); err != nil {
 		t.Fatalf("NULL-ing launch parent rejected: %v", err)
 	}
 }
@@ -689,6 +690,99 @@ func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
 	}
 }
 
+func TestSessionReparentValidationOrderingAndProvenance(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	project := addProject(t, s)
+	oldParent := addSession(t, s, "old", "")
+	addSession(t, s, "new", "")
+	for _, row := range []struct{ id, parent string }{
+		{"a", "old"}, {"b", "old"}, {"c", "old"}, {"n1", "new"},
+	} {
+		addSession(t, s, row.id, row.parent)
+	}
+	for _, id := range []SessionID{"old", "new", "a", "b", "c", "n1"} {
+		if _, err := s.PlaceLocalSession(ctx, id, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	newParent := SessionID("new")
+	result, err := s.SetSessionParent(ctx, "b", &newParent)
+	if err != nil || !result.Changed || !result.SessionsDirty || result.SessionVersion != 2 {
+		t.Fatalf("reparent result=%#v err=%v", result, err)
+	}
+	if got := scopeOrder(t, s, project, "c:l:old"); !reflect.DeepEqual(got, []string{"l:a", "l:c"}) {
+		t.Fatalf("old sibling scope=%v", got)
+	}
+	if got := scopeOrder(t, s, project, "c:l:new"); !reflect.DeepEqual(got, []string{"l:n1", "l:b"}) {
+		t.Fatalf("new sibling scope=%v", got)
+	}
+	b := mustSession(t, s, "b")
+	if b.ParentSessionID == nil || *b.ParentSessionID != "new" || launchedFromID(t, s, "b") != "old" {
+		t.Fatalf("reparented b=%#v launched_from=%q", b, launchedFromID(t, s, "b"))
+	}
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launched_from_session_id='new' WHERE id='b'`); err == nil {
+		t.Fatal("launched_from_session_id was mutable")
+	}
+
+	result, err = s.SetSessionParent(ctx, "b", nil)
+	if err != nil || !result.Changed || result.SessionVersion != 3 {
+		t.Fatalf("clear result=%#v err=%v", result, err)
+	}
+	if got := rootOrder(t, s, project); !reflect.DeepEqual(got, []string{"l:old", "l:new", "l:b"}) {
+		t.Fatalf("cleared roots=%v", got)
+	}
+	result, err = s.SetSessionParent(ctx, "b", nil)
+	if err != nil || result.Changed || result.SessionVersion != 3 {
+		t.Fatalf("repeat clear result=%#v err=%v", result, err)
+	}
+
+	self := SessionID("b")
+	if _, err = s.SetSessionParent(ctx, "b", &self); !errors.Is(err, ErrSessionParentSelf) {
+		t.Fatalf("self-parent err=%v", err)
+	}
+	missing := SessionID("missing")
+	if _, err = s.SetSessionParent(ctx, "b", &missing); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing parent err=%v", err)
+	}
+	if _, err = s.SetSessionParent(ctx, "missing", nil); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("missing child err=%v", err)
+	}
+
+	addSession(t, s, "x", "a")
+	addSession(t, s, "y", "x")
+	y := SessionID("y")
+	if _, err = s.SetSessionParent(ctx, "old", &y); !errors.Is(err, ErrSessionParentCycle) {
+		t.Fatalf("deep cycle err=%v", err)
+	}
+
+	if _, err = s.SetSessionParent(ctx, "b", &newParent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RemoveSessionAtVersion(ctx, "old", oldParent.Version); err != nil {
+		t.Fatal(err)
+	}
+	b = mustSession(t, s, "b")
+	if b.ParentSessionID == nil || *b.ParentSessionID != "new" || launchedFromID(t, s, "b") != "old" {
+		t.Fatalf("historical launch fact did not survive parent deletion: %#v launched_from=%q", b, launchedFromID(t, s, "b"))
+	}
+	a := mustSession(t, s, "a")
+	if a.ParentSessionID != nil || launchedFromID(t, s, "a") != "old" {
+		t.Fatalf("deletion repair changed launch provenance: %#v launched_from=%q", a, launchedFromID(t, s, "a"))
+	}
+	assertKernelInvariants(t, s)
+}
+
+func launchedFromID(t *testing.T, s *Store, id SessionID) string {
+	t.Helper()
+	var launched sql.NullString
+	if err := s.database.QueryRow(`SELECT launched_from_session_id FROM local_sessions WHERE id = ?`, id).Scan(&launched); err != nil {
+		t.Fatal(err)
+	}
+	return launched.String
+}
+
 func TestReorderValidatesProjectParentAndDuplicates(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
@@ -866,7 +960,7 @@ func TestPromotionAndParentProjectTransitions(t *testing.T) {
 		t.Fatalf("promoted roots=%v", got)
 	}
 	promoted, ok, err := s.Session(ctx, "child")
-	if err != nil || !ok || promoted.LaunchParentID == nil || *promoted.LaunchParentID != "parent" || !promoted.PromotedToRoot {
+	if err != nil || !ok || promoted.ParentSessionID == nil || *promoted.ParentSessionID != "parent" || !promoted.PromotedToRoot {
 		t.Fatalf("promotion lost provenance: child=%#v ok=%v err=%v", promoted, ok, err)
 	}
 	idx = 0
@@ -916,11 +1010,11 @@ func TestPlacedParentRemovalPreservesGrandchildAndOrdering(t *testing.T) {
 		t.Fatalf("grandchild scope=%v", got)
 	}
 	child, ok, err := s.Session(ctx, "child")
-	if err != nil || !ok || child.Version != 2 || child.LaunchParentID != nil {
+	if err != nil || !ok || child.Version != 2 || child.ParentSessionID != nil {
 		t.Fatalf("child=%#v ok=%v err=%v", child, ok, err)
 	}
 	grand, ok, err := s.Session(ctx, "grand")
-	if err != nil || !ok || grand.Version != 1 || grand.LaunchParentID == nil || *grand.LaunchParentID != "child" {
+	if err != nil || !ok || grand.Version != 1 || grand.ParentSessionID == nil || *grand.ParentSessionID != "child" {
 		t.Fatalf("grand=%#v ok=%v err=%v", grand, ok, err)
 	}
 	assertKernelInvariants(t, s)
@@ -961,7 +1055,7 @@ func TestParentRemovalAndConcurrentObservedVersionWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, ok, err := s.Session(ctx, "c")
-	if err != nil || !ok || child.LaunchParentID != nil || child.Version != 2 {
+	if err != nil || !ok || child.ParentSessionID != nil || child.Version != 2 {
 		t.Fatalf("child=%#v err=%v", child, err)
 	}
 	addSession(t, s, "race", "")
@@ -1085,7 +1179,7 @@ func assertKernelInvariants(t *testing.T, s *Store) {
 	if bad != 0 {
 		t.Fatalf("rule ownership/xor violations=%d", bad)
 	}
-	if err = s.database.QueryRowContext(ctx, `WITH RECURSIVE chain(start,id) AS (SELECT id,launch_parent_id FROM local_sessions WHERE launch_parent_id IS NOT NULL UNION SELECT chain.start,s.launch_parent_id FROM chain JOIN local_sessions s ON s.id=chain.id WHERE s.launch_parent_id IS NOT NULL) SELECT COUNT(*) FROM chain WHERE start=id`).Scan(&bad); err != nil {
+	if err = s.database.QueryRowContext(ctx, `WITH RECURSIVE chain(start,id) AS (SELECT id,parent_session_id FROM local_sessions WHERE parent_session_id IS NOT NULL UNION SELECT chain.start,s.parent_session_id FROM chain JOIN local_sessions s ON s.id=chain.id WHERE s.parent_session_id IS NOT NULL) SELECT COUNT(*) FROM chain WHERE start=id`).Scan(&bad); err != nil {
 		t.Fatal(err)
 	}
 	if bad != 0 {

@@ -125,8 +125,8 @@ func (c *Converter) session(row central.SessionRow) Session {
 	if v.StatusReported {
 		out.Status = &Status{Active: v.Active, Error: v.Error, Interrupted: v.Interrupted}
 	}
-	if v.LaunchParentID != nil {
-		out.ParentSessionID = string(*v.LaunchParentID)
+	if v.ParentSessionID != nil {
+		out.ParentSessionID = string(*v.ParentSessionID)
 	}
 	if v.TerminalCols != nil {
 		out.TerminalCols = *v.TerminalCols

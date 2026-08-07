@@ -162,10 +162,10 @@ func (s *Store) ReplaceProjectCatalogAndRematch(ctx context.Context, input []Pro
 		case matched:
 			// Placement was cascade-deleted with its entry; re-place.
 			rec := &placementRec{project: int64(project), local: r.local, parent: func() string {
-				if sess.LaunchParentID == nil {
+				if sess.ParentSessionID == nil {
 					return ""
 				}
-				return string(*sess.LaunchParentID)
+				return string(*sess.ParentSessionID)
 			}(), created: int64(sess.CreatedAt), promoted: sess.PromotedToRoot, isNew: true}
 			all = append(all, rec)
 			survivors["l:"+r.local] = rec

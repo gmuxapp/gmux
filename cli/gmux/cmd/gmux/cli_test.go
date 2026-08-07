@@ -92,6 +92,24 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("ref = %q", c.ref)
 				}
 			}},
+		{name: "session promote", args: []string{"session", "promote", "abc"}, wantMode: modeSession,
+			check: func(t *testing.T, c *command) {
+				if c.sessionSub != "promote" || c.ref != "abc" {
+					t.Errorf("session command=%#v", c)
+				}
+			}},
+		{name: "session reparent", args: []string{"session", "reparent", "abc", "root"}, wantMode: modeSession,
+			check: func(t *testing.T, c *command) {
+				if c.sessionSub != "reparent" || c.ref != "abc" || c.parentRef != "root" || c.clearParent {
+					t.Errorf("session command=%#v", c)
+				}
+			}},
+		{name: "session reparent clear", args: []string{"session", "reparent", "abc", "--clear"}, wantMode: modeSession,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc" || !c.clearParent || c.parentRef != "" {
+					t.Errorf("session command=%#v", c)
+				}
+			}},
 
 		{name: "tail defaults to 100 lines", args: []string{"tail", "abc"}, wantMode: modeTail,
 			check: func(t *testing.T, c *command) {
@@ -315,6 +333,8 @@ func TestHelpAliases(t *testing.T) {
 		{[]string{"ls", "-h"}, "ls"},
 		{[]string{"attach", "--help"}, "attach"},
 		{[]string{"kill", "?"}, "kill"},
+		{[]string{"session", "--help"}, "session"},
+		{[]string{"help", "session"}, "session"},
 		{[]string{"edit", "--help"}, "edit"},
 		{[]string{"send-keys", "--help"}, "send-keys"},
 	}
@@ -370,6 +390,8 @@ func TestUsageErrorsCarryTheirTopic(t *testing.T) {
 		{[]string{"tail"}, "tail"},
 		{[]string{"agent", "frobnicate"}, "agent"},
 		{[]string{"agent", "prompt"}, "agent"},
+		{[]string{"session", "reparent", "abc"}, "session"},
+		{[]string{"session", "promote"}, "session"},
 		{[]string{"prompt", "hi"}, "agent"},
 		{[]string{"cancel", "abc"}, "agent"},
 	}
@@ -404,6 +426,7 @@ func TestUsageErrorsCarryTheirTopic(t *testing.T) {
 	for topic, want := range map[string]string{
 		"":             "run 'gmux --help' for usage",
 		"wait":         "run 'gmux wait --help' for usage",
+		"session":      "run 'gmux session --help' for usage",
 		"send":         "run 'gmux send --help' for usage",
 		"agent":        "run 'gmux agent --help' for usage",
 		"agent prompt": "run 'gmux agent --help' for usage",

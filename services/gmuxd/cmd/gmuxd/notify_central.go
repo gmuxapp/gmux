@@ -125,8 +125,8 @@ func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
 		snap.Promoted = o.Session.PromotedToRoot
 		snap.SemanticAgent = semanticAgentAdapter(adapters.FindByAdapter(o.Session.Adapter))
-		if o.Session.LaunchParentID != nil {
-			snap.ParentID = string(*o.Session.LaunchParentID)
+		if o.Session.ParentSessionID != nil {
+			snap.ParentID = string(*o.Session.ParentSessionID)
 		}
 	}
 	return snap
