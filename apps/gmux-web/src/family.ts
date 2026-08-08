@@ -196,8 +196,9 @@ export function hasFamilyActivity(activity: FamilyActivity): boolean {
     || activity.workingAgents > 0 || activity.workingProcesses > 0
 }
 
-/** Spoken form of the icon row, which is otherwise pure glyphs. Folded
- * into the root row's accessible name — the row it lives in. */
+/** Spoken form of the `+` line, which is otherwise pure glyphs. It
+ * counts the members the entry does *not* name, so it reads as an
+ * addition to the rows above it. */
 export function familyActivityLabel(activity: FamilyActivity): string {
   const parts: string[] = []
   // 'process' takes -es; everything else here takes -s.
@@ -207,7 +208,7 @@ export function familyActivityLabel(activity: FamilyActivity): string {
   if (activity.unread > 0) parts.push(plural(activity.unread, 'unread member'))
   if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'working subagent'))
   if (activity.workingProcesses > 0) parts.push(plural(activity.workingProcesses, 'running process'))
-  return `Family: ${parts.join(', ')}`
+  return `Also in this family: ${parts.join(', ')}`
 }
 
 /** Hover title for the sidebar's selected-child row: the path from the

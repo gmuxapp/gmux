@@ -947,7 +947,7 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
  *  member. The sidebar's Projects rows use this so a family root's
  *  primary dot always answers "how is the root itself doing?" — the
  *  family's own attention is carried separately by
- *  `familyActivityById` on the family activity row. */
+ *  `familyActivityById` on the family's `+` line. */
 export function ownDotState(
   session: Session,
   am: ReadonlyMap<string, 'active' | 'fading'>,
@@ -956,45 +956,6 @@ export function ownDotState(
   const own = sessionDotState(session, am)
   return session.id === sel && (own === 'error' || own === 'unread') ? 'none' : own
 }
-
-/** What each family is doing right now, keyed by presentation-root id.
- *
- * Descendants only — the root answers for itself through its own row
- * dot. Members are tallied once each under dot precedence (error >
- * working > unread), and the selected member's error/unread is muted
- * exactly as it is on the dots ("nothing is unread if you're already
- * looking at it"), so the icon row can never claim attention the dots
- * don't. Idle members are not counted and roots with nothing happening
- * are absent from the map: their sidebar entry stays a single row. */
-export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
-  const sel = selectedId.value
-  const onlyAlive = aliveOnly.value
-  const index = familyIndex(sessions.value)
-  const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
-  for (const s of sessions.value) {
-    if (!index.childIds.has(s.id)) continue
-    const rootId = index.rootById.get(s.id)?.id
-    if (!rootId || rootId === s.id) continue
-    // The line counts what the list would show you. With alive-only on,
-    // a dead member is filtered out of the sidebar, so reporting its
-    // unread here would point at a row that isn't there.
-    if (onlyAlive && !s.alive) continue
-    const muted = s.id === sel
-    let bucket: keyof FamilyActivity
-    if (s.alive && s.status?.error) {
-      if (muted) continue
-      bucket = 'error'
-    } else if (s.alive && s.status?.active) {
-      bucket = isProcessSession(s) ? 'workingProcesses' : 'workingAgents'
-    } else if (s.unread && !muted) {
-      bucket = 'unread'
-    } else continue
-    const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
-    entry[bucket]++
-    map.set(rootId, entry)
-  }
-  return map
-})
 
 /** The selected session projected onto its family's sidebar row.
  *
@@ -1090,14 +1051,48 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
   return map
 })
 
-/** Whether the header's family tree panel is open.
+/** What the *rest* of each family is doing, keyed by presentation-root id.
  *
- * Owned here rather than in `MainHeader`'s local state because two
- * surfaces open the same panel: its own trigger, and the sidebar's
- * family activity row (which navigates to the root *and* opens the
- * tree in one click). The header still owns closing it, and clears
- * this whenever the selected session has no family. */
-export const familyPanelOpen = signal(false)
+ * The sidebar entry names two members: the root, on its own row with
+ * its own dot, and the slot member below it. This is everyone else —
+ * hence the `+` the row leads with. One invariant holds the entry
+ * together: every family member is represented exactly once, either by
+ * name or by a number, so a subagent you're watching can't show up as
+ * both a row and a count.
+ *
+ * Members are tallied once each under dot precedence (error > working
+ * > unread). Idle members are not counted and roots with nothing else
+ * happening are absent from the map: no line, nothing to say. */
+export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
+  const index = familyIndex(sessions.value)
+  const named = familySlotById.value
+  const onlyAlive = aliveOnly.value
+  const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
+  for (const s of sessions.value) {
+    if (!index.childIds.has(s.id)) continue
+    const rootId = index.rootById.get(s.id)?.id
+    if (!rootId || rootId === s.id) continue
+    // The line counts what the list would show you. With alive-only on,
+    // a dead member is filtered out of the sidebar, so reporting its
+    // unread here would point at a row that isn't there.
+    if (onlyAlive && !s.alive) continue
+    // Already named by the slot row above: counting it too would show
+    // one member twice, and claim attention its own dot already carries.
+    if (named.get(rootId)?.session.id === s.id) continue
+    let bucket: keyof FamilyActivity
+    if (s.alive && s.status?.error) {
+      bucket = 'error'
+    } else if (s.alive && s.status?.active) {
+      bucket = isProcessSession(s) ? 'workingProcesses' : 'workingAgents'
+    } else if (s.unread) {
+      bucket = 'unread'
+    } else continue
+    const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
+    entry[bucket]++
+    map.set(rootId, entry)
+  }
+  return map
+})
 
 // ── Home dashboard partitioning ─────────────────────────────────────────────
 //

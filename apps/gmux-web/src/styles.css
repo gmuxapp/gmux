@@ -975,9 +975,6 @@ body {
   transition: background 0.1s, color 0.1s, opacity 0.15s;
   padding: 0;
 }
-/* The family card owns hover, so hovering its summary line must still
-   reveal the root row's close button. */
-.session-family:hover .session-close-btn,
 .session-item:hover .session-close-btn,
 .session-item.selected .session-close-btn,
 .session-row:hover .session-close-btn,
@@ -1001,124 +998,138 @@ body {
 }
 
 /* ── Sidebar family entry ──
-   A family is one sidebar entry. The activity line lives *inside* the
-   root row (same link, same hover, one thing in the a11y tree); the
-   slot row below it — the member you're viewing, or the last one you
-   viewed — is its own link, but the card owns selection so the pair
-   never reads as two unrelated sidebar items. */
+   A family is one sidebar entry: a root row, the member you're viewing
+   (or last viewed), and a `+` line for everyone else. What binds them
+   is the trunk down the gutter, not a highlight — selection is drawn on
+   the row you selected, exactly as it is anywhere else in the list. */
 .session-family {
   position: relative;
-  border-radius: 3px;
-}
-.session-family:hover {
-  background: var(--bg-hover);
-}
-.session-family.selected {
-  background: var(--bg-selected);
-}
-.session-family.selected::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 1px 1px 0;
-}
-.session-family .session-item.selected {
-  background: none;
-}
-.session-family .session-item.selected::before {
-  display: none;
-}
-/* One tone above the card in each state (card: --bg-hover /
-   --bg-selected), so the row under the pointer is unmistakable
-   without breaking the card apart. */
-.session-family .session-item:hover,
-.session-family .family-slot:hover {
-  background: oklch(26% 0.02 250);
-}
-.session-family.selected .session-item:hover,
-.session-family.selected .family-slot:hover {
-  background: oklch(30% 0.02 250);
-}
-.session-family .session-item {
   padding-bottom: 2px;
 }
 
-/* A two-line row centers its dot over both lines; pin it to the title. */
-.session-item:has(.family-activity) {
-  align-items: flex-start;
-}
-.session-item:has(.family-activity) > .session-dot-indicator {
-  margin-top: 6px;
-}
-.session-item:has(.family-activity) > .session-close-btn {
-  /* Absolutely positioned at 50% of the row; pin it to the title line
-     instead so it doesn't drift down when the activity line appears. */
-  top: 5px;
-  transform: none;
-}
-
-/* Branch glyph, shared by the activity line and the slot row: same
-   muted tone as the counts it introduces. */
-.family-branch {
-  flex: 0 0 auto;
-  width: 9px;
-  color: var(--text-secondary);
-  font-size: 10px;
-  line-height: 1;
-}
-
-/* Activity line: dot/ring/$ glyph + count, one segment per state, each
-   dropped at zero. Numbers sit a touch under the title size; the
-   glyphs keep their standard sizes. */
-.family-activity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding-top: 1px;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  line-height: 1.3;
-  font-variant-numeric: tabular-nums;
-  /* Four segments only overflow on an extremely narrow sidebar; clip
-     rather than spill past the row. Attention states come first, so
-     what survives the clip is what matters. */
-  overflow: hidden;
-}
-.family-activity .family-branch {
-  margin-right: -4px;
-}
-.family-activity-seg {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-}
-
-/* Slot row: the family member you're viewing, or the last one you did.
-   Title-sized, because it's a peer of the root row you navigate to —
-   hangs off the root title column (14px pad + 7px dot + 8px gap). */
-.family-slot {
+/* Sub-rows hang off a hairline trunk running down the dot column
+   (14px pad + 7px dot, so its centre is 17.5px). The trunk is painted
+   as a background image rather than a pseudo-element: ::before is the
+   selection bar and ::after is the elbow, and a background can't cover
+   the bar the way a pseudo-element would. State rules below must use
+   `background-color`, never the `background` shorthand, or they wipe
+   the trunk out. */
+.family-sub {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   padding: 3px 8px 3px 29px;
-  margin-bottom: 4px;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-repeat: no-repeat;
+  background-position: 17px 0;
+  background-size: 1px 100%;
+}
+/* The last sub-row terminates the trunk at its elbow instead of
+   letting it run out of the bottom of the entry. */
+.family-sub:last-child {
+  background-size: 1px 50%;
+}
+
+/* The trunk starts just under the root row's dot rather than at the
+   first sub-row's top edge, so it reads as hanging off the root. A
+   background can't paint outside its own box, so this segment belongs
+   to the root row — and only exists when something hangs off it. */
+.session-family:has(.family-sub) > .session-item::after {
+  content: '';
+  position: absolute;
+  left: 17px;
+  /* Tracks the dot's centre, so it stays clear of the dot whatever the
+     row's height (touch padding, second line, taller status icons). */
+  top: 50%;
+  margin-top: 6px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+/* Elbow into the row, stopping short of the dot/glyph column. */
+.family-sub::after {
+  content: '';
+  position: absolute;
+  left: 17px;
+  top: 50%;
+  width: 6px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Slot row: the family member you're viewing, or the last one you did.
+   Title-sized and title-coloured in every state — a peer of the root
+   row you navigate to, so only the background says which is selected. */
+.family-slot {
   text-decoration: none;
   color: var(--text);
   font-size: 14px;
   line-height: 1.35;
   border-radius: 3px;
 }
-/* A remembered member is a memory, not a state: quieter than the one
-   you're actually in. */
-.family-slot:not(.current) .family-slot-title {
+.family-slot:hover {
+  background-color: var(--bg-hover);
+}
+.family-slot.selected {
+  background-color: var(--bg-selected);
+}
+/* Same 2px accent bar as any selected sidebar item. It sits on the row
+   that owns the selection, so the row's own background can't cover it. */
+.family-slot.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 0 1px 1px 0;
+}
+.family-slot-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* `+` line: everyone the entry doesn't name, one segment per state,
+   each dropped at zero. Inert — a count is a fact, not a destination —
+   so it takes no hover. Numbers sit a touch under the title size; the
+   glyphs keep their standard sizes. */
+.family-activity {
+  padding-top: 1px;
+  padding-bottom: 3px;
   color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.family-activity-glyphs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  /* Four segments only overflow on an extremely narrow sidebar; clip
+     rather than spill past the row. Attention states come first, so
+     what survives the clip is what matters. */
+  overflow: hidden;
+}
+.family-plus {
+  flex: 0 0 auto;
+  margin-right: -4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+.family-activity-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
 }
 .family-child-proc {
   flex: 0 0 auto;
@@ -1129,16 +1140,10 @@ body {
   color: var(--text-muted);
 }
 .family-child-proc.working { color: var(--accent); }
-.family-slot-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
 
-/* States that belong to the root row are the whole card's states — the
-   card is one entry, so it dims, drags and takes a drop line as a unit. */
-.session-family:has(.session-item.unavailable) .family-slot {
+/* States that belong to the root row are the whole entry's states —
+   it's one entry, so it dims, drags and takes a drop line as a unit. */
+.session-family:has(.session-item.unavailable) .family-sub {
   opacity: 0.55;
 }
 .session-family:has(.session-item.session-dragging) {
@@ -1154,13 +1159,6 @@ body {
   box-shadow: none;
 }
 
-/* Keyboard focus must be visible on the inner links even though the
-   card carries the selected background. */
-.session-family a:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: 3px;
-}
 
 /* Session drag-to-reorder */
 .session-item.session-dragging {
@@ -3117,6 +3115,11 @@ body {
   .family-slot {
     padding-top: 9px;
     padding-bottom: 9px;
+  }
+  /* Keep the elbow on the dot's line, not the padding's midpoint. */
+  .family-activity {
+    padding-top: 4px;
+    padding-bottom: 6px;
   }
 }
 
