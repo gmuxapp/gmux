@@ -1022,11 +1022,29 @@ body {
   background: var(--bg-selected);
 }
 /* The root row doesn't paint itself: hovering or selecting it *is*
-   hovering or selecting the group. Its accent bar stays — that's the
-   part that belongs to the row rather than to the family. */
+   hovering or selecting the group. */
 .session-family .session-item:hover,
 .session-family .session-item.selected {
   background: none;
+}
+/* Nor does it draw its own bar. Selecting the root selects the whole
+   family, so the bar spans the group; it narrows to a single row only
+   when a member takes the selection off the root. */
+.session-family .session-item.selected::before {
+  display: none;
+}
+.session-family:has(> .session-item.selected)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 0 1px 1px 0;
+  /* Above the member row's own background, which spans the full width
+     and would otherwise paint over the group's bar. */
+  z-index: 1;
 }
 
 /* Sub-rows share one fixed indent, so the member row's glyph and the
