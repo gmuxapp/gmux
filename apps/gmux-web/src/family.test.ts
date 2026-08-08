@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   descendantTree, familyAncestors, familyCounts, familyIndex,
   childTrailTitle, familyActivityLabel, familyRoot, hasFamily, hasFamilyActivity,
-  isFamilyChild, NO_FAMILY_ACTIVITY, projectFamily,
+  familyMemberGlyph, isFamilyChild, NO_FAMILY_ACTIVITY, projectFamily,
 } from './family'
 import { makeSession } from './test-helpers'
 
@@ -181,6 +181,42 @@ describe('flat panel projection', () => {
     expect(projection.ancestors.map(s => s.id)).toEqual(['root', 'parent'])
     // Ancestors are breadcrumb context in the header, not counted rows.
     expect(familyCounts(projection.siblingTrees)).toEqual({ error: 0, working: 0, unread: 0, total: 2 })
+  })
+})
+
+describe('member row glyph', () => {
+  const proc = (over = {}) => makeSession({
+    id: 'p', cwd: '/p', title: 'tail -f', adapter: 'shell', parent_session_id: 'root', ...over,
+  })
+  const kid = (over = {}) => makeSession({
+    id: 'k', cwd: '/p', title: 'kid', semantic_agent: true, parent_session_id: 'root', ...over,
+  })
+
+  it('gives a process its $ in every state', () => {
+    // Shape says "process" at a glance; state rides along as the glyph's
+    // own state rather than replacing it.
+    expect(familyMemberGlyph(proc(), 'none')).toEqual({ kind: 'process', state: 'none' })
+    expect(familyMemberGlyph(proc(), 'working')).toEqual({ kind: 'process', state: 'working' })
+  })
+
+  it('never drops a named member\'s attention on the floor', () => {
+    // The activity line subtracts whoever this row names, so the row is
+    // the only place its state can appear. A glyph that answered 'branch'
+    // or a stateless '$' for an unread member would report it nowhere.
+    for (const member of [proc({ unread: true }), kid({ unread: true })]) {
+      const glyph = familyMemberGlyph(member, 'unread')
+      expect(glyph.kind).not.toBe('branch')
+      expect('state' in glyph && glyph.state).toBe('unread')
+    }
+    for (const member of [proc({ status: { active: true, error: true } }), kid({ status: { active: true, error: true } })]) {
+      const glyph = familyMemberGlyph(member, 'error')
+      expect('state' in glyph && glyph.state).toBe('error')
+    }
+  })
+
+  it('falls back to the branch only for an agent with nothing to say', () => {
+    expect(familyMemberGlyph(kid(), 'none')).toEqual({ kind: 'branch' })
+    expect(familyMemberGlyph(kid(), 'working')).toEqual({ kind: 'dot', state: 'working' })
   })
 })
 
