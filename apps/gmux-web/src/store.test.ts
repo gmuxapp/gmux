@@ -1387,26 +1387,44 @@ describe('sidebar family entry derivations', () => {
       })
     })
 
-    it('mutes the selected member\u2019s attention but keeps its work', () => {
+    beforeEach(() => { recentFamilyChildren.value = [] })
+
+    it('never counts the member the slot row already names', () => {
       _rawSessions.value = [
         agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
         agent('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
       ]
+      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      // Viewing 'a' gives it the slot row, so only the sibling is left
+      // for the `+` line: one member, one representation.
       urlPath.value = '/proj/pi/aa'
-      expect(selectedId.value).toBe('a')
-      // Only the sibling still counts as unread.
       expect(familyActivityById.value.get('root')?.unread).toBe(1)
-      // A selected member that is *working* still counts: you can watch
-      // it work.
+      // Working members are no different — the slot row carries their
+      // dot, so counting them too would double them up.
       _rawSessions.value = _rawSessions.value.map(s =>
         s.id === 'a' ? { ...s, unread: false, status: { active: true } } : s)
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 1, workingProcesses: 0,
+        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
       })
     })
 
-    it('drops the whole entry when the only activity is the selected member', () => {
+    it('stops counting a member you merely visited, not just the selected one', () => {
+      _rawSessions.value = [
+        agent('root', { slug: 'rooty' }),
+        agent('a', { slug: 'aa', parent_session_id: 'root', status: { active: true } }),
+      ]
+      urlPath.value = '/proj/pi/aa'
+      rememberFamilyChild('a') // what the recorder effect does on a visit
+      expect(familyActivityById.value.has('root')).toBe(false)
+      // Back on the root, 'a' keeps the slot row as the way back — and
+      // stays out of the count, because it is still named.
+      urlPath.value = '/proj/pi/rooty'
+      expect(familySlotById.value.get('root')?.session.id).toBe('a')
+      expect(familyActivityById.value.has('root')).toBe(false)
+    })
+
+    it('drops the whole line when the only activity is the named member', () => {
       _rawSessions.value = [
         agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),

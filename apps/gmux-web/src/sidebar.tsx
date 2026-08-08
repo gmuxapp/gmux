@@ -18,7 +18,7 @@ import {
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, ownDotState, selectedId,
-  familyActivityById, familySlotById, familyPanelOpen, type FamilySlot,
+  familyActivityById, familySlotById, type FamilySlot,
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
@@ -139,7 +139,6 @@ function SessionItem({
   dropTarget,
   unavailable,
   showHostMarker,
-  meta,
   onClose,
   onClick,
   onDragStart,
@@ -157,13 +156,9 @@ function SessionItem({
   unavailable?: boolean
   /** Folder spans multiple hosts; render this session's host marker. */
   showHostMarker?: boolean
-  /** Second line inside this row (family activity). Part of the row's
-   *  own link: one target, one hover, one thing in the a11y tree. */
-  meta?: preact.ComponentChildren
   onClose?: () => void
-  /** Extra side-effects on click (e.g. close mobile sidebar). The event
-   *  lets a caller react to *where* in the row the click landed. */
-  onClick?: (event: MouseEvent) => void
+  /** Extra side-effects on click (e.g. close mobile sidebar). */
+  onClick?: () => void
   onDragStart?: () => void
   onDragOver?: () => void
   onDragEnd?: () => void
@@ -190,9 +185,7 @@ function SessionItem({
       class={cls}
       href={href}
       draggable={canDrag && !!onDragStart}
-      onClick={(e) => {
-        onClick?.(e)
-      }}
+      onClick={() => { onClick?.() }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
       onDragStart={(e) => {
         e.dataTransfer!.effectAllowed = 'move'
@@ -214,7 +207,6 @@ function SessionItem({
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
         </div>
-        {meta}
         {duplicateOpen && (
           <div class="session-meta">
             <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
@@ -234,21 +226,19 @@ function SessionItem({
   )
 }
 
-/** The family activity line: the second line *inside* a root row, in
- *  the sidebar's own dot vocabulary — error, unread, working subagent,
- *  running process — each segment dropped at zero. It belongs to the
- *  root's link rather than being its own hit area: one target, one
- *  hover, one entry in the a11y tree. Clicking it still opens the
- *  family tree (see FolderGroup) because you clearly asked about the
- *  family, but it lands you on the root either way. */
+/** The `+` line: what the family entry does *not* name, in the
+ *  sidebar's own dot vocabulary — error, unread, working subagent,
+ *  running process — each segment dropped at zero. It's the last thing
+ *  hanging off the trunk, and it's inert: a count is a fact, not a
+ *  destination, and the rows above it are where you'd go.
+ */
 function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
   const label = familyActivityLabel(activity)
   return (
-    <>
-      {/* Glyphs are decoration; the sentence below carries the meaning
-        * into the root link's accessible name. */}
-      <div class="family-activity" aria-hidden="true" title={label}>
-        <span class="family-branch">↳</span>
+    <div class="family-sub family-activity" title={label}>
+      {/* Glyphs are decoration; the sentence carries the meaning. */}
+      <span class="family-activity-glyphs" aria-hidden="true">
+        <span class="family-plus">+</span>
         {activity.error > 0 && (
           <span class="family-activity-seg">
             <span class="session-dot-indicator error" />
@@ -273,62 +263,65 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
             {activity.workingProcesses}
           </span>
         )}
-      </div>
+      </span>
       <span class="sr-only">{label}</span>
-    </>
+    </div>
   )
 }
 
-/** The sidebar's family entry: a root row with one family member kept
- *  beneath it — the member you're viewing, or the last one you did.
+/** The sidebar's family entry: a root row, the one family member kept
+ *  beneath it — the member you're viewing, or the last one you did —
+ *  and a `+` line counting everyone else.
  *
  *  Three rules hold this together:
  *   - the root row's dot is the *root session's own* status, so a
  *     working child never masquerades as a working root;
- *   - the slot row is the way back into the family. It's a real link of
- *     its own, but the selection highlight lives on the card, so it
- *     reads as "this family, this member" rather than a standalone
- *     sidebar item;
- *   - exactly one member ever shows. A second one would grow this into
- *     the family tree, which is a different surface.
+ *   - each member is represented exactly once: named by a row, or
+ *     counted on the `+` line, never both;
+ *   - selection is drawn on the row you selected, like any other
+ *     sidebar item. What binds the rows into one entry is the trunk
+ *     down the gutter, which is always there — including for the idle
+ *     family that has nothing to report.
  */
 function FamilyEntry({
-  selected,
   slot,
   slotHref,
   slotTrail,
+  activity,
   onClick,
   children,
 }: {
-  selected: boolean
-  slot: FamilySlot
+  slot?: FamilySlot
   slotHref?: string
   /** Root › … › member trail, for the slot row's hover title. */
   slotTrail?: string
+  activity: FamilyActivity
   onClick?: () => void
   /** The root's own `SessionItem`. */
   children: preact.ComponentChildren
 }) {
-  const member = slot.session
-  const dot = ownDotState(member, activityMap.value, selectedId.value)
+  const member = slot?.session
+  const dot = member ? ownDotState(member, activityMap.value, selectedId.value) : 'none'
   return (
-    <div class={`session-family${selected ? ' selected' : ''}`}>
+    <div class="session-family">
       {children}
-      <a
-        class={`family-slot${slot.selected ? ' current' : ''}`}
-        href={slotHref}
-        aria-current={slot.selected ? 'page' : undefined}
-        title={slotTrail}
-        onClick={() => onClick?.()}
-      >
-        <span class="family-branch" aria-hidden="true">↳</span>
-        {/* No reserved dot column: a quiet member spends the space on
-          * its title instead. */}
-        {isProcessSession(member)
-          ? <span class={`family-child-proc${member.alive && member.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
-          : dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
-        <span class="family-slot-title">{member.title}</span>
-      </a>
+      {member && (
+        <a
+          class={`family-sub family-slot${slot.selected ? ' selected' : ''}`}
+          href={slotHref}
+          aria-current={slot.selected ? 'page' : undefined}
+          title={slotTrail}
+          onClick={() => onClick?.()}
+        >
+          {/* No reserved dot column: a quiet member spends the space on
+            * its title instead. */}
+          {isProcessSession(member)
+            ? <span class={`family-child-proc${member.alive && member.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
+            : dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
+          <span class="family-slot-title">{member.title}</span>
+        </a>
+      )}
+      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} />}
     </div>
   )
 }
@@ -479,39 +472,34 @@ function FolderGroup({
               key={s.id}
               session={s}
               href={href}
-              selected={selId === s.id}
+              // `selId` maps a selected descendant onto its root row.
+              // The entry now draws that selection on the member's own
+              // row instead, so the root row only lights up for itself.
+              selected={selId === s.id && !slot?.selected}
               resuming={resumingId === s.id}
               // Root row = root's own status. The family roll-up lives on
               // the summary line below it (see FamilyEntry).
               dotState={ownDotState(s, am, rawSelId)}
               unavailable={isSessionUnavailable(s, peerStatus)}
               showHostMarker={mixedHosts}
-              meta={hasFamilyActivity(activity) ? <FamilyActivityLine activity={activity} /> : undefined}
               dragging={drag !== null && s.id === visible[drag.from]?.id}
               dropTarget={drag !== null && drag.over === i && drag.from !== i}
               onClose={() => onCloseSession(s)}
-              // Clicking the activity line asked about the family, so
-              // bring the tree up with it. Every click still lands on
-              // the root: same link, same destination.
-              onClick={(e) => {
-                if ((e.target as HTMLElement | null)?.closest('.family-activity')) familyPanelOpen.value = true
-                onClick?.()
-              }}
+              onClick={onClick}
               onDragStart={dragDisabled ? undefined : () => handleDragStart(i)}
               onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
               onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
             />
           )
-          // No remembered/selected member: the row stands alone (its
-          // activity line, if any, is already inside it).
-          if (!slot) return item
+          // Nothing to hang off a trunk: the row stands alone.
+          if (!slot && !hasFamilyActivity(activity)) return item
           return (
             <FamilyEntry
               key={s.id}
-              selected={selId === s.id}
               slot={slot}
-              slotHref={sessionHref(slot.session)}
-              slotTrail={childTrailTitle(s, slot.ancestors, slot.session)}
+              slotHref={slot && sessionHref(slot.session)}
+              slotTrail={slot && childTrailTitle(s, slot.ancestors, slot.session)}
+              activity={activity}
               onClick={onClick}
             >
               {item}
