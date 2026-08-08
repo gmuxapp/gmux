@@ -1047,9 +1047,10 @@ body {
   z-index: 1;
 }
 
-/* Sub-rows share one fixed indent, so the member row's glyph and the
-   activity line's first glyph form a single column under the root
-   title (14px pad + 7px dot + 8px gap). */
+/* Sub-rows share one fixed indent: a glyph column under the root title
+   (14px pad + 7px dot + 8px gap), then content. The member row puts
+   its status there and the activity line its branch, so the two rows
+   line up on both columns. */
 .family-sub {
   position: relative;
   display: flex;
@@ -1130,7 +1131,9 @@ body {
 .family-activity-glyphs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* Tight enough that all four segments clear a 150px sidebar, which
+     is the narrowest the pane goes. */
+  gap: 8px;
   min-width: 0;
   /* Four segments only overflow on an extremely narrow sidebar; clip
      rather than spill past the row. Attention states come first, so

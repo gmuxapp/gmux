@@ -238,6 +238,10 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
   const label = familyActivityLabel(activity)
   return (
     <div class="family-sub family-activity" title={label}>
+      {/* Same branch glyph, same column as the member row's: this row
+        * hangs off the root too, and says so whether or not anything
+        * here is highlighted. */}
+      <span class="family-glyph family-branch" aria-hidden="true">↳</span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
         {activity.error > 0 && (
