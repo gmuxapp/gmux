@@ -1011,6 +1011,9 @@ body {
 .session-family {
   position: relative;
   border-radius: 3px;
+  /* The whole group selects the root, so all of it reads as clickable —
+     the activity line and the slack included. */
+  cursor: pointer;
 }
 .session-family:hover {
   background: var(--bg-hover);
@@ -1026,7 +1029,9 @@ body {
   background: none;
 }
 
-/* Sub-rows hang under the root title (14px pad + 7px dot + 8px gap). */
+/* Sub-rows share one fixed indent, so the member row's glyph and the
+   activity line's first glyph form a single column under the root
+   title (14px pad + 7px dot + 8px gap). */
 .family-sub {
   position: relative;
   display: flex;
@@ -1034,6 +1039,21 @@ body {
   gap: 6px;
   min-width: 0;
   padding: 3px 8px 3px 29px;
+}
+
+/* Every glyph in that column occupies the same width, whatever it is,
+   so nothing shifts horizontally when a member's state changes. */
+.family-glyph {
+  flex: 0 0 7px;
+  width: 7px;
+  text-align: center;
+}
+/* What a quiet member looks like: no state to report, so the column
+   shows the branch instead. */
+.family-branch {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
 }
 
 /* Member row: the family member you're viewing, or the last one you
@@ -1106,14 +1126,15 @@ body {
   flex: 0 0 auto;
 }
 .family-child-proc {
-  flex: 0 0 auto;
-  width: 7px;
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1;
   color: var(--text-muted);
 }
 .family-child-proc.working { color: var(--accent); }
+/* The rest of the dot vocabulary, in the `$`'s colour. */
+.family-child-proc.unread { color: var(--unread); }
+.family-child-proc.error { color: var(--status-error); }
 
 /* States that belong to the root row are the whole entry's states —
    it's one entry, so it dims, drags and takes a drop line as a unit. */

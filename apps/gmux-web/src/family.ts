@@ -1,4 +1,6 @@
 import type { Session } from './types'
+// Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
+import type { DotState } from './store'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -160,6 +162,26 @@ function byRecency(a: Session, b: Session): number {
   const at = a.last_output_at || a.created_at
   const bt = b.last_output_at || b.created_at
   return bt.localeCompare(at) || a.id.localeCompare(b.id)
+}
+
+/** What the member row's glyph column shows, given the member and the
+ *  dot state the sidebar computed for it.
+ *
+ *  The column is always occupied, and — this is the load-bearing part —
+ *  it is the *only* place a named member's state can appear, because
+ *  the activity line subtracts whoever the row names. A glyph that
+ *  can't express `unread` therefore doesn't just look plainer; it drops
+ *  that member's attention entirely: counted nowhere, shown nowhere.
+ *  So a process keeps its `$` shape but carries state as colour, and an
+ *  agent with nothing to report falls back to the branch. */
+export type MemberGlyph =
+  | { readonly kind: 'process'; readonly state: DotState }
+  | { readonly kind: 'dot'; readonly state: Exclude<DotState, 'none'> }
+  | { readonly kind: 'branch' }
+
+export function familyMemberGlyph(member: Session, dot: DotState): MemberGlyph {
+  if (isProcessSession(member)) return { kind: 'process', state: dot }
+  return dot === 'none' ? { kind: 'branch' } : { kind: 'dot', state: dot }
 }
 
 /** A family member whose parent is a semantic agent but who is not one

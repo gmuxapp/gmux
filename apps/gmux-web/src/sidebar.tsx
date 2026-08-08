@@ -28,7 +28,7 @@ import {
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import {
-  childTrailTitle, familyActivityLabel, hasFamilyActivity, isProcessSession,
+  childTrailTitle, familyActivityLabel, familyMemberGlyph, hasFamilyActivity,
   NO_FAMILY_ACTIVITY, type FamilyActivity,
 } from './family'
 import type { Session, Folder } from './types'
@@ -242,25 +242,25 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
       <span class="family-activity-glyphs" aria-hidden="true">
         {activity.error > 0 && (
           <span class="family-activity-seg">
-            <span class="session-dot-indicator error" />
+            <span class="family-glyph session-dot-indicator error" />
             {activity.error}
           </span>
         )}
         {activity.unread > 0 && (
           <span class="family-activity-seg">
-            <span class="session-dot-indicator unread" />
+            <span class="family-glyph session-dot-indicator unread" />
             {activity.unread}
           </span>
         )}
         {activity.workingAgents > 0 && (
           <span class="family-activity-seg">
-            <span class="session-dot-indicator working" />
+            <span class="family-glyph session-dot-indicator working" />
             {activity.workingAgents}
           </span>
         )}
         {activity.workingProcesses > 0 && (
           <span class="family-activity-seg">
-            <span class="family-child-proc working">$</span>
+            <span class="family-glyph family-child-proc working">$</span>
             {activity.workingProcesses}
           </span>
         )}
@@ -318,7 +318,13 @@ function FamilyEntry({
   children: preact.ComponentChildren
 }) {
   const member = slot?.session
-  const dot = member ? ownDotState(member, activityMap.value, selectedId.value) : 'none'
+  // One decision, made in `family.ts` so it can be tested: which glyph
+  // this member gets, and what state it carries. The row is the only
+  // place a named member's state can appear — the activity line
+  // subtracts it — so the glyph has to be able to say `unread`.
+  const glyph = member
+    ? familyMemberGlyph(member, ownDotState(member, activityMap.value, selectedId.value))
+    : null
   return (
     // Not focusable on purpose: the group's own rows are the keyboard
     // targets, and this only hands the pointer the slack between them,
@@ -355,11 +361,17 @@ function FamilyEntry({
           title={slotTrail}
           onClick={() => onClick?.()}
         >
-          {/* No reserved dot column: a quiet member spends the space on
-            * its title instead. */}
-          {isProcessSession(member)
-            ? <span class={`family-child-proc${member.alive && member.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
-            : dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
+          {/* One fixed-width glyph column, always filled: the member's
+            * status, its `$` if it's a process, or the branch arrow when
+            * there's nothing to report. The arrow is what a quiet member
+            * looks like — it marks the row as hanging off the root, and
+            * it keeps the title from sliding sideways when state
+            * arrives or clears. */}
+          {glyph?.kind === 'process'
+            ? <span class={`family-glyph family-child-proc ${glyph.state}`} aria-hidden="true">$</span>
+            : glyph?.kind === 'dot'
+            ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
+            : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}
           <span class="family-slot-title">{member.title}</span>
         </a>
       )}
