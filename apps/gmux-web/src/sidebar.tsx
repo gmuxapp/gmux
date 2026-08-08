@@ -22,7 +22,7 @@ import {
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
-  aliveOnly, setAliveOnly, tabHref, sessionStreamWarnings, sessionStreamOmittedTotal,
+  aliveOnly, setAliveOnly, tabHref, navigate, sessionStreamWarnings, sessionStreamOmittedTotal,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -193,7 +193,10 @@ function SessionItem({
         onDragStart?.()
       }}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer!.dropEffect = 'move'; onDragOver?.() }}
-      onDrop={(e) => { e.preventDefault(); onDragEnd?.() }}
+      // Family entries wrap this row in a group that is itself a drop
+      // target; without this the drop runs both handlers in one dispatch,
+      // before a re-render can clear `drag`, and the reorder is sent twice.
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDragEnd?.() }}
       onDragEnd={onDragEnd}
     >
       {unavailable
@@ -226,19 +229,17 @@ function SessionItem({
   )
 }
 
-/** The `+` line: what the family entry does *not* name, in the
+/** The activity line: what the entry does *not* name by row, in the
  *  sidebar's own dot vocabulary — error, unread, working subagent,
- *  running process — each segment dropped at zero. It's the last thing
- *  hanging off the trunk, and it's inert: a count is a fact, not a
- *  destination, and the rows above it are where you'd go.
- */
+ *  running process — each segment dropped at zero. It's a count, not a
+ *  destination, so it has no target of its own; like the rest of the
+ *  entry's slack it belongs to the group, which selects the root. */
 function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
   const label = familyActivityLabel(activity)
   return (
     <div class="family-sub family-activity" title={label}>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
-        <span class="family-plus">+</span>
         {activity.error > 0 && (
           <span class="family-activity-seg">
             <span class="session-dot-indicator error" />
@@ -271,39 +272,80 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
 
 /** The sidebar's family entry: a root row, the one family member kept
  *  beneath it — the member you're viewing, or the last one you did —
- *  and a `+` line counting everyone else.
+ *  and a line counting everyone else.
  *
- *  Three rules hold this together:
- *   - the root row's dot is the *root session's own* status, so a
- *     working child never masquerades as a working root;
- *   - each member is represented exactly once: named by a row, or
- *     counted on the `+` line, never both;
- *   - selection is drawn on the row you selected, like any other
- *     sidebar item. What binds the rows into one entry is the trunk
- *     down the gutter, which is always there — including for the idle
- *     family that has nothing to report.
+ *  Selection and hit areas nest, the way the sessions do:
+ *   - the group is the root's area. Hovering anywhere in it highlights
+ *     the whole group, and any click that doesn't land on the member
+ *     row selects the root — including the counts line and the slack
+ *     around it, which have nothing better to do;
+ *   - the member row is its own area inside that one, with its own
+ *     highlight a tone above the group's;
+ *   - the background says *which family* you're in, the accent bar says
+ *     *which row*, so selecting a member keeps the group lit and moves
+ *     the bar down to it.
+ *
+ *  Two more rules hold the content together: the root row's dot is the
+ *  root session's own status, so a working child never masquerades as a
+ *  working root; and each member is represented exactly once, named by
+ *  a row or counted on the line, never both.
  */
 function FamilyEntry({
+  selected,
+  rootHref,
   slot,
   slotHref,
   slotTrail,
   activity,
   onClick,
+  onDragOver,
+  onDragEnd,
   children,
 }: {
+  /** Something in this family is selected — root or member. */
+  selected: boolean
+  rootHref: string
   slot?: FamilySlot
   slotHref?: string
-  /** Root › … › member trail, for the slot row's hover title. */
+  /** Root › … › member trail, for the member row's hover title. */
   slotTrail?: string
   activity: FamilyActivity
   onClick?: () => void
+  /** Reorder drop target for the whole group, not just the root row. */
+  onDragOver?: () => void
+  onDragEnd?: () => void
   /** The root's own `SessionItem`. */
   children: preact.ComponentChildren
 }) {
   const member = slot?.session
   const dot = member ? ownDotState(member, activityMap.value, selectedId.value) : 'none'
   return (
-    <div class="session-family">
+    // Not focusable on purpose: the group's own rows are the keyboard
+    // targets, and this only hands the pointer the slack between them,
+    // which leads somewhere those rows already go.
+    <div
+      class={`session-family${selected ? ' selected' : ''}`}
+      onClick={(e) => {
+        // Anything with its own target keeps it (root row, member row,
+        // close button); the leftovers fall through to the root.
+        if ((e.target as HTMLElement | null)?.closest('a, button')) return
+        // The slack is a convenience, not a link, so it declines every
+        // gesture a link would answer differently: a modified click
+        // wants a new tab or a download, and a click that ends a text
+        // selection wants the text, not a navigation. Doing otherwise
+        // makes the entry feel like it grabs at the pointer.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+        if (!(getSelection()?.isCollapsed ?? true)) return
+        e.preventDefault()
+        navigate(rootHref)
+        onClick?.()
+      }}
+      // A family entry is one reorder target. Without this the drop is
+      // only accepted over the root row, so the taller the entry grows
+      // the more of it silently refuses the drag.
+      onDragOver={onDragOver && ((e) => { e.preventDefault(); e.dataTransfer!.dropEffect = 'move'; onDragOver() })}
+      onDrop={onDragEnd && ((e) => { e.preventDefault(); onDragEnd() })}
+    >
       {children}
       {member && (
         <a
@@ -491,11 +533,15 @@ function FolderGroup({
               onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
             />
           )
-          // Nothing to hang off a trunk: the row stands alone.
+          // No member to name and nothing else to count: one plain row.
           if (!slot && !hasFamilyActivity(activity)) return item
           return (
             <FamilyEntry
               key={s.id}
+              selected={selId === s.id}
+              rootHref={href}
+              onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
+              onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
               slot={slot}
               slotHref={slot && sessionHref(slot.session)}
               slotTrail={slot && childTrailTitle(s, slot.ancestors, slot.session)}

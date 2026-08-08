@@ -975,6 +975,9 @@ body {
   transition: background 0.1s, color 0.1s, opacity 0.15s;
   padding: 0;
 }
+/* The group owns hover, so pointing anywhere in a family entry must
+   still reveal the root row's close button. */
+.session-family:hover .session-close-btn,
 .session-item:hover .session-close-btn,
 .session-item.selected .session-close-btn,
 .session-row:hover .session-close-btn,
@@ -999,21 +1002,31 @@ body {
 
 /* ── Sidebar family entry ──
    A family is one sidebar entry: a root row, the member you're viewing
-   (or last viewed), and a `+` line for everyone else. What binds them
-   is the trunk down the gutter, not a highlight — selection is drawn on
-   the row you selected, exactly as it is anywhere else in the list. */
+   (or last viewed), and a line counting everyone else. Hit areas and
+   highlights nest. The group is the root's area — it takes the hover
+   and carries the "you are in this family" background — and the member
+   row is its own area inside it, one tone above. The accent bar is the
+   only thing that marks a single row, so it moves between the root and
+   the member while the group stays lit either way. */
 .session-family {
   position: relative;
-  padding-bottom: 2px;
+  border-radius: 3px;
+}
+.session-family:hover {
+  background: var(--bg-hover);
+}
+.session-family.selected {
+  background: var(--bg-selected);
+}
+/* The root row doesn't paint itself: hovering or selecting it *is*
+   hovering or selecting the group. Its accent bar stays — that's the
+   part that belongs to the row rather than to the family. */
+.session-family .session-item:hover,
+.session-family .session-item.selected {
+  background: none;
 }
 
-/* Sub-rows hang off a hairline trunk running down the dot column
-   (14px pad + 7px dot, so its centre is 17.5px). The trunk is painted
-   as a background image rather than a pseudo-element: ::before is the
-   selection bar and ::after is the elbow, and a background can't cover
-   the bar the way a pseudo-element would. State rules below must use
-   `background-color`, never the `background` shorthand, or they wipe
-   the trunk out. */
+/* Sub-rows hang under the root title (14px pad + 7px dot + 8px gap). */
 .family-sub {
   position: relative;
   display: flex;
@@ -1021,48 +1034,15 @@ body {
   gap: 6px;
   min-width: 0;
   padding: 3px 8px 3px 29px;
-  background-image: linear-gradient(var(--border), var(--border));
-  background-repeat: no-repeat;
-  background-position: 17px 0;
-  background-size: 1px 100%;
-}
-/* The last sub-row terminates the trunk at its elbow instead of
-   letting it run out of the bottom of the entry. */
-.family-sub:last-child {
-  background-size: 1px 50%;
 }
 
-/* The trunk starts just under the root row's dot rather than at the
-   first sub-row's top edge, so it reads as hanging off the root. A
-   background can't paint outside its own box, so this segment belongs
-   to the root row — and only exists when something hangs off it. */
-.session-family:has(.family-sub) > .session-item::after {
-  content: '';
-  position: absolute;
-  left: 17px;
-  /* Tracks the dot's centre, so it stays clear of the dot whatever the
-     row's height (touch padding, second line, taller status icons). */
-  top: 50%;
-  margin-top: 6px;
-  bottom: 0;
-  width: 1px;
-  background: var(--border);
-}
-
-/* Elbow into the row, stopping short of the dot/glyph column. */
-.family-sub::after {
-  content: '';
-  position: absolute;
-  left: 17px;
-  top: 50%;
-  width: 6px;
-  height: 1px;
-  background: var(--border);
-}
-
-/* Slot row: the family member you're viewing, or the last one you did.
-   Title-sized and title-coloured in every state — a peer of the root
-   row you navigate to, so only the background says which is selected. */
+/* Member row: the family member you're viewing, or the last one you
+   did. Title-sized and title-coloured in every state — a peer of the
+   root row you navigate to, so only the background says where you are.
+   Its highlight sits one tone above the group's in both states, so the
+   row under the pointer is unmistakable without breaking the entry
+   apart. --bg-hover/--bg-surface read as a dent inside a selected
+   group, hence the explicit tones. */
 .family-slot {
   text-decoration: none;
   color: var(--text);
@@ -1071,13 +1051,14 @@ body {
   border-radius: 3px;
 }
 .family-slot:hover {
-  background-color: var(--bg-hover);
+  background: oklch(26% 0.02 250);
 }
+.session-family.selected .family-slot:hover,
 .family-slot.selected {
-  background-color: var(--bg-selected);
+  background: oklch(30% 0.02 250);
 }
-/* Same 2px accent bar as any selected sidebar item. It sits on the row
-   that owns the selection, so the row's own background can't cover it. */
+/* Same 2px bar as any selected sidebar item, on the row that owns the
+   selection — the group's background can't cover it there. */
 .family-slot.selected::before {
   content: '';
   position: absolute;
@@ -1095,18 +1076,18 @@ body {
   min-width: 0;
 }
 
-/* `+` line: everyone the entry doesn't name, one segment per state,
-   each dropped at zero. Inert — a count is a fact, not a destination —
-   so it takes no hover. Numbers sit a touch under the title size; the
-   glyphs keep their standard sizes. */
+/* Activity line: everyone the entry doesn't name by row, one segment
+   per state, each dropped at zero. No target of its own — it's part of
+   the group's area, so it takes the group's hover and selects the
+   root. Numbers sit a touch under the title size; the glyphs keep
+   their standard sizes. */
 .family-activity {
   padding-top: 1px;
-  padding-bottom: 3px;
+  padding-bottom: 4px;
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
-  cursor: default;
 }
 .family-activity-glyphs {
   display: flex;
@@ -1117,13 +1098,6 @@ body {
      rather than spill past the row. Attention states come first, so
      what survives the clip is what matters. */
   overflow: hidden;
-}
-.family-plus {
-  flex: 0 0 auto;
-  margin-right: -4px;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1;
 }
 .family-activity-seg {
   display: inline-flex;
@@ -1157,6 +1131,14 @@ body {
 }
 .session-family .session-item.session-drop-target {
   box-shadow: none;
+}
+
+/* Keyboard focus must be visible on the member row even though the
+   group carries the background. */
+.session-family a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 3px;
 }
 
 
@@ -3111,15 +3093,14 @@ body {
     padding: 8px 10px 8px 14px;
   }
 
-  /* The slot row is a real tap target on touch. */
+  /* The member row is a real tap target on touch. */
   .family-slot {
     padding-top: 9px;
     padding-bottom: 9px;
   }
-  /* Keep the elbow on the dot's line, not the padding's midpoint. */
   .family-activity {
-    padding-top: 4px;
-    padding-bottom: 6px;
+    padding-top: 3px;
+    padding-bottom: 7px;
   }
 }
 
