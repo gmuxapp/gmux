@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { familyCounts, isProcessSession, projectFamily, type FamilyNode } from './family'
 import { splitLevel } from './family-drawer-model'
 import { viewToPath } from './routing'
+import { formatAge } from './session-row'
 import { activityMap, projects, sessions, sessionDotState, tabHref } from './store'
 import type { Session } from './types'
 
@@ -10,17 +11,25 @@ function hrefFor(session: Session): string | undefined {
   return path ? tabHref(path) : undefined
 }
 
-function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
+function FamilyRow({ node, selectedId, depth, expanded, pinned, now, onToggle }: {
   node: FamilyNode
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
+  /** Your own spine: rows the level cap must never fold away. */
+  pinned: ReadonlySet<string>
+  /** Render-time clock, passed down so every row in one paint agrees. */
+  now: number
   onToggle: (key: string) => void
 }) {
   const session = node.session
   const process = isProcessSession(session)
-  const rawDot = sessionDotState(session, activityMap.value)
-  const dot = session.id === selectedId && (rawDot === 'error' || rawDot === 'unread') ? 'none' : rawDot
+  // No selection muting here, unlike the sidebar: the panel is a map of
+  // the family, and a map that blanks the row you're standing on would
+  // claim "1 error" in the counts line with no errored row in sight.
+  // (Viewing a session clears its unread/error flags server-side anyway,
+  // so the dot settles on its own a beat later.)
+  const dot = sessionDotState(session, activityMap.value)
   return (
     <li>
       <a
@@ -33,7 +42,11 @@ function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
           ? <span class={`family-row-proc${session.alive && session.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
           : <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
         <span class="family-row-title">{session.title}</span>
-        <span class="family-row-kind">{session.adapter}</span>
+        {/* Levels are ordered by this timestamp, so it has to be on
+          * screen: sorting by an invisible key reads as no order at
+          * all. It replaces the adapter label, which repeated the same
+          * word down the whole panel and duplicated the `$` glyph. */}
+        <span class="family-row-age">{formatAge(session.last_output_at ?? session.created_at, now)}</span>
       </a>
       {node.children.length > 0 && (
         <ul>
@@ -43,6 +56,8 @@ function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
             selectedId={selectedId}
             depth={depth + 1}
             expanded={expanded}
+            pinned={pinned}
+            now={now}
             onToggle={onToggle}
           />
         </ul>
@@ -53,15 +68,17 @@ function FamilyRow({ node, selectedId, depth, expanded, onToggle }: {
 
 /** One children level: capped rows plus a two-state summary row
  * (`+N more` / `show fewer`) keyed per parent. */
-function LevelRows({ nodes, parentId, selectedId, depth, expanded, onToggle }: {
+function LevelRows({ nodes, parentId, selectedId, depth, expanded, pinned, now, onToggle }: {
   nodes: readonly FamilyNode[]
   parentId: string
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
+  pinned: ReadonlySet<string>
+  now: number
   onToggle: (key: string) => void
 }) {
-  const { shown, summary } = splitLevel(nodes, parentId, expanded)
+  const { shown, summary } = splitLevel(nodes, parentId, expanded, pinned)
   return (
     <>
       {shown.map(node => (
@@ -71,6 +88,8 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, onToggle }: {
           selectedId={selectedId}
           depth={depth}
           expanded={expanded}
+          pinned={pinned}
+          now={now}
           onToggle={onToggle}
         />
       ))}
@@ -92,8 +111,8 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, onToggle }: {
   )
 }
 
-function CountsLine({ trees }: { trees: readonly FamilyNode[] }) {
-  const counts = familyCounts(trees)
+function CountsLine({ tree }: { tree: FamilyNode }) {
+  const counts = familyCounts([tree])
   const segments: { text: string; cls?: string }[] = []
   if (counts.error > 0) segments.push({ text: `${counts.error} error`, cls: 'attention' })
   if (counts.working > 0) segments.push({ text: `${counts.working} working` })
@@ -114,9 +133,12 @@ function CountsLine({ trees }: { trees: readonly FamilyNode[] }) {
 /** The family panel: a non-modal popover anchored under the header's family
  * trigger, matching the ⋮ menu's behavior — closes on outside mousedown and
  * Escape, no focus trap. Clicking a row navigates without closing it so a
- * family can be traversed in place. Renders live (sidebar activity-mode
- * semantics): rows re-sort only when new output arrives, which is the same
- * stability bar the sidebar meets. */
+ * family can be traversed in place.
+ *
+ * Shows the whole family from the root, wherever you're standing, with
+ * every level ordered by recency — the same rule as the sidebar's
+ * activity feed, and the same stability bar: rows move only when new
+ * output arrives, never because you acted on one. */
 export function FamilyDrawer({ selected, onClose, triggerRef }: {
   selected: Session
   onClose: () => void
@@ -161,7 +183,12 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
     let inner = 0
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => {
-        panelRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.focus()
+        const row = panelRef.current?.querySelector<HTMLElement>('[aria-current="page"]')
+        // Whole-family scope means your row can open below the fold, so
+        // bring it into view before taking focus (focus alone would
+        // scroll it to an arbitrary edge).
+        row?.scrollIntoView({ block: 'nearest' })
+        row?.focus({ preventScroll: true })
       })
     })
     return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner) }
@@ -170,19 +197,25 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Promotion intentionally defers provenance: promoted sessions present as
   // roots even though parent_session_id remains immutable on the wire.
   const projection = projectFamily(selected, sessions.value)
+  // Your own path, root to selection: the cap may fold anything but this.
+  const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
+  // One clock for the whole paint, so sibling ages can't disagree.
+  const now = Date.now()
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
-        <CountsLine trees={projection.siblingTrees} />
+        <CountsLine tree={projection.tree} />
       </div>
       <div class="family-drawer-scroll">
         <ul class="family-tree">
           <LevelRows
-            nodes={projection.siblingTrees}
-            parentId={projection.ancestors[projection.ancestors.length - 1]?.id ?? projection.root.id}
+            nodes={[projection.tree]}
+            parentId={projection.root.id}
             selectedId={selected.id}
             depth={0}
             expanded={expanded}
+            pinned={pinned}
+            now={now}
             onToggle={toggle}
           />
         </ul>

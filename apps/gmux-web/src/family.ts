@@ -264,32 +264,44 @@ export function descendantTree(root: Session, source: FamilySource): FamilyNode 
   return build(root)
 }
 
-/** Drawer projection. Roots see their tree. A child sees its ancestor spine,
- * then the complete trees rooted at its own sibling level (including itself),
- * rather than unrelated siblings of each ancestor. */
+/** Panel projection: the whole family, from the root, wherever you're
+ * standing in it.
+ *
+ * It used to scope to your own sibling level, which meant the panel
+ * showed less the deeper you went — five levels down it showed one row,
+ * the session you were already looking at. Depth is exactly when you
+ * need the map, and a scope that shifts under you makes the counts line
+ * mean something different on every row you visit. Now one scope holds
+ * wherever you stand: the same members, the same counts.
+ *
+ * That is *membership*, not aggregation. The three family surfaces
+ * still summarise this set differently on purpose — the trigger badge
+ * mutes what you're looking at, the sidebar line subtracts the member
+ * its own row names, and this panel counts every row it draws, because
+ * it draws them all.
+ *
+ * `ancestors` stays for callers that want the spine on its own (the
+ * header crumbs); the tree already contains those rows. */
 export interface FamilyDrawerProjection {
   root: Session
   ancestors: Session[]
-  siblingTrees: FamilyNode[]
+  tree: FamilyNode
 }
 
 export function projectFamily(selected: Session, source: FamilySource): FamilyDrawerProjection {
   const index = indexFor(source)
   const root = familyRoot(selected, index)
-  if (root.id === selected.id) {
-    return { root, ancestors: [], siblingTrees: [descendantTree(root, index)] }
+  return {
+    root,
+    ancestors: familyAncestors(selected, index),
+    tree: descendantTree(root, index),
   }
-
-  const ancestors = familyAncestors(selected, index)
-  const parent = ancestors[ancestors.length - 1]
-  const siblings = parent ? index.childrenByParent.get(parent.id) ?? [] : []
-  return { root, ancestors, siblingTrees: siblings.map(s => descendantTree(s, index)) }
 }
 
-/** Status totals for the panel's counts line, over every family member the
- * panel shows (processes included, ancestors excluded — they live in the
- * header breadcrumbs). Each member is tallied once under its dot-precedence
- * state so the line and the row dots can never disagree. */
+/** Status totals for the panel's counts line, over every family member
+ * the panel shows — which is now the whole family, root included. Each
+ * member is tallied once under its dot-precedence state so the line and
+ * the row dots can never disagree. */
 export interface FamilyCounts {
   error: number
   working: number

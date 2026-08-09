@@ -31,6 +31,6 @@ describe('family projection (1,000 sessions / 500 children)', () => {
   })
 
   bench('project and count the selected child panel', () => {
-    familyCounts(projectFamily(children[250], index).siblingTrees)
+    familyCounts([projectFamily(children[250], index).tree])
   })
 })

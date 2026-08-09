@@ -100,9 +100,12 @@ describe('task-family projection', () => {
     const niece = agent('niece', 'sibling')
     const p = projectFamily(selected, [root, aunt, parent, selected, sibling, niece])
     expect(p.ancestors.map(s => s.id)).toEqual(['root', 'parent'])
-    expect(p.siblingTrees.map(n => n.session.id).sort()).toEqual(['selected', 'sibling'])
-    expect(p.siblingTrees.flatMap(n => n.children).map(n => n.session.id)).toEqual(['niece'])
-    expect(p.siblingTrees.some(n => n.session.id === 'aunt')).toBe(false)
+    // The whole family, from the root — including the branch the
+    // selection isn't on. Standing deeper must never show you less.
+    expect(p.tree.session.id).toBe('root')
+    expect(p.tree.children.map(n => n.session.id).sort()).toEqual(['aunt', 'parent'])
+    const parentNode = p.tree.children.find(n => n.session.id === 'parent')
+    expect(parentNode?.children.map(n => n.session.id).sort()).toEqual(['selected', 'sibling'])
   })
 
   it('indexes a large snapshot once across projection callers', () => {
@@ -118,7 +121,7 @@ describe('task-family projection', () => {
     })
 
     expect(familyIndex(snapshot)).toBe(familyIndex(snapshot))
-    expect(projectFamily(children[250], snapshot).siblingTrees).toHaveLength(500)
+    expect(projectFamily(children[250], snapshot).tree.children).toHaveLength(500)
     expect(familyRoot(children[250], snapshot)).toBe(root)
     expect(hasFamily(root, snapshot)).toBe(true)
     expect(isFamilyChild(children[250], snapshot)).toBe(true)
@@ -145,7 +148,7 @@ describe('flat panel projection', () => {
       member('mid-idle', { last_output_at: at(30) }),
       member('created-only', { last_output_at: undefined, created_at: at(20) }),
     ]
-    const rootNode = projectFamily(root, sessions).siblingTrees[0]
+    const rootNode = projectFamily(root, sessions).tree
     // Pure recency — status (working/dead/unread) must not reorder rows;
     // a session with no output yet sorts by creation time.
     expect(rootNode.children.map(n => n.session.id))
@@ -164,23 +167,26 @@ describe('flat panel projection', () => {
       member('proc-working', { semantic_agent: undefined, adapter: 'shell', status: { active: true } }),
       member('dead-viewed', { alive: false }),
     ]
-    const trees = projectFamily(root, sessions).siblingTrees
+    const tree = projectFamily(root, sessions).tree
     // Each member counted once under its highest-precedence state: the
     // working-unread agent is working (dot precedence), the dead unread
     // one is unread (not alive-gated), processes count like anyone else,
     // and the root + quiet members only land in the total.
-    expect(familyCounts(trees)).toEqual({ error: 1, working: 3, unread: 2, total: 8 })
+    expect(familyCounts([tree])).toEqual({ error: 1, working: 3, unread: 2, total: 8 })
   })
 
-  it('counts only the sibling-level trees for a nested selection', () => {
+  it('counts the same family from anywhere inside it', () => {
     const root = agent('root')
     const parent = member('parent')
     const selected = member('selected', { parent_session_id: 'parent' })
     const sibling = member('sibling', { parent_session_id: 'parent', alive: false })
-    const projection = projectFamily(selected, [root, parent, selected, sibling])
-    expect(projection.ancestors.map(s => s.id)).toEqual(['root', 'parent'])
-    // Ancestors are breadcrumb context in the header, not counted rows.
-    expect(familyCounts(projection.siblingTrees)).toEqual({ error: 0, working: 0, unread: 0, total: 2 })
+    const snapshot = [root, parent, selected, sibling]
+    const fromRoot = familyCounts([projectFamily(root, snapshot).tree])
+    const fromDeep = familyCounts([projectFamily(selected, snapshot).tree])
+    // One scope, so the line reads the same on every row you visit —
+    // and the root is one of the members it counts.
+    expect(fromDeep).toEqual(fromRoot)
+    expect(fromRoot).toEqual({ error: 0, working: 0, unread: 0, total: 4 })
   })
 })
 
