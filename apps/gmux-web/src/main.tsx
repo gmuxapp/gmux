@@ -349,18 +349,21 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
     : healthVal
   const staleKind = sessionStaleness(session, compareTarget)
 
-  // Close on outside click or Escape.
+  // Close on outside press or Escape. pointerdown rather than mousedown:
+  // the terminal cancels the synthesized mouse cascade on its touch
+  // gestures, so a tap into the terminal would otherwise leave this menu
+  // open on top of it (see FamilyDrawer for the same fix).
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    const onClick = (e: MouseEvent) => {
+    const onPointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onClick)
+    document.addEventListener('pointerdown', onPointerDown)
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('pointerdown', onPointerDown)
     }
   }, [open])
 
