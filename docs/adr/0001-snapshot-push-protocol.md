@@ -248,8 +248,10 @@ a transaction:
 The 48 KiB budget is 16 KiB below Scanner's 64 KiB default, leaving room for
 SSE syntax and future envelope metadata. Rows are not byte-fragmented. A single
 row that cannot fit is omitted, identified safely (long IDs become SHA-256
-identities), and does not prevent the rest of the set becoming ready. Likely
-causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
+identities), and does not prevent the rest of the set becoming ready. Browsers
+show a persistent omitted-session count and safe details until a later complete
+bootstrap clears it; peers retain the bounded diagnostic for the transaction
+and log it. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
 `socket_path`, or `conversation_file` fields. Session rows do not contain
 scrollback or transcripts. Sender and receiver share 100,000-row / 64 MiB
 transaction bounds, with sender envelope headroom. A rejected malformed
@@ -262,9 +264,11 @@ holding the same mutex used by publication. Consequently, a mutation is either
 in the baseline epoch or queued as a later full replacement. One connection
 serializes every begin/batch/ready transaction, so a later replacement cannot
 overtake readiness. Receivers require epochs to increase strictly within one
-transport, so replayed begin/batch/ready sequences cannot roll state back.
-Disconnect destroys connection-local staging and resets epoch history;
-reconnect starts from a fresh baseline.
+transport, so replayed begin/batch/ready sequences cannot roll state back. The
+first accepted session event locks that transport to legacy or protocol 3; a
+legacy injection cannot reset protocol-3 replay protection. Disconnect destroys
+connection-local staging and resets mode/epoch history; reconnect starts from a
+fresh baseline.
 
 The current browser explicitly requests `?session_stream=3`; peer clients
 request `?as=peer&session_stream=3`. For one transitional release, an
@@ -279,14 +283,12 @@ still produces a coalesced full replacement, now transactionally batched. This
 amendment does not implement archive/live-set selection; a future implementation
 changes which complete rows enter a transaction, not its framing.
 
-`snapshot.world` remains a separate semantic object and does not carry session
-rows. It has an explicit 512 KiB JSON payload maximum (below the Go transport's
-1 MiB line ceiling). An oversized world emits bounded `snapshot.world.error`;
-receivers retain the previous world, or expose safe empty defaults on initial
-hydration. A realistic composed fixture with 1,000 memberships, 50 projects,
-match rules, 20 peers, launchers, health, peer projects, and discovery is
-measured at the transport seam. This is a larger bound than the 48 KiB session
-batch budget, not a claim that every endpoint event is below 48 KiB.
+`snapshot.world` remains a separate event and does not carry session rows. This
+amendment makes no world-size or endpoint-wide boundedness claim: 48 KiB applies
+only to protocol-3 session events. A realistic 1,000-membership world is retained
+as a size characterization, not a supported maximum. World framing belongs in a
+separate design if production evidence demonstrates the need; protocol-2 world
+semantics remain unchanged in this transition.
 
 ## Consequences
 

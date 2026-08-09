@@ -244,6 +244,8 @@ effect(() => {
 })
 
 // Local-only UI state (never sourced from the wire).
+export type SessionStreamWarning = { id: string, code: string, message: string, count: number }
+export const sessionStreamWarnings = signal<SessionStreamWarning[]>([])
 export const sessionsLoaded = signal(false)
 /**
  * Whether the leading-edge `snapshot.world` (projects, peers, health)
@@ -1214,8 +1216,11 @@ type SessionsBootstrap = {
   epoch: number
   rows: ProtocolSession[]
   bytes: number
+  warnings: SessionStreamWarning[]
 }
 
+type SessionStreamMode = 'unknown' | 'legacy' | 'v3'
+let sessionStreamMode: SessionStreamMode = 'unknown'
 let sessionsBootstrap: SessionsBootstrap | null = null
 let lastSessionEpoch = 0
 
@@ -1226,11 +1231,13 @@ export function beginSessionsBootstrap(version: number, epoch: number): void {
     sessionsBootstrap = null
     return
   }
+  if (sessionStreamMode === 'legacy') return
   // Epochs are strictly increasing within one EventSource transport. Ignore
   // replay without destroying a newer transaction already in flight.
   if (epoch <= lastSessionEpoch) return
+  sessionStreamMode = 'v3'
   lastSessionEpoch = epoch
-  sessionsBootstrap = { epoch, rows: [], bytes: 0 }
+  sessionsBootstrap = { epoch, rows: [], bytes: 0, warnings: [] }
 }
 
 export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
@@ -1244,11 +1251,17 @@ export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], 
   sessionsBootstrap.bytes += encodedBytes
 }
 
+export function appendSessionStreamWarning(epoch: number, warning: SessionStreamWarning): void {
+  if (sessionStreamMode !== 'v3' || !sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return
+  if (sessionsBootstrap.warnings.length < 256) sessionsBootstrap.warnings.push(warning)
+}
+
 export function readySessionsBootstrap(epoch: number): boolean {
   if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return false
-  const rows = sessionsBootstrap.rows
+  const { rows, warnings } = sessionsBootstrap
   sessionsBootstrap = null
   applySessionsSnapshot(rows.map(toUISession))
+  sessionStreamWarnings.value = warnings
   return true
 }
 
@@ -1257,6 +1270,7 @@ export function discardSessionsBootstrap(): void {
 }
 
 export function resetSessionsTransport(): void {
+  sessionStreamMode = 'unknown'
   sessionsBootstrap = null
   lastSessionEpoch = 0
 }
@@ -1828,6 +1842,7 @@ export function initStore(): () => void {
   // don't need a bulk-GET prefetch on first load or on reconnect.
   // Missed deltas don't matter: each snapshot is a full replacement.
   resetSessionsTransport()
+  sessionStreamWarnings.value = []
   const source = new EventSource('/v1/events?session_stream=3')
   source.addEventListener('error', () => {
     // A transport reconnect starts a new epoch. Never retain unpublished
@@ -1882,7 +1897,13 @@ export function initStore(): () => void {
 
   source.addEventListener('snapshot.sessions.error', (e) => {
     // A diagnostic quarantines one row but does not invalidate the epoch.
-    // ready still atomically publishes every row which fit.
+    // It becomes a persistent sidebar warning when ready commits this epoch.
+    try {
+      const diagnostic = JSON.parse(e.data) as SessionStreamWarning & { epoch: number }
+      appendSessionStreamWarning(diagnostic.epoch, {
+        id: diagnostic.id ?? '', code: diagnostic.code ?? 'row_omitted', message: diagnostic.message ?? 'session row omitted', count: diagnostic.count ?? 1,
+      })
+    } catch { /* malformed diagnostics cannot invalidate staging */ }
     console.warn('snapshot.sessions.error:', e.data)
   })
 
@@ -1891,9 +1912,12 @@ export function initStore(): () => void {
   // event from a new daemon as well.
   source.addEventListener('snapshot.sessions', (e) => {
     try {
-      resetSessionsTransport()
+      if (sessionStreamMode === 'v3') return
       const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
+      sessionStreamMode = 'legacy'
+      discardSessionsBootstrap()
       applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
+      sessionStreamWarnings.value = []
     } catch (err) {
       console.warn('snapshot.sessions: bad event', err)
     }
@@ -1925,14 +1949,6 @@ export function initStore(): () => void {
     } catch (err) {
       console.warn('snapshot.world: bad event', err)
     }
-  })
-
-  source.addEventListener('snapshot.world.error', (e) => {
-    // World remains one explicitly bounded semantic object. Retain a prior
-    // world on update failure; on initial hydration expose the safe empty
-    // defaults so an oversized operator configuration does not brick sessions.
-    if (!worldLoaded.value) worldLoaded.value = true
-    console.warn('snapshot.world.error:', e.data)
   })
 
   source.addEventListener('session-activity', (e) => {

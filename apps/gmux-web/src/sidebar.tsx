@@ -21,7 +21,7 @@ import {
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
-  aliveOnly, setAliveOnly, tabHref,
+  aliveOnly, setAliveOnly, tabHref, sessionStreamWarnings,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -642,6 +642,8 @@ export function Sidebar({
   // sidebarSessions), so this is just the visible session count.
   const totalVisible = foldersVal.reduce((n, f) => n + f.sessions.length, 0)
   const connected = connState.value === 'connected'
+  const streamWarnings = sessionStreamWarnings.value
+  const omittedSessionCount = streamWarnings.reduce((sum, warning) => sum + warning.count, 0)
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -680,6 +682,15 @@ export function Sidebar({
             * background can act as a fixed backdrop behind it (see the
             * cavity in styles.css). Purely presentational. */}
           <div class="sidebar-list">
+          {streamWarnings.length > 0 && (
+            <div
+              class="sidebar-stream-warning"
+              role="status"
+              title={streamWarnings.map(w => `${w.id || 'unknown'}: ${w.message || w.code}`).join('\n')}
+            >
+              ⚠ {omittedSessionCount} {omittedSessionCount === 1 ? 'session is' : 'sessions are'} omitted from the live list
+            </div>
+          )}
           {mode === 'projects' && selectors.length > 0
             && foldersVal.every(f => f.sessions.length === 0
               && !folderMatchesFilter(f, selectors, health.value?.hostname)) && (

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { _rawSessions, connState, initStore } from './store'
+import { _rawSessions, connState, initStore, sessionStreamWarnings } from './store'
 
 // A minimal EventSource stand-in that lets the test drive the listeners
 // initStore registers (the `error` handler and the snapshot handlers).
@@ -60,13 +60,27 @@ describe('SSE reconnecting state', () => {
     expect(source().url).toBe('/v1/events?session_stream=3')
   })
 
-  it('accepts the transitional legacy replacement if protocol negotiation is stripped', () => {
+  it('accepts the transitional legacy replacement on a legacy-only transport', () => {
     cleanup = initStore()
     source().emit('snapshot.sessions', { sessions: [
       { id: 'legacy', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
     ] })
     expect(_rawSessions.value.map(s => s.id)).toEqual(['legacy'])
     expect(connState.value).toBe('connected')
+    // Once legacy is selected, protocol 3 cannot take over this transport.
+    ready(1, [{ id: 'replayed', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['legacy'])
+  })
+
+  it('locks a negotiated transport to protocol 3 across legacy injection and stale replay', () => {
+    cleanup = initStore()
+    ready(1, [{ id: 'old', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    ready(2, [{ id: 'new', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    source().emit('snapshot.sessions', { sessions: [
+      { id: 'legacy-current', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    ready(1, [{ id: 'replayed-old', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['new'])
   })
 
   it('goes to error when the initial connect drops before any snapshot', () => {
@@ -141,6 +155,11 @@ describe('SSE reconnecting state', () => {
     source().emit('snapshot.sessions.ready', { epoch: 1 })
     expect(_rawSessions.value.map(s => s.id)).toEqual(['good'])
     expect(connState.value).toBe('connected')
+    expect(sessionStreamWarnings.value).toEqual([
+      { code: 'row_too_large', id: 'bad', message: 'omitted', count: 1 },
+    ])
+    ready(2, [{ id: 'good', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    expect(sessionStreamWarnings.value).toEqual([])
   })
 
   it('publishes a mutation captured during bootstrap only at its later ready', () => {

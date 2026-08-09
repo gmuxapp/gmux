@@ -346,9 +346,13 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	}
 	legacyScanner := bufio.NewScanner(legacyResp.Body)
 	legacyEvent, _ := readFirstSSEEvent(t, legacyScanner)
-	legacyResp.Body.Close()
 	if legacyEvent != "snapshot.sessions" {
 		t.Fatalf("legacy first SSE=%q", legacyEvent)
+	}
+	legacyEvent, _ = readFirstSSEEvent(t, legacyScanner)
+	legacyResp.Body.Close()
+	if legacyEvent != "snapshot.world" {
+		t.Fatalf("legacy second SSE=%q", legacyEvent)
 	}
 
 	if !unixipc.Shutdown(sock) {

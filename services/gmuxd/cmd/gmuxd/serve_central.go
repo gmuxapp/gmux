@@ -869,7 +869,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					h.Sessions = counts
 					initial.World.Health = &h
 				}
-				if err := sendWorldSSEFrame(rc, w, initial.World); err != nil {
+				if err := sendSSEFrame(rc, w, "snapshot.world", initial.World); err != nil {
 					return
 				}
 			}
@@ -908,7 +908,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						continue
 					}
 					if msg.Frames.World != nil {
-						if err := sendWorldSSEFrame(rc, w, msg.Frames.World); err != nil {
+						if err := sendSSEFrame(rc, w, "snapshot.world", msg.Frames.World); err != nil {
 							return
 						}
 					}

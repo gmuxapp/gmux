@@ -19,9 +19,12 @@ framing. This does not implement archive/live-set selection.
 A row larger than 48 KiB no longer aborts or closes the stream. The sender omits
 only that row, emits a bounded diagnostic with a fixed reason and safe identity
 (IDs over 128 bytes become `sha256:<digest>`), and completes `ready` for every
-other row. This handles the confirmed old-spoke amplification schedule: a new
-hub accepts a legacy row up to its 1 MiB compatibility ceiling, then quarantines
-that row rather than bricking its browser or downstream peer projection.
+other row. The browser publishes a persistent omitted-session count with safe
+ID/reason details; a later clean bootstrap clears it. Peers retain each bounded
+diagnostic for the transaction and log it. This handles the confirmed old-spoke
+amplification schedule: a new hub accepts a legacy row up to its 1 MiB
+compatibility ceiling, then quarantines that row rather than bricking its
+browser or downstream peer projection.
 
 Likely row-size causes are `command`, `cwd`, `remotes`, `title`, `subtitle`,
 `socket_path`, and `conversation_file`. Rows contain no scrollback/transcript.
@@ -47,9 +50,12 @@ queued as a later full replacement. The handler serializes all of N through
 `ready` before reading N+1.
 
 Epochs must increase strictly within one transport in both browser and peer
-receivers. Duplicate/older begin events are ignored without destroying a newer
-in-flight transaction; stale batch/ready cannot publish. Disconnect releases
-staging and resets epoch history, allowing the next transport to restart at 1.
+receivers. The first accepted session event also locks the transport to legacy
+or protocol 3, so a legacy injection cannot reset v3 replay protection and v3
+cannot take over a legacy-only connection. Duplicate/older begin events are
+ignored without destroying a newer in-flight transaction; stale batch/ready
+cannot publish. Disconnect releases staging and resets mode/epoch history,
+allowing the next transport to restart at 1.
 Browser tests prove release by sending batch+ready without a new begin after an
 error; the partial rows do not publish.
 
@@ -83,24 +89,14 @@ the accumulated event remain bounded.
 
 ## `snapshot.world` scope
 
-World remains a single semantic object, separate from session rows. It now has
-an explicit **512 KiB JSON sender maximum**, below the Go transport's 1 MiB
-ceiling. Oversize/encode failure emits a small `snapshot.world.error`; no
-unbounded world line is written. Browser updates retain the previous world; an
-initial error exposes safe empty defaults so session availability is preserved.
-
-The realistic transport-seam fixture includes 1,000 memberships across 50
-projects, path/remote match rules, 20 peers, health, launchers, peer projects,
-and peer discovery. It measures **26,177 bytes**, about 5% of the explicit
-maximum. The earlier synthetic ID-only fixture was rejected as insufficient.
-
-I did not semantically fragment world: at gmux's documented supported scale
-(single user, dozens of sessions/peers; ADR 0001 explicitly says the snapshot
-model is unsuitable for thousands), the composed stress fixture is 20× below
-the sender maximum. Arbitrarily large operator metadata is now rejected before
-the transport rather than producing an unbounded SSE line. Claims are narrowed:
-48 KiB applies to protocol-3 session events; world has its separate 512 KiB
-maximum; transitional protocol-2 sessions retain the 1 MiB client ceiling.
+World remains the pre-existing single event, separate from session rows. This PR
+adds no world cap/error behavior and makes no endpoint-wide boundedness claim:
+48 KiB applies only to protocol-3 session events. This preserves protocol-2 old
+tabs and deep-link hydration exactly. The realistic shape fixture (1,000
+memberships across 50 projects, match rules, 20 peers, health, launchers, peer
+projects, and discovery) remains only a size characterization (**26,177
+bytes**), not a supported maximum. World semantic framing is a separate future
+design if production evidence demonstrates it.
 
 ## Reproduction and measurements
 
@@ -131,14 +127,14 @@ diagnostic cap) and does not affect healthy fixtures.
   `internal/sessionstream/sessionstream_test.go`
 - standard multiline SSE parsing and line/aggregate limits:
   `internal/sseclient/client_test.go`
-- peer reconnect, diagnostics-through-ready, overflow recovery, monotonic epoch,
-  old-spoke-large-row amplification:
+- peer reconnect, retained diagnostics-through-ready, overflow recovery,
+  monotonic epoch, mixed-mode rollback, old-spoke-large-row amplification:
   `internal/peering/session_stream_test.go`
-- browser explicit negotiation, legacy fallback, real disconnect release,
-  monotonic epoch, degraded ready:
+- browser explicit negotiation, legacy-only fallback, protocol-mode lock, real
+  disconnect release, monotonic epoch, persistent degraded-ready warning:
   `apps/gmux-web/src/sse-reconnect.test.ts`
-- subscription boundary, compatibility matrix, realistic world transport bound,
-  oversized-world diagnostic:
+- subscription boundary, compatibility matrix, realistic world-size
+  characterization:
   `cmd/gmuxd/session_stream_boundary_test.go`
 - transaction-wide deadline/cancellation:
   `cmd/gmuxd/sse_transaction_test.go`
@@ -153,5 +149,5 @@ diagnostic cap) and does not affect healthy fixtures.
   remain inspectable/actionable through one-shot CLI/REST paths.
 - Transitional protocol-2 session frames are still single events for one
   release; the new client bounds them at 1 MiB.
-- World is bounded rejection rather than fragmentation. If supported deployment
-  scale grows near 512 KiB, it should gain its own semantic row transaction.
+- World framing and limits are deliberately unchanged and require a separate
+  design if real-world evidence demonstrates an oversized world path.

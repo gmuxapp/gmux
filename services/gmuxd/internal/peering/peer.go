@@ -472,12 +472,23 @@ type sseSnapshotSessions struct {
 	Sessions []SessionProjection `json:"sessions"`
 }
 
+type sessionStreamMode uint8
+
+const (
+	sessionStreamUnknown sessionStreamMode = iota
+	sessionStreamLegacy
+	sessionStreamV3
+	maxPeerSessionDiagnostics = 256
+)
+
 type peerSessionBootstrap struct {
-	epoch     uint64
-	lastEpoch uint64
-	active    bool
-	rows      []SessionProjection
-	bytes     int
+	mode        sessionStreamMode
+	epoch       uint64
+	lastEpoch   uint64
+	active      bool
+	rows        []SessionProjection
+	bytes       int
+	diagnostics []sessionstream.Error
 }
 
 func (s *peerSessionBootstrap) abandon() {
@@ -485,11 +496,16 @@ func (s *peerSessionBootstrap) abandon() {
 	s.active = false
 	s.rows = nil
 	s.bytes = 0
+	s.diagnostics = nil
 }
 
 func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []byte, staging *peerSessionBootstrap) {
 	switch eventType {
 	case sessionstream.EventBegin:
+		if staging.mode == sessionStreamLegacy {
+			log.Printf("peering: %s: ignoring protocol-3 begin on legacy session stream", p.Config.Name)
+			return
+		}
 		var begin sessionstream.Begin
 		if err := json.Unmarshal(data, &begin); err != nil || begin.Version != sessionstream.ProtocolVersion || begin.Epoch == 0 {
 			staging.abandon()
@@ -502,6 +518,7 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 			return
 		}
 		staging.abandon()
+		staging.mode = sessionStreamV3
 		staging.epoch = begin.Epoch
 		staging.lastEpoch = begin.Epoch
 		staging.active = true
@@ -547,12 +564,26 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 		if len(message) > 512 {
 			message = message[:512] + "…"
 		}
-		log.Printf("peering: %s: session %q omitted: %q (%s)", p.Config.Name, id, message, diagnostic.Code)
+		diagnostic.ID, diagnostic.Message = id, message
+		if staging.active && diagnostic.Epoch == staging.epoch && len(staging.diagnostics) < maxPeerSessionDiagnostics {
+			staging.diagnostics = append(staging.diagnostics, diagnostic)
+		}
+		log.Printf("peering: %s: session %q omitted: %q (%s, count=%d)", p.Config.Name, id, message, diagnostic.Code, max(diagnostic.Count, 1))
 		return
 	case "snapshot.sessions":
-		// Protocol-2 response from an older spoke. It is authoritative and
-		// cannot be combined with a partial protocol-3 transaction.
-		*staging = peerSessionBootstrap{}
+		if staging.mode == sessionStreamV3 {
+			log.Printf("peering: %s: ignoring legacy snapshot on protocol-3 session stream", p.Config.Name)
+			return
+		}
+		var payload sseSnapshotSessions
+		if err := json.Unmarshal(data, &payload); err != nil {
+			log.Printf("peering: %s: bad snapshot.sessions: %v", p.Config.Name, err)
+			return
+		}
+		staging.abandon()
+		staging.mode = sessionStreamLegacy
+		p.applySessionsSnapshot(payload.Sessions)
+		return
 	}
 	p.handleEvent(ctx, eventType, data)
 }

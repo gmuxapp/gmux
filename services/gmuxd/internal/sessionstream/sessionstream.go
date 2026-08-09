@@ -61,6 +61,7 @@ type Error struct {
 	Code    string `json:"code"`
 	ID      string `json:"id,omitempty"`
 	Message string `json:"message"`
+	Count   int    `json:"count,omitempty"`
 }
 
 // Encode builds a complete replacement transaction. Every batch contains
@@ -102,7 +103,7 @@ func Encode[T any](epoch uint64, rows []T, rowID func(T) string) ([]Event, error
 			suppressedDiagnostics++
 			return
 		}
-		event, marshalErr := marshalBounded(EventError, Error{Epoch: epoch, Code: code, ID: safeIdentity(id), Message: message})
+		event, marshalErr := marshalBounded(EventError, Error{Epoch: epoch, Code: code, ID: safeIdentity(id), Message: message, Count: 1})
 		if marshalErr == nil { // fixed-size fields make this defensive only
 			events = append(events, event)
 			diagnostics++
@@ -143,7 +144,7 @@ func Encode[T any](epoch uint64, rows []T, rowID func(T) string) ([]Event, error
 		flush()
 	}
 	if suppressedDiagnostics > 0 {
-		event, marshalErr := marshalBounded(EventError, Error{Epoch: epoch, Code: "diagnostics_suppressed", Message: fmt.Sprintf("%d additional omitted session rows were not individually reported", suppressedDiagnostics)})
+		event, marshalErr := marshalBounded(EventError, Error{Epoch: epoch, Code: "diagnostics_suppressed", Message: fmt.Sprintf("%d additional omitted session rows were not individually reported", suppressedDiagnostics), Count: suppressedDiagnostics})
 		if marshalErr == nil {
 			events = append(events, event)
 		}

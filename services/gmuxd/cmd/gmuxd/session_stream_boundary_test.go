@@ -3,9 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -63,46 +60,14 @@ func realisticThousandSessionWorld() wire.WorldPayload {
 	}
 }
 
-func TestRealisticComposedWorldBoundAtTransportSeam(t *testing.T) {
-	world := realisticThousandSessionWorld()
-	data, err := json.Marshal(world)
+func TestRealisticComposedWorldSizeCharacterization(t *testing.T) {
+	// Characterization only: this session-bootstrap PR intentionally does not
+	// impose a world maximum or claim world transport framing.
+	data, err := json.Marshal(realisticThousandSessionWorld())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) > maxWorldEventPayload {
-		t.Fatalf("realistic world=%d limit=%d", len(data), maxWorldEventPayload)
-	}
-
-	recorder := httptest.NewRecorder()
-	if err := sendWorldSSEFrame(http.NewResponseController(recorder), recorder, &world); err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(recorder.Body.String(), "\n") {
-		if len(line) > maxWorldEventPayload+len("data: ") {
-			t.Fatalf("transport line=%d", len(line))
-		}
-	}
-	if !strings.Contains(recorder.Body.String(), "event: snapshot.world\n") {
-		t.Fatal("world event not emitted")
-	}
-	t.Logf("realistic composed 1000-session world payload=%d, explicit limit=%d", len(data), maxWorldEventPayload)
-}
-
-func TestOversizedWorldEmitsBoundedDiagnosticNotPayload(t *testing.T) {
-	world := wire.WorldPayload{Projects: []wire.ProjectItem{{Slug: strings.Repeat("x", maxWorldEventPayload)}}}
-	recorder := httptest.NewRecorder()
-	if err := sendWorldSSEFrame(http.NewResponseController(recorder), recorder, &world); err != nil {
-		t.Fatal(err)
-	}
-	body := recorder.Body.String()
-	if !strings.Contains(body, "event: snapshot.world.error\n") || strings.Contains(body, "event: snapshot.world\n") {
-		t.Fatalf("unexpected transport output prefix: %.120s", body)
-	}
-	for _, line := range strings.Split(body, "\n") {
-		if len(line) > 1024 {
-			t.Fatalf("diagnostic line unexpectedly large: %d", len(line))
-		}
-	}
+	t.Logf("realistic composed 1000-session world payload=%d", len(data))
 }
 
 // Subscribe captures the baseline and installs the subscriber under the same

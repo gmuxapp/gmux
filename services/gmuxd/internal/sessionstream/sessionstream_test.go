@@ -153,7 +153,7 @@ func TestEncodeQuarantinesOversizedRowAndCompletesReady(t *testing.T) {
 			}
 		}
 	}
-	if gotRows != 1 || diagnostic.Code != "row_too_large" || !strings.HasPrefix(diagnostic.ID, "sha256:") {
+	if gotRows != 1 || diagnostic.Code != "row_too_large" || diagnostic.Count != 1 || !strings.HasPrefix(diagnostic.ID, "sha256:") {
 		t.Fatalf("rows=%d diagnostic=%+v", gotRows, diagnostic)
 	}
 	if len(streamData(t, diagnostic)) > MaxEventPayload {

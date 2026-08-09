@@ -109,7 +109,10 @@ func TestPeerDiagnosticDoesNotInvalidateReady(t *testing.T) {
 	ctx := context.Background()
 	p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 1}), &stage)
 	p.handleStreamEvent(ctx, sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: 1, Sessions: []SessionProjection{{ID: "good"}}}), &stage)
-	p.handleStreamEvent(ctx, sessionstream.EventError, streamData(t, sessionstream.Error{Epoch: 1, Code: "row_too_large", ID: "bad", Message: "omitted"}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventError, streamData(t, sessionstream.Error{Epoch: 1, Code: "row_too_large", ID: "bad", Message: "omitted", Count: 1}), &stage)
+	if len(stage.diagnostics) != 1 || stage.diagnostics[0].ID != "bad" || stage.diagnostics[0].Count != 1 {
+		t.Fatalf("retained diagnostics=%+v", stage.diagnostics)
+	}
 	p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 1}), &stage)
 	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "good@spoke" {
 		t.Fatalf("visible=%+v", got)
@@ -140,6 +143,25 @@ func TestPeerRejectsNonIncreasingEpochWithoutRollback(t *testing.T) {
 	p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 3}), &stage)
 	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "newest@spoke" {
 		t.Fatalf("in-flight epoch destroyed: %+v", got)
+	}
+}
+
+func TestPeerLocksProtocol3AgainstLegacyInjectionAndStaleReplay(t *testing.T) {
+	sink := newMockSink()
+	p := &Peer{Config: config.PeerConfig{Name: "spoke"}, sink: sink}
+	stage := peerSessionBootstrap{}
+	ctx := context.Background()
+	commit := func(epoch uint64, id string) {
+		p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: epoch}), &stage)
+		p.handleStreamEvent(ctx, sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: epoch, Sessions: []SessionProjection{{ID: id}}}), &stage)
+		p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: epoch}), &stage)
+	}
+	commit(1, "old")
+	commit(2, "new")
+	p.handleStreamEvent(ctx, "snapshot.sessions", streamData(t, sseSnapshotSessions{Sessions: []SessionProjection{{ID: "legacy-current"}}}), &stage)
+	commit(1, "replayed-old")
+	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "new@spoke" {
+		t.Fatalf("mixed-mode rollback: %+v", got)
 	}
 }
 
@@ -187,9 +209,13 @@ func TestPeerAcceptsLegacySnapshotFromOldSpoke(t *testing.T) {
 	p := &Peer{Config: config.PeerConfig{Name: "old"}, sink: sink}
 	stage := peerSessionBootstrap{active: true, epoch: 9, rows: []SessionProjection{{ID: "partial"}}}
 	p.handleStreamEvent(context.Background(), "snapshot.sessions", streamData(t, sseSnapshotSessions{Sessions: []SessionProjection{{ID: "legacy"}}}), &stage)
-	if stage.active {
-		t.Fatal("legacy replacement did not discard partial protocol-3 staging")
+	if stage.active || stage.mode != sessionStreamLegacy {
+		t.Fatalf("legacy replacement did not lock legacy mode: %+v", stage)
 	}
+	// A protocol-3 begin on the same legacy connection is ignored.
+	p.handleStreamEvent(context.Background(), sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 1}), &stage)
+	p.handleStreamEvent(context.Background(), sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: 1, Sessions: []SessionProjection{{ID: "replayed"}}}), &stage)
+	p.handleStreamEvent(context.Background(), sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 1}), &stage)
 	got := sink.replaced["old"]
 	if len(got) != 1 || got[0].ID != "legacy@old" {
 		t.Fatalf("visible=%+v", got)

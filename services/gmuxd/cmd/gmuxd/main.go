@@ -715,35 +715,7 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 	return false
 }
 
-const (
-	sseWriteTimeout      = 10 * time.Second
-	maxWorldEventPayload = 512 * 1024
-)
-
-type worldStreamError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Size    int    `json:"size,omitempty"`
-	Limit   int    `json:"limit"`
-}
-
-// sendWorldSSEFrame enforces an explicit bound on the still-single semantic
-// world object. Oversize keeps the stream available and sends a bounded
-// diagnostic; the browser retains its previous world projection.
-func sendWorldSSEFrame(rc *http.ResponseController, w io.Writer, payload any) error {
-	data, err := json.Marshal(payload)
-	if err == nil && len(data) <= maxWorldEventPayload {
-		return sendSSEBytesFrame(rc, w, "snapshot.world", data)
-	}
-	diagnostic := worldStreamError{Code: "world_too_large", Message: "world snapshot omitted; previous world remains visible", Limit: maxWorldEventPayload}
-	if err != nil {
-		diagnostic.Code = "world_encode_failed"
-	} else {
-		diagnostic.Size = len(data)
-	}
-	diagnosticData, _ := json.Marshal(diagnostic)
-	return sendSSEBytesFrame(rc, w, "snapshot.world.error", diagnosticData)
-}
+const sseWriteTimeout = 10 * time.Second
 
 func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
