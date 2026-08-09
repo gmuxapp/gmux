@@ -315,6 +315,33 @@ func TestSubscribe_StreamEnded(t *testing.T) {
 	}
 }
 
+func TestSubscribe_DefaultCompatibilityCeilingIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		size      int
+		wantEvent bool
+	}{
+		{name: "measured-size legacy frame above former 256KiB ceiling", size: 900 * 1024, wantEvent: true},
+		{name: "reject above bounded 1MiB ceiling", size: 1200 * 1024, wantEvent: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSSEServer(t)
+			s.setFrames("event: legacy\ndata: " + strings.Repeat("x", tc.size) + "\n\n")
+			if tc.wantEvent {
+				events, _ := waitForEvents(t, New(s.URL), 1, time.Second)
+				if len(events) != 1 {
+					t.Fatalf("events=%d, want 1", len(events))
+				}
+				return
+			}
+			err := New(s.URL).Subscribe(context.Background(), nil, func(Event) {})
+			if err == nil || errors.Is(err, ErrStreamEnded) {
+				t.Fatalf("err=%v, want bounded protocol error", err)
+			}
+		})
+	}
+}
+
 func TestSubscribe_OversizedEvent(t *testing.T) {
 	// A single data: line larger than the buffer must produce a
 	// protocol error, not silent truncation. Use a small buffer so
@@ -330,11 +357,17 @@ func TestSubscribe_OversizedEvent(t *testing.T) {
 	}
 }
 
+func TestSubscribe_MultilineAggregateRemainsBounded(t *testing.T) {
+	s := newSSEServer(t)
+	s.setFrames("event: big\ndata: " + strings.Repeat("a", 300) + "\ndata: " + strings.Repeat("b", 300) + "\n\n")
+	err := New(s.URL, WithBufferSize(512)).Subscribe(context.Background(), nil, func(Event) {})
+	if err == nil || errors.Is(err, ErrStreamEnded) {
+		t.Fatalf("err=%v, want aggregate protocol error", err)
+	}
+}
+
 func TestSubscribe_EventWithoutData(t *testing.T) {
-	// An "event:" line with no "data:" line is per-spec a no-op event
-	// (dispatched as MessageEvent with empty data on the browser).
-	// Our decoder requires a data: line to fire the handler, matching
-	// the behavior of the peering decoder it replaces.
+	// An event block with no data field is a no-op under the SSE model.
 	s := newSSEServer(t)
 	s.setFrames(
 		"event: ghost\n\n",
@@ -351,22 +384,23 @@ func TestSubscribe_EventWithoutData(t *testing.T) {
 	}
 }
 
-func TestSubscribe_DataWithoutEvent(t *testing.T) {
-	// A "data:" line with no preceding "event:" line has no dispatch
-	// target and must be dropped. Again matches peering's behavior.
+func TestSubscribe_DataWithoutEventUsesMessageType(t *testing.T) {
 	s := newSSEServer(t)
-	s.setFrames(
-		"data: orphan\n\n",
-		"event: real\ndata: payload\n\n",
-	)
-
-	c := New(s.URL)
-	events, _ := waitForEvents(t, c, 1, 500*time.Millisecond)
-	if len(events) != 1 {
-		t.Fatalf("got %d events, want 1", len(events))
+	s.setFrames("data: payload\n\n")
+	events, _ := waitForEvents(t, New(s.URL), 1, 500*time.Millisecond)
+	if len(events) != 1 || events[0].Type != "message" || string(events[0].Data) != "payload" {
+		t.Fatalf("events=%+v, want message/payload", events)
 	}
-	if events[0].Type != "real" || string(events[0].Data) != "payload" {
-		t.Errorf("event = %+v, want {real payload}", events[0])
+}
+
+func TestSubscribe_MultilineDataDispatchesOnceAtBlankLine(t *testing.T) {
+	s := newSSEServer(t)
+	// Field order is unconstrained: data may precede event, comments do not
+	// terminate a block, and one optional space after ':' is stripped.
+	s.setFrames("data:first\n: comment\nevent: joined\ndata: second\ndata:\n\n")
+	events, _ := waitForEvents(t, New(s.URL), 1, 500*time.Millisecond)
+	if len(events) != 1 || events[0].Type != "joined" || string(events[0].Data) != "first\nsecond\n" {
+		t.Fatalf("events=%+v, want one joined multiline event", events)
 	}
 }
 

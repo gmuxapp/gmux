@@ -114,13 +114,13 @@ Staleness (the "outdated" badge) is **frontend-derived**: the UI compares each s
 
 ## Frontend architecture
 
-The frontend is a projection of backend state. Session state arrives exclusively via a single `EventSource('/v1/events')` (protocol 2, ADR 0001):
+The frontend is a projection of backend state. Session state arrives exclusively via `EventSource('/v1/events?session_stream=3')` (ADR 0001):
 
-1. `snapshot.sessions` — full replacement of the session list (a leading-edge snapshot arrives on connect, so there is no bulk-GET prefetch)
-2. `snapshot.world` — projects, peers, health, launchers, peer projects
-3. `session-activity` — bare `{id}` ping, lossy by design
+1. `snapshot.sessions.begin` / `.batch` / `.ready` — complete semantic rows are staged in bounded batches and replace the visible list atomically at ready. A `.error` diagnostic means one oversized row was omitted; the remaining epoch still becomes ready.
+2. `snapshot.world` — projects, peers, health, launchers, and peer projects. It remains a separate protocol-2 full replacement; the 48 KiB session-event bound does not apply to world.
+3. `session-activity` — bare `{id}` ping, lossy by design.
 
-Reconnect is trivial: the browser's `EventSource` auto-reconnects, and since every snapshot is a full replacement, missed deltas don't matter. (`GET /v1/sessions` still exists for the CLI and scripts.)
+Reconnect discards unpublished staging and restarts from a leading-edge full replacement, so missed updates do not matter. Epochs increase strictly and the first accepted session protocol locks each transport against mixed-mode rollback. A quarantined row produces a persistent sidebar warning until a later clean bootstrap. Unversioned custom consumers and old tabs temporarily receive protocol-2 `snapshot.sessions`; `GET /v1/sessions` remains for the CLI and scripts.
 
 Mutations use a bounded **optimistic overlay**: mark-read, dismiss, and reorder are stacked as pending mutations and replayed on top of incoming raw snapshots until the server echoes them back or a 5-second TTL expires. The UI feels instant, and a failed action self-heals back to server truth (plus an error toast).
 

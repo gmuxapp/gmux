@@ -28,10 +28,12 @@ import (
 	"time"
 )
 
-// Default buffer size for SSE event decoding. Matches the size used
-// by peering's hand-rolled scanner prior to extraction. Large enough
-// to accept gmuxd session-upsert payloads with long command arrays.
-const defaultBufferSize = 256 * 1024
+// DefaultMaxLineBytes is a bounded compatibility ceiling for legacy peers
+// which still send one full snapshot.sessions data line. Protocol 3 frames
+// are capped at 48 KiB; 1 MiB admits the measured 1,000-row legacy fixture as
+// defense in depth for version skew, not as the primary framing mechanism. A
+// larger line is rejected before unbounded allocation.
+const DefaultMaxLineBytes = 1024 * 1024
 
 // ErrStreamEnded is returned by Subscribe when the server closed the
 // stream cleanly (no error from the scanner, EOF). Callers use this
@@ -100,8 +102,8 @@ func WithTransport(t http.RoundTripper) Option {
 	}
 }
 
-// WithBufferSize sets the maximum size of a single SSE event payload.
-// Defaults to 256 KiB. Events larger than this cause Subscribe to
+// WithBufferSize sets the maximum size of a single SSE line.
+// Defaults to DefaultMaxLineBytes. Events larger than this cause Subscribe to
 // return a protocol error.
 func WithBufferSize(n int) Option {
 	return func(c *Client) {
@@ -175,7 +177,7 @@ func New(url string, opts ...Option) *Client {
 	c := &Client{
 		url:     url,
 		headers: make(http.Header),
-		bufSize: defaultBufferSize,
+		bufSize: DefaultMaxLineBytes,
 	}
 	c.headers.Set("Accept", "text/event-stream")
 	for _, opt := range opts {
@@ -199,13 +201,10 @@ func New(url string, opts ...Option) *Client {
 //   - context.Canceled / DeadlineExceeded: ctx was cancelled.
 //   - wrapped network/protocol error: everything else.
 //
-// Comment lines (lines starting with ':') are consumed silently.
-// Lines that don't match "event: " or "data: " are ignored, per the
-// SSE spec.
-//
-// Events with no "data:" line are silently dropped. Lines with
-// "data:" but no preceding "event:" are also dropped (the current
-// event type is required to dispatch).
+// Comment lines (lines starting with ':') are consumed silently. Data lines
+// are accumulated until the blank event boundary and joined with newlines.
+// A block without an event field dispatches as the standard "message" type;
+// blocks with no data field are dropped.
 func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(Event)) error {
 	if handler == nil {
 		panic("sseclient: handler must not be nil")
@@ -277,7 +276,24 @@ func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(E
 	}
 	scanner.Buffer(make([]byte, 0, initSize), c.bufSize)
 
-	var currentEvent string
+	var (
+		currentEvent string
+		dataLines    []string
+		eventBytes   int
+		eventErr     error
+	)
+	dispatch := func() {
+		if len(dataLines) > 0 {
+			eventType := currentEvent
+			if eventType == "" {
+				eventType = "message"
+			}
+			handler(Event{Type: eventType, Data: []byte(strings.Join(dataLines, "\n"))})
+		}
+		currentEvent = ""
+		dataLines = dataLines[:0]
+		eventBytes = 0
+	}
 	for scanner.Scan() {
 		if idleTimer != nil {
 			idleTimer.Reset(c.idleTimeout)
@@ -287,34 +303,45 @@ func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(E
 		}
 
 		line := scanner.Text()
-		switch {
-		case line == "":
-			// Spec: empty line terminates event. We already dispatch on
-			// data: lines, so this is a no-op. Reset currentEvent to
-			// avoid stale dispatches across event boundaries.
-			currentEvent = ""
-		case strings.HasPrefix(line, ":"):
-			// Comment line (server-pushed keepalive). Ignore.
-		case strings.HasPrefix(line, "event: "):
-			currentEvent = strings.TrimPrefix(line, "event: ")
-		case strings.HasPrefix(line, "event:"):
-			// Spec-compliant form without the space.
-			currentEvent = strings.TrimPrefix(line, "event:")
-		case strings.HasPrefix(line, "data: "):
-			if currentEvent == "" {
-				continue
+		if line == "" {
+			dispatch()
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		field, value, found := strings.Cut(line, ":")
+		if !found {
+			value = ""
+		}
+		if strings.HasPrefix(value, " ") {
+			value = value[1:]
+		}
+		switch field {
+		case "event":
+			currentEvent = value
+		case "data":
+			added := len(value)
+			if len(dataLines) > 0 {
+				added++
 			}
-			handler(Event{Type: currentEvent, Data: []byte(strings.TrimPrefix(line, "data: "))})
-		case strings.HasPrefix(line, "data:"):
-			if currentEvent == "" {
-				continue
+			if eventBytes+added > c.bufSize {
+				eventErr = fmt.Errorf("sse event data exceeds %d-byte limit", c.bufSize)
+				break
 			}
-			handler(Event{Type: currentEvent, Data: []byte(strings.TrimPrefix(line, "data:"))})
+			dataLines = append(dataLines, value)
+			eventBytes += added
 		default:
-			// Unknown line type (id:, retry:, custom). Ignore per spec.
+			// id, retry, and extension fields are intentionally not surfaced.
+		}
+		if eventErr != nil {
+			break
 		}
 	}
 
+	if eventErr != nil {
+		return eventErr
+	}
 	if err := scanner.Err(); err != nil {
 		// Caller cancel takes priority over any ambient errors.
 		if ctxErr := ctx.Err(); ctxErr != nil {

@@ -127,9 +127,12 @@ func (c *Client) Events() *sseclient.Client {
 		opts = append(opts, sseclient.WithIdleTimeout(c.streamIdleTimeout))
 	}
 	// `?as=peer` instructs the spoke to filter to owned sessions and
-	// suppress snapshot.world (ADR 0001). The hub composes its own
-	// world view from local state and union of peer feeds.
-	return sseclient.New(c.baseURL+"/v1/events?as=peer", opts...)
+	// suppress snapshot.world (ADR 0001). session_stream=3 explicitly opts
+	// into bounded begin/batch/ready framing. Old daemons ignore the unknown
+	// parameter and continue sending snapshot.sessions, which this client
+	// still accepts; new daemons use the absence of the marker to serve old
+	// peers their legacy fallback.
+	return sseclient.New(c.baseURL+"/v1/events?as=peer&session_stream=3", opts...)
 }
 
 // GetHealth fetches GET /v1/health and returns the Data field of the

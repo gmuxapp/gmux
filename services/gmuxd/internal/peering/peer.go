@@ -14,6 +14,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/apiclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
 )
 
@@ -421,6 +422,9 @@ func (p *Peer) run(ctx context.Context) {
 // established (used to decide whether to reset backoff).
 func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 	sse := p.api.Events()
+	// Staging belongs to one transport connection. If it disconnects before
+	// ready, this local value disappears and no partial projection is visible.
+	var bootstrap peerSessionBootstrap
 
 	err := sse.Subscribe(ctx,
 		func() {
@@ -437,7 +441,7 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 			p.fetchProjects(ctx)
 		},
 		func(ev sseclient.Event) {
-			p.handleEvent(ctx, ev.Type, ev.Data)
+			p.handleStreamEvent(ctx, ev.Type, ev.Data, &bootstrap)
 		},
 	)
 
@@ -466,6 +470,122 @@ type sseActivity struct {
 // sseSnapshotSessions is the wire format for snapshot.sessions.
 type sseSnapshotSessions struct {
 	Sessions []SessionProjection `json:"sessions"`
+}
+
+type sessionStreamMode uint8
+
+const (
+	sessionStreamUnknown sessionStreamMode = iota
+	sessionStreamLegacy
+	sessionStreamV3
+	maxPeerSessionDiagnostics = 256
+)
+
+type peerSessionBootstrap struct {
+	mode        sessionStreamMode
+	epoch       uint64
+	lastEpoch   uint64
+	active      bool
+	rows        []SessionProjection
+	bytes       int
+	diagnostics []sessionstream.Error
+}
+
+func (s *peerSessionBootstrap) abandon() {
+	s.epoch = 0
+	s.active = false
+	s.rows = nil
+	s.bytes = 0
+	s.diagnostics = nil
+}
+
+func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []byte, staging *peerSessionBootstrap) {
+	switch eventType {
+	case sessionstream.EventBegin:
+		if staging.mode == sessionStreamLegacy {
+			log.Printf("peering: %s: ignoring protocol-3 begin on legacy session stream", p.Config.Name)
+			return
+		}
+		var begin sessionstream.Begin
+		if err := json.Unmarshal(data, &begin); err != nil || begin.Version != sessionstream.ProtocolVersion || begin.Epoch == 0 {
+			staging.abandon()
+			log.Printf("peering: %s: bad session bootstrap begin", p.Config.Name)
+			return
+		}
+		if begin.Epoch <= staging.lastEpoch {
+			// Ignore replay without destroying a newer in-flight transaction.
+			log.Printf("peering: %s: stale session bootstrap epoch %d (last %d)", p.Config.Name, begin.Epoch, staging.lastEpoch)
+			return
+		}
+		staging.abandon()
+		staging.mode = sessionStreamV3
+		staging.epoch = begin.Epoch
+		staging.lastEpoch = begin.Epoch
+		staging.active = true
+		return
+	case sessionstream.EventBatch:
+		var batch sessionstream.Batch[SessionProjection]
+		if err := json.Unmarshal(data, &batch); err != nil || !staging.active || batch.Epoch != staging.epoch {
+			staging.abandon()
+			log.Printf("peering: %s: bad or out-of-epoch session bootstrap batch", p.Config.Name)
+			return
+		}
+		if len(staging.rows)+len(batch.Sessions) > sessionstream.MaxStagedRows || staging.bytes+len(data) > sessionstream.MaxStagedBytes {
+			staging.abandon()
+			log.Printf("peering: %s: session bootstrap exceeds staging limit", p.Config.Name)
+			return
+		}
+		staging.rows = append(staging.rows, batch.Sessions...)
+		staging.bytes += len(data)
+		return
+	case sessionstream.EventReady:
+		var ready sessionstream.Ready
+		if err := json.Unmarshal(data, &ready); err != nil || !staging.active || ready.Epoch != staging.epoch {
+			staging.abandon()
+			log.Printf("peering: %s: bad or out-of-epoch session bootstrap ready", p.Config.Name)
+			return
+		}
+		rows := staging.rows
+		staging.abandon()
+		p.applySessionsSnapshot(rows)
+		return
+	case sessionstream.EventError:
+		// Diagnostics quarantine individual rows; they do not invalidate the
+		// transaction or prevent the remaining rows from reaching ready.
+		var diagnostic sessionstream.Error
+		if err := json.Unmarshal(data, &diagnostic); err != nil {
+			log.Printf("peering: %s: bad session bootstrap diagnostic", p.Config.Name)
+			return
+		}
+		id, message := diagnostic.ID, diagnostic.Message
+		if len(id) > 256 {
+			id = id[:256] + "…"
+		}
+		if len(message) > 512 {
+			message = message[:512] + "…"
+		}
+		diagnostic.ID, diagnostic.Message = id, message
+		if staging.active && diagnostic.Epoch == staging.epoch && len(staging.diagnostics) < maxPeerSessionDiagnostics {
+			staging.diagnostics = append(staging.diagnostics, diagnostic)
+		}
+		log.Printf("peering: %s: session %q omitted: %q (%s, count=%d)", p.Config.Name, id, message, diagnostic.Code, max(diagnostic.Count, 1))
+		return
+	case "snapshot.sessions":
+		if staging.mode == sessionStreamV3 {
+			log.Printf("peering: %s: ignoring legacy snapshot on protocol-3 session stream", p.Config.Name)
+			return
+		}
+		var payload sseSnapshotSessions
+		if err := json.Unmarshal(data, &payload); err != nil {
+			log.Printf("peering: %s: bad snapshot.sessions: %v", p.Config.Name, err)
+			return
+		}
+		staging.abandon()
+		staging.mode = sessionStreamLegacy
+		p.applySessionsSnapshot(payload.Sessions)
+		return
+	}
+	p.handleEvent(ctx, eventType, data)
 }
 
 // isForwardedFromKnownOrigin checks whether a session ID (before

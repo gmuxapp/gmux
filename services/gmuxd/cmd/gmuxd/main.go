@@ -18,6 +18,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	qrterminal "github.com/mdp/qrterminal/v3"
 )
@@ -647,6 +648,14 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 	return false, false
 }
 
+// useSemanticSessionStream selects protocol 3 only by explicit request.
+// Browser code requests it in the EventSource URL; unversioned custom clients
+// and old tabs retain protocol 2 for one transitional release. Peers use the
+// same explicit marker.
+func useSemanticSessionStream(_ bool, requested string) bool {
+	return requested == "3"
+}
+
 // shouldForwardActivity decides whether a session-activity event
 // should be sent to a given SSE subscriber.
 //
@@ -706,9 +715,6 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 	return false
 }
 
-// sessionLastActive returns the timestamp used to sort discovered
-// suggestions by recency: the session's last_output_at, falling back
-// to created_at when no activity has been recorded yet.
 const sseWriteTimeout = 10 * time.Second
 
 func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
@@ -717,6 +723,39 @@ func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payloa
 		return err
 	}
 	return rc.Flush()
+}
+
+func sendSSEBytesFrame(rc *http.ResponseController, w io.Writer, event string, data []byte) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if err := writeSSEBytes(w, event, data); err != nil {
+		return err
+	}
+	return rc.Flush()
+}
+
+// sendSSETransaction applies one deadline to the complete begin/batch/ready
+// write. A fragmented replacement therefore has the same 10-second stall bound
+// as the old single frame rather than multiplying the timeout per fragment.
+func sendSSETransaction(ctx context.Context, rc *http.ResponseController, w io.Writer, events []sessionstream.Event) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
+	for _, event := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := writeSSEBytes(w, event.Type, event.Data); err != nil {
+			return err
+		}
+		if err := rc.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeSSEBytes(w io.Writer, event string, data []byte) error {
+	_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	return err
 }
 
 // sendSSEComment writes a heartbeat comment frame (":") with a fresh

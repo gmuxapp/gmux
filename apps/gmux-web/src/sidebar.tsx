@@ -21,7 +21,7 @@ import {
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
-  aliveOnly, setAliveOnly, tabHref,
+  aliveOnly, setAliveOnly, tabHref, sessionStreamWarnings, sessionStreamOmittedTotal,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -642,6 +642,10 @@ export function Sidebar({
   // sidebarSessions), so this is just the visible session count.
   const totalVisible = foldersVal.reduce((n, f) => n + f.sessions.length, 0)
   const connected = connState.value === 'connected'
+  const streamWarnings = sessionStreamWarnings.value
+  const omittedSessionCount = sessionStreamOmittedTotal.value
+  const detailedOmittedCount = streamWarnings.reduce((sum, warning) => sum + warning.count, 0)
+  const suppressedOmittedCount = Math.max(0, omittedSessionCount - detailedOmittedCount)
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -680,6 +684,18 @@ export function Sidebar({
             * background can act as a fixed backdrop behind it (see the
             * cavity in styles.css). Purely presentational. */}
           <div class="sidebar-list">
+          {omittedSessionCount > 0 && (
+            <div
+              class="sidebar-stream-warning"
+              role="status"
+              title={[
+                ...streamWarnings.map(w => `${w.id}: ${w.message || w.code}`),
+                ...(suppressedOmittedCount > 0 ? [`${suppressedOmittedCount} additional omitted sessions`] : []),
+              ].join('\n')}
+            >
+              ⚠ {omittedSessionCount} {omittedSessionCount === 1 ? 'session is' : 'sessions are'} omitted from the live list
+            </div>
+          )}
           {mode === 'projects' && selectors.length > 0
             && foldersVal.every(f => f.sessions.length === 0
               && !folderMatchesFilter(f, selectors, health.value?.hostname)) && (

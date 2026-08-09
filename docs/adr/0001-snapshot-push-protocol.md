@@ -227,6 +227,70 @@ HTTP action responses and SSE snapshots arrive on independent
 channels. A 200 OK can land before the snapshot reflecting the
 action's effect. The optimistic overlay covers the gap.
 
+## Amendment: bounded semantic session replacement (protocol 3)
+
+A full `snapshot.sessions` JSON line grows without bound. At roughly 1,000
+ordinary session rows it is hundreds of KiB, exceeding both the 64 KiB default
+`bufio.Scanner` token and the former 256 KiB compatibility ceiling. Protocol 3
+keeps the full-replacement semantics of this ADR but frames each replacement as
+a transaction:
+
+1. `snapshot.sessions.begin` — `{version:3, epoch}` resets private receiver
+   staging.
+2. Zero or more `snapshot.sessions.batch` events — `{epoch,sessions:[...]}`.
+   Batches contain complete session rows and have a 48 KiB JSON payload limit.
+3. `snapshot.sessions.ready` — `{epoch}` atomically replaces the visible set
+   with staging (including the empty set).
+4. `snapshot.sessions.error` is a non-fatal bounded diagnostic for one
+   quarantined row. The epoch remains valid and `ready` publishes every row
+   which fit.
+
+The 48 KiB budget is 16 KiB below Scanner's 64 KiB default, leaving room for
+SSE syntax and future envelope metadata. Rows are not byte-fragmented. A single
+row that cannot fit is omitted, identified safely (long IDs become SHA-256
+identities), and does not prevent the rest of the set becoming ready. Browsers
+show a persistent omitted-session total and at most 256 safe details until a
+later complete bootstrap clears it. A non-droppable counted summary keeps the
+total exact above the detail cap; peers retain bounded diagnostics for the
+transaction and log them. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
+`socket_path`, or `conversation_file` fields. Session rows do not contain
+scrollback or transcripts. Sender and receiver share 100,000-row / 64 MiB
+transaction bounds, with sender envelope headroom. A rejected malformed
+transaction can recover at the next strictly newer begin. Go SSE clients retain
+a bounded 1 MiB line ceiling only for protocol-2 compatibility (enough for the
+measured 1,000-row legacy frame).
+
+`Subscribe` installs the fanout subscriber and captures its full baseline while
+holding the same mutex used by publication. Consequently, a mutation is either
+in the baseline epoch or queued as a later full replacement. One connection
+serializes every begin/batch/ready transaction, so a later replacement cannot
+overtake readiness. Receivers require epochs to increase strictly within one
+transport, so replayed begin/batch/ready sequences cannot roll state back. The
+first accepted session event locks that transport to legacy or protocol 3; a
+legacy injection cannot reset protocol-3 replay protection. Disconnect destroys
+connection-local staging and resets mode/epoch history; reconnect starts from a
+fresh baseline.
+
+The current browser explicitly requests `?session_stream=3`; peer clients
+request `?as=peer&session_stream=3`. For one transitional release, an
+unversioned browser tab, peer, or custom consumer receives legacy
+`snapshot.sessions`. This lets a tab opened before a daemon upgrade reconnect
+without silently freezing. A new hub also accepts a legacy response from an old
+spoke. Unknown requested protocol versions use the legacy fallback rather than
+guessing.
+
+After `ready`, ordinary publication semantics are unchanged: each mutation
+still produces a coalesced full replacement, now transactionally batched. This
+amendment does not implement archive/live-set selection; a future implementation
+changes which complete rows enter a transaction, not its framing.
+
+`snapshot.world` remains a separate event and does not carry session rows. This
+amendment makes no world-size or endpoint-wide boundedness claim: 48 KiB applies
+only to protocol-3 session events. A realistic 1,000-membership world is retained
+as a size characterization, not a supported maximum. World framing belongs in a
+separate design if production evidence demonstrates the need; protocol-2 world
+semantics remain unchanged in this transition.
+
 ## Consequences
 
 ### Positive

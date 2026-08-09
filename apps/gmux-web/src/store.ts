@@ -244,6 +244,9 @@ effect(() => {
 })
 
 // Local-only UI state (never sourced from the wire).
+export type SessionStreamWarning = { id: string, code: string, message: string, count: number }
+export const sessionStreamWarnings = signal<SessionStreamWarning[]>([])
+export const sessionStreamOmittedTotal = signal(0)
 export const sessionsLoaded = signal(false)
 /**
  * Whether the leading-edge `snapshot.world` (projects, peers, health)
@@ -1190,10 +1193,10 @@ function commitWithSlugRewrite(
 }
 
 /**
- * Apply a wholesale `snapshot.sessions` payload (protocol 2 / ADR 0001):
+ * Apply one ready wholesale session replacement (ADR 0001 protocol 3):
  * the daemon re-sends the *entire* session list on any session state
- * change, and we replace `_rawSessions` in one shot rather than patching
- * individual entries.
+ * change as bounded batches, and the ready handler replaces `_rawSessions`
+ * in one shot rather than exposing batches or patching individual entries.
  *
  * Because the replacement is wholesale, a slug change on the currently
  * viewed session (a rename, or a pi `/resume` that swaps the active
@@ -1206,6 +1209,81 @@ function commitWithSlugRewrite(
  * the new slug in place instead of the stale slug failing to resolve and
  * booting the user back home.
  */
+const SESSION_STREAM_VERSION = 3
+const MAX_STAGED_SESSION_ROWS = 100_000
+const MAX_STAGED_SESSION_BYTES = 64 * 1024 * 1024
+
+type SessionsBootstrap = {
+  epoch: number
+  rows: ProtocolSession[]
+  bytes: number
+  warnings: SessionStreamWarning[]
+  omittedTotal: number
+}
+
+type SessionStreamMode = 'unknown' | 'legacy' | 'v3'
+let sessionStreamMode: SessionStreamMode = 'unknown'
+let sessionsBootstrap: SessionsBootstrap | null = null
+let lastSessionEpoch = 0
+
+/** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
+ * atomic-visibility tests. Production calls them only from EventSource. */
+export function beginSessionsBootstrap(version: number, epoch: number): void {
+  if (version !== SESSION_STREAM_VERSION || !Number.isSafeInteger(epoch) || epoch <= 0) {
+    sessionsBootstrap = null
+    return
+  }
+  if (sessionStreamMode === 'legacy') return
+  // Epochs are strictly increasing within one EventSource transport. Ignore
+  // replay without destroying a newer transaction already in flight.
+  if (epoch <= lastSessionEpoch) return
+  sessionStreamMode = 'v3'
+  lastSessionEpoch = epoch
+  sessionsBootstrap = { epoch, rows: [], bytes: 0, warnings: [], omittedTotal: 0 }
+}
+
+export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return
+  if (sessionsBootstrap.rows.length + rows.length > MAX_STAGED_SESSION_ROWS
+      || sessionsBootstrap.bytes + encodedBytes > MAX_STAGED_SESSION_BYTES) {
+    sessionsBootstrap = null
+    return
+  }
+  sessionsBootstrap.rows.push(...rows)
+  sessionsBootstrap.bytes += encodedBytes
+}
+
+export function appendSessionStreamWarning(epoch: number, warning: SessionStreamWarning): void {
+  if (sessionStreamMode !== 'v3' || !sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return
+  const count = Number.isSafeInteger(warning.count) && warning.count > 0 ? warning.count : 1
+  sessionsBootstrap.omittedTotal = Math.min(Number.MAX_SAFE_INTEGER, sessionsBootstrap.omittedTotal + count)
+  // Keep safe per-row detail bounded. The sender's final counted summary has
+  // no ID and updates omittedTotal even after this list reaches its cap.
+  if (warning.id && sessionsBootstrap.warnings.length < 256) {
+    sessionsBootstrap.warnings.push({ ...warning, count })
+  }
+}
+
+export function readySessionsBootstrap(epoch: number): boolean {
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return false
+  const { rows, warnings, omittedTotal } = sessionsBootstrap
+  sessionsBootstrap = null
+  applySessionsSnapshot(rows.map(toUISession))
+  sessionStreamWarnings.value = warnings
+  sessionStreamOmittedTotal.value = omittedTotal
+  return true
+}
+
+export function discardSessionsBootstrap(): void {
+  sessionsBootstrap = null
+}
+
+export function resetSessionsTransport(): void {
+  sessionStreamMode = 'unknown'
+  sessionsBootstrap = null
+  lastSessionEpoch = 0
+}
+
 export function applySessionsSnapshot(list: Session[]): void {
   // Detect newly-arrived IDs vs the previous snapshot so a pending launch
   // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
@@ -1772,8 +1850,14 @@ export function initStore(): () => void {
   // both kinds (sessions, world) immediately on subscribe, so we
   // don't need a bulk-GET prefetch on first load or on reconnect.
   // Missed deltas don't matter: each snapshot is a full replacement.
-  const source = new EventSource('/v1/events')
+  resetSessionsTransport()
+  sessionStreamWarnings.value = []
+  sessionStreamOmittedTotal.value = 0
+  const source = new EventSource('/v1/events?session_stream=3')
   source.addEventListener('error', () => {
+    // A transport reconnect starts a new epoch. Never retain unpublished
+    // rows from the interrupted response.
+    resetSessionsTransport()
     // Browser EventSource auto-reconnects; flag the UI as degraded
     // until the next snapshot arrives. `sessionsLoaded` stays true
     // once it has flipped, so reconnect doesn't blank the sidebar.
@@ -1787,14 +1871,64 @@ export function initStore(): () => void {
     else if (connState.value === 'connected') connState.value = 'reconnecting'
   })
 
-  // Protocol 2 (ADR 0001). The server pushes two snapshot kinds plus
-  // bare activity. We replace `_rawSessions` and `_rawWorld`
-  // wholesale on each snapshot; the projection layer derives
-  // everything else.
+  // Protocol 3 streams complete semantic rows into private staging. No row
+  // becomes visible until the matching ready marker atomically replaces the
+  // projection. A later epoch is an ordinary full replacement too.
+  source.addEventListener('snapshot.sessions.begin', (e) => {
+    try {
+      const { version, epoch } = JSON.parse(e.data) as { version: number, epoch: number }
+      beginSessionsBootstrap(version, epoch)
+    } catch (err) {
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.begin: bad event', err)
+    }
+  })
+
+  source.addEventListener('snapshot.sessions.batch', (e) => {
+    try {
+      const { epoch, sessions: rows } = JSON.parse(e.data) as { epoch: number, sessions: ProtocolSession[] }
+      if (!Array.isArray(rows)) throw new Error('sessions must be an array')
+      appendSessionsBootstrap(epoch, rows, e.data.length)
+    } catch (err) {
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.batch: bad event', err)
+    }
+  })
+
+  source.addEventListener('snapshot.sessions.ready', (e) => {
+    try {
+      const { epoch } = JSON.parse(e.data) as { epoch: number }
+      if (!readySessionsBootstrap(epoch)) console.warn('snapshot.sessions.ready: no matching bootstrap')
+    } catch (err) {
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.ready: bad event', err)
+    }
+  })
+
+  source.addEventListener('snapshot.sessions.error', (e) => {
+    // A diagnostic quarantines one row but does not invalidate the epoch.
+    // It becomes a persistent sidebar warning when ready commits this epoch.
+    try {
+      const diagnostic = JSON.parse(e.data) as SessionStreamWarning & { epoch: number }
+      appendSessionStreamWarning(diagnostic.epoch, {
+        id: diagnostic.id ?? '', code: diagnostic.code ?? 'row_omitted', message: diagnostic.message ?? 'session row omitted', count: diagnostic.count ?? 1,
+      })
+    } catch { /* malformed diagnostics cannot invalidate staging */ }
+    console.warn('snapshot.sessions.error:', e.data)
+  })
+
+  // Transitional fallback for a proxy or one-release-old daemon which ignores
+  // the explicit protocol marker. Old tabs request no marker and receive this
+  // event from a new daemon as well.
   source.addEventListener('snapshot.sessions', (e) => {
     try {
+      if (sessionStreamMode === 'v3') return
       const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
+      sessionStreamMode = 'legacy'
+      discardSessionsBootstrap()
       applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
+      sessionStreamWarnings.value = []
+      sessionStreamOmittedTotal.value = 0
     } catch (err) {
       console.warn('snapshot.sessions: bad event', err)
     }
