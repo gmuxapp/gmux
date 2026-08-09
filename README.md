@@ -53,6 +53,12 @@ gmux wait "$id"        # block until the turn ends, print the exchange report
 gmux tail -n 50 "$id"  # read the plain-text terminal tail
 ```
 
+Install the bundled [gmux skill](skills/gmux/SKILL.md) to teach an agent both command sessions and agent orchestration:
+
+```bash
+npx skills add gmuxapp/gmux
+```
+
 See [Orchestrating agents](https://gmux.app/orchestrating-agents/) and the [CLI reference](https://gmux.app/reference/cli/).
 
 ## Docs

@@ -16,18 +16,17 @@ or their one-shot modes (`claude -p`, `codex exec`).
 :::
 
 :::tip[Driving gmux from an agent?]
-Install the gmux skills — [gmux](https://github.com/gmuxapp/gmux/blob/main/skills/gmux/SKILL.md)
-for running commands through sessions and
-[gmux-agent](https://github.com/gmuxapp/gmux/blob/main/skills/gmux-agent/SKILL.md)
-for orchestrating agents — so your agent picks up these patterns automatically:
+Install the [gmux skill](https://github.com/gmuxapp/gmux/blob/main/skills/gmux/SKILL.md)
+for running commands and orchestrating agents through observable sessions, so your agent
+picks up these patterns automatically:
 
 ```sh
 npx skills add gmuxapp/gmux
 ```
 
-The skills follow the [agentskills.io](https://agentskills.io/) standard and
-work with Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, and 50+
-other agents. Or drop the `SKILL.md` files into your agent's skills directory
+The skill follows the [agentskills.io](https://agentskills.io/) standard and
+works with Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, and 50+
+other agents. Or drop the `SKILL.md` file into your agent's skills directory
 by hand.
 :::
 
@@ -63,6 +62,25 @@ session behind and **you own it**: retry against the id, read it with
 with `--new`, and `--new` must come before the prompt — after a session id it
 is prompt text like anything else. The two-step `gmux -d -- pi` plus a prompt
 remains fully supported.
+
+## Safe multiline prompts
+
+For a nontrivial prompt, use stdin with a **quoted heredoc** instead of a
+double-quoted shell argument. Quoting the delimiter keeps backticks,
+`$variables`, `$(commands)`, quotes, and other shell syntax literal:
+
+```bash
+gmux agent prompt --new --no-wait --name review <<'PROMPT'
+Review the `auth` package and run its tests.
+
+Check $(git status) before editing. Work alone; do not spawn agents.
+PROMPT
+```
+
+The prompt receives `$(git status)` verbatim; the launching shell does not run
+it. The same form works when prompting, steering, or following up with an
+existing session. Short static prompts may remain single-quoted arguments,
+and files can be redirected directly: `gmux agent prompt "$id" < prompt.md`.
 
 ## The exchange report
 

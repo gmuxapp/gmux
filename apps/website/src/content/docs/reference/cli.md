@@ -266,8 +266,12 @@ shell is back at a fresh prompt; for a one-shot command
 ```bash
 gmux agent prompt --no-wait a3f20187 'do the thing'
 gmux wait a3f20187
-gmux wait a3f20187 --timeout 600   # or fail after 600s
+gmux wait a3f20187 --timeout 600   # return control after at most 600s
 ```
+
+A wait timeout bounds observation, not execution: it returns a timeout verdict
+without stopping the session. Wait again, inspect it with `gmux tail` or
+`gmux agent logs`, or intervene explicitly.
 
 The signal is the same `Status.Active` flag the UI's spinner consumes — the
 session's **activity state**. Agents source it from their own hooks, so `wait`
