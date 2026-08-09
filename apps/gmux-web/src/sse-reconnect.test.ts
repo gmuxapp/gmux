@@ -55,6 +55,20 @@ describe('SSE reconnecting state', () => {
     source().emit('snapshot.sessions.ready', { epoch })
   }
 
+  it('explicitly requests protocol 3', () => {
+    cleanup = initStore()
+    expect(source().url).toBe('/v1/events?session_stream=3')
+  })
+
+  it('accepts the transitional legacy replacement if protocol negotiation is stripped', () => {
+    cleanup = initStore()
+    source().emit('snapshot.sessions', { sessions: [
+      { id: 'legacy', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['legacy'])
+    expect(connState.value).toBe('connected')
+  })
+
   it('goes to error when the initial connect drops before any snapshot', () => {
     cleanup = initStore()
     expect(connState.value).toBe('connecting')
@@ -91,8 +105,42 @@ describe('SSE reconnecting state', () => {
     expect(_rawSessions.value.map(s => s.id)).toEqual(['old'])
     source().emit('error')
     expect(_rawSessions.value.map(s => s.id)).toEqual(['old'])
-    ready(3, [{ id: 'fresh', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    // No replacement begin: if the error handler retained staging, these two
+    // events would publish "partial". They must be inert and release it.
+    source().emit('snapshot.sessions.batch', { epoch: 2, sessions: [] })
+    source().emit('snapshot.sessions.ready', { epoch: 2 })
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['old'])
+    // Epochs restart on the new transport.
+    ready(1, [{ id: 'fresh', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
     expect(_rawSessions.value.map(s => s.id)).toEqual(['fresh'])
+  })
+
+  it('ignores duplicate and stale epochs without rolling back or destroying newer staging', () => {
+    cleanup = initStore()
+    ready(1, [{ id: 'old', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    ready(2, [{ id: 'new', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    ready(1, [{ id: 'replayed', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['new'])
+
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 3 })
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 2 })
+    source().emit('snapshot.sessions.batch', { epoch: 3, sessions: [
+      { id: 'newest', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    source().emit('snapshot.sessions.ready', { epoch: 3 })
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['newest'])
+  })
+
+  it('keeps a degraded epoch valid after a quarantined-row diagnostic', () => {
+    cleanup = initStore()
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 1 })
+    source().emit('snapshot.sessions.batch', { epoch: 1, sessions: [
+      { id: 'good', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    source().emit('snapshot.sessions.error', { epoch: 1, code: 'row_too_large', id: 'bad', message: 'omitted' })
+    source().emit('snapshot.sessions.ready', { epoch: 1 })
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['good'])
+    expect(connState.value).toBe('connected')
   })
 
   it('publishes a mutation captured during bootstrap only at its later ready', () => {

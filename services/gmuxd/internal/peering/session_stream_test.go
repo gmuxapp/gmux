@@ -3,6 +3,7 @@ package peering
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
@@ -91,6 +92,94 @@ func TestPeerRejectsBootstrapBeyondAggregateMemoryBound(t *testing.T) {
 	if len(sink.replaced) != 0 {
 		t.Fatal("overflow became visible")
 	}
+	// A rejected transaction is not permanent staleness: the next strictly
+	// newer begin starts cleanly and can reach ready.
+	p.handleStreamEvent(context.Background(), sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 2}), &stage)
+	p.handleStreamEvent(context.Background(), sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: 2, Sessions: []SessionProjection{{ID: "recovered"}}}), &stage)
+	p.handleStreamEvent(context.Background(), sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 2}), &stage)
+	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "recovered@spoke" {
+		t.Fatalf("recovery=%+v", got)
+	}
+}
+
+func TestPeerDiagnosticDoesNotInvalidateReady(t *testing.T) {
+	sink := newMockSink()
+	p := &Peer{Config: config.PeerConfig{Name: "spoke"}, sink: sink}
+	stage := peerSessionBootstrap{}
+	ctx := context.Background()
+	p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 1}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: 1, Sessions: []SessionProjection{{ID: "good"}}}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventError, streamData(t, sessionstream.Error{Epoch: 1, Code: "row_too_large", ID: "bad", Message: "omitted"}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 1}), &stage)
+	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "good@spoke" {
+		t.Fatalf("visible=%+v", got)
+	}
+}
+
+func TestPeerRejectsNonIncreasingEpochWithoutRollback(t *testing.T) {
+	sink := newMockSink()
+	p := &Peer{Config: config.PeerConfig{Name: "spoke"}, sink: sink}
+	stage := peerSessionBootstrap{}
+	ctx := context.Background()
+	commit := func(epoch uint64, id string) {
+		p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: epoch}), &stage)
+		p.handleStreamEvent(ctx, sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: epoch, Sessions: []SessionProjection{{ID: id}}}), &stage)
+		p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: epoch}), &stage)
+	}
+	commit(1, "old")
+	commit(2, "new")
+	commit(1, "replayed")
+	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "new@spoke" {
+		t.Fatalf("projection rolled back: %+v", got)
+	}
+
+	// A stale begin must not destroy a newer in-flight epoch either.
+	p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 3}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventBegin, streamData(t, sessionstream.Begin{Version: 3, Epoch: 2}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventBatch, streamData(t, sessionstream.Batch[SessionProjection]{Epoch: 3, Sessions: []SessionProjection{{ID: "newest"}}}), &stage)
+	p.handleStreamEvent(ctx, sessionstream.EventReady, streamData(t, sessionstream.Ready{Epoch: 3}), &stage)
+	if got := sink.replaced["spoke"]; len(got) != 1 || got[0].ID != "newest@spoke" {
+		t.Fatalf("in-flight epoch destroyed: %+v", got)
+	}
+}
+
+func TestOldSpokeLargeRowIsQuarantinedWhenNewHubStreamsToBrowser(t *testing.T) {
+	sink := newMockSink()
+	p := &Peer{Config: config.PeerConfig{Name: "old"}, sink: sink}
+	large := SessionProjection{ID: "large", Command: []string{strings.Repeat("x", 60*1024)}}
+	stage := peerSessionBootstrap{}
+	p.handleStreamEvent(context.Background(), "snapshot.sessions", streamData(t, sseSnapshotSessions{Sessions: []SessionProjection{large}}), &stage)
+	mirrored := sink.replaced["old"]
+	if len(mirrored) != 1 {
+		t.Fatalf("old-spoke projection=%+v", mirrored)
+	}
+	rows := append([]SessionProjection{{ID: "local"}}, mirrored...)
+	events, err := sessionstream.Encode(1, rows, func(row SessionProjection) string { return row.ID })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batches, diagnostics, ready int
+	for _, event := range events {
+		switch event.Type {
+		case sessionstream.EventBatch:
+			batches++
+		case sessionstream.EventError:
+			diagnostics++
+		case sessionstream.EventReady:
+			ready++
+		}
+	}
+	if batches != 1 || diagnostics != 1 || ready != 1 {
+		t.Fatalf("events=%v", eventTypesForPeerTest(events))
+	}
+}
+
+func eventTypesForPeerTest(events []sessionstream.Event) []string {
+	out := make([]string, len(events))
+	for i := range events {
+		out[i] = events[i].Type
+	}
+	return out
 }
 
 func TestPeerAcceptsLegacySnapshotFromOldSpoke(t *testing.T) {

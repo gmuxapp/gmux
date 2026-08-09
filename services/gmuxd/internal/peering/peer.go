@@ -473,32 +473,48 @@ type sseSnapshotSessions struct {
 }
 
 type peerSessionBootstrap struct {
-	epoch  uint64
-	active bool
-	rows   []SessionProjection
-	bytes  int
+	epoch     uint64
+	lastEpoch uint64
+	active    bool
+	rows      []SessionProjection
+	bytes     int
+}
+
+func (s *peerSessionBootstrap) abandon() {
+	s.epoch = 0
+	s.active = false
+	s.rows = nil
+	s.bytes = 0
 }
 
 func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []byte, staging *peerSessionBootstrap) {
 	switch eventType {
 	case sessionstream.EventBegin:
 		var begin sessionstream.Begin
-		if err := json.Unmarshal(data, &begin); err != nil || begin.Version != sessionstream.ProtocolVersion {
-			*staging = peerSessionBootstrap{}
+		if err := json.Unmarshal(data, &begin); err != nil || begin.Version != sessionstream.ProtocolVersion || begin.Epoch == 0 {
+			staging.abandon()
 			log.Printf("peering: %s: bad session bootstrap begin", p.Config.Name)
 			return
 		}
-		*staging = peerSessionBootstrap{epoch: begin.Epoch, active: true}
+		if begin.Epoch <= staging.lastEpoch {
+			// Ignore replay without destroying a newer in-flight transaction.
+			log.Printf("peering: %s: stale session bootstrap epoch %d (last %d)", p.Config.Name, begin.Epoch, staging.lastEpoch)
+			return
+		}
+		staging.abandon()
+		staging.epoch = begin.Epoch
+		staging.lastEpoch = begin.Epoch
+		staging.active = true
 		return
 	case sessionstream.EventBatch:
 		var batch sessionstream.Batch[SessionProjection]
 		if err := json.Unmarshal(data, &batch); err != nil || !staging.active || batch.Epoch != staging.epoch {
-			*staging = peerSessionBootstrap{}
+			staging.abandon()
 			log.Printf("peering: %s: bad or out-of-epoch session bootstrap batch", p.Config.Name)
 			return
 		}
 		if len(staging.rows)+len(batch.Sessions) > sessionstream.MaxStagedRows || staging.bytes+len(data) > sessionstream.MaxStagedBytes {
-			*staging = peerSessionBootstrap{}
+			staging.abandon()
 			log.Printf("peering: %s: session bootstrap exceeds staging limit", p.Config.Name)
 			return
 		}
@@ -508,17 +524,30 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 	case sessionstream.EventReady:
 		var ready sessionstream.Ready
 		if err := json.Unmarshal(data, &ready); err != nil || !staging.active || ready.Epoch != staging.epoch {
-			*staging = peerSessionBootstrap{}
+			staging.abandon()
 			log.Printf("peering: %s: bad or out-of-epoch session bootstrap ready", p.Config.Name)
 			return
 		}
 		rows := staging.rows
-		*staging = peerSessionBootstrap{}
+		staging.abandon()
 		p.applySessionsSnapshot(rows)
 		return
 	case sessionstream.EventError:
-		*staging = peerSessionBootstrap{}
-		log.Printf("peering: %s: spoke rejected session bootstrap: %s", p.Config.Name, data)
+		// Diagnostics quarantine individual rows; they do not invalidate the
+		// transaction or prevent the remaining rows from reaching ready.
+		var diagnostic sessionstream.Error
+		if err := json.Unmarshal(data, &diagnostic); err != nil {
+			log.Printf("peering: %s: bad session bootstrap diagnostic", p.Config.Name)
+			return
+		}
+		id, message := diagnostic.ID, diagnostic.Message
+		if len(id) > 256 {
+			id = id[:256] + "…"
+		}
+		if len(message) > 512 {
+			message = message[:512] + "…"
+		}
+		log.Printf("peering: %s: session %q omitted: %q (%s)", p.Config.Name, id, message, diagnostic.Code)
 		return
 	case "snapshot.sessions":
 		// Protocol-2 response from an older spoke. It is authoritative and

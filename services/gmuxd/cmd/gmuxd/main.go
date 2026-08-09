@@ -18,6 +18,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	qrterminal "github.com/mdp/qrterminal/v3"
 )
@@ -647,6 +648,14 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 	return false, false
 }
 
+// useSemanticSessionStream selects protocol 3 only by explicit request.
+// Browser code requests it in the EventSource URL; unversioned custom clients
+// and old tabs retain protocol 2 for one transitional release. Peers use the
+// same explicit marker.
+func useSemanticSessionStream(_ bool, requested string) bool {
+	return requested == "3"
+}
+
 // shouldForwardActivity decides whether a session-activity event
 // should be sent to a given SSE subscriber.
 //
@@ -660,10 +669,6 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 //     daemon sees, including namespaced activity that hubs have
 //     re-broadcast from network peers — the UI renders all of those
 //     sessions and needs the indicator updates.
-func useSemanticSessionStream(asPeer bool, requested string) bool {
-	return !asPeer || requested == "3"
-}
-
 func shouldForwardActivity(asPeer bool, sessionID string, isLocalPeer func(string) bool) bool {
 	if !asPeer {
 		return true
@@ -710,10 +715,35 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 	return false
 }
 
-// sessionLastActive returns the timestamp used to sort discovered
-// suggestions by recency: the session's last_output_at, falling back
-// to created_at when no activity has been recorded yet.
-const sseWriteTimeout = 10 * time.Second
+const (
+	sseWriteTimeout      = 10 * time.Second
+	maxWorldEventPayload = 512 * 1024
+)
+
+type worldStreamError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Size    int    `json:"size,omitempty"`
+	Limit   int    `json:"limit"`
+}
+
+// sendWorldSSEFrame enforces an explicit bound on the still-single semantic
+// world object. Oversize keeps the stream available and sends a bounded
+// diagnostic; the browser retains its previous world projection.
+func sendWorldSSEFrame(rc *http.ResponseController, w io.Writer, payload any) error {
+	data, err := json.Marshal(payload)
+	if err == nil && len(data) <= maxWorldEventPayload {
+		return sendSSEBytesFrame(rc, w, "snapshot.world", data)
+	}
+	diagnostic := worldStreamError{Code: "world_too_large", Message: "world snapshot omitted; previous world remains visible", Limit: maxWorldEventPayload}
+	if err != nil {
+		diagnostic.Code = "world_encode_failed"
+	} else {
+		diagnostic.Size = len(data)
+	}
+	diagnosticData, _ := json.Marshal(diagnostic)
+	return sendSSEBytesFrame(rc, w, "snapshot.world.error", diagnosticData)
+}
 
 func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
@@ -725,10 +755,35 @@ func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payloa
 
 func sendSSEBytesFrame(rc *http.ResponseController, w io.Writer, event string, data []byte) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
-	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	if err := writeSSEBytes(w, event, data); err != nil {
 		return err
 	}
 	return rc.Flush()
+}
+
+// sendSSETransaction applies one deadline to the complete begin/batch/ready
+// write. A fragmented replacement therefore has the same 10-second stall bound
+// as the old single frame rather than multiplying the timeout per fragment.
+func sendSSETransaction(ctx context.Context, rc *http.ResponseController, w io.Writer, events []sessionstream.Event) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
+	for _, event := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := writeSSEBytes(w, event.Type, event.Data); err != nil {
+			return err
+		}
+		if err := rc.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeSSEBytes(w io.Writer, event string, data []byte) error {
+	_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	return err
 }
 
 // sendSSEComment writes a heartbeat comment frame (":") with a fresh

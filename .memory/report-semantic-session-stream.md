@@ -1,141 +1,157 @@
-# Bounded semantic session stream
+# Bounded semantic session stream — amended after review
 
-## Summary
+## Protocol
 
-Protocol 3 replaces each unbounded `snapshot.sessions` SSE event with a
-transaction of complete semantic rows:
+A protocol-3 session replacement is one transaction:
 
 1. `snapshot.sessions.begin {version:3,epoch}`
-2. zero or more `snapshot.sessions.batch {epoch,sessions:[...]}`
-3. `snapshot.sessions.ready {epoch}`
+2. zero or more `snapshot.sessions.batch {epoch,sessions:[...]}` events
+3. zero or more non-fatal `snapshot.sessions.error` row diagnostics
+4. `snapshot.sessions.ready {epoch}`
 
-Receivers stage batches privately and replace the visible projection only at
-`ready`. This applies to initial hydration and the existing coalesced full-list
-replacements after mutations. It deliberately does not select an archive or a
-bounded live set; a future implementation can change which rows are enumerated
-without changing framing.
+Batches contain complete semantic rows and have a 48 KiB JSON payload maximum.
+Receivers stage privately and replace the visible set only at the matching
+`ready`. Initial hydration and later coalesced full replacements use the same
+framing. This does not implement archive/live-set selection.
 
-## Bounds and failure behavior
+## Availability and bounds
 
-- Maximum JSON payload per session-stream event: **48 KiB (49,152 bytes)**.
-  This leaves 16 KiB below the default 64 KiB Scanner token for SSE syntax,
-  envelope growth, and intermediary metadata.
-- Rows are JSON-encoded independently and never byte-split.
-- One row which cannot fit causes encoding to fail before `begin` is sent. The
-  server emits a bounded `snapshot.sessions.error`, logs the row ID, and closes
-  that response. The receiver discards staging and retains the previous ready
-  set. Likely unbounded fields are `command`, `cwd`, `remotes`, `title`,
-  `subtitle`, `socket_path`, and `conversation_file`. Session rows contain no
-  scrollback or transcript content.
-- Receiver staging is capped at 100,000 rows and 64 MiB.
-- The Go SSE Scanner line ceiling is bounded at 1 MiB, up from 256 KiB. This
-  admits the measured 1,000-row protocol-2 frame during mixed-version operation.
-  Protocol 3 does not rely on that increase. Lines above it return a protocol
-  error before unbounded growth.
+A row larger than 48 KiB no longer aborts or closes the stream. The sender omits
+only that row, emits a bounded diagnostic with a fixed reason and safe identity
+(IDs over 128 bytes become `sha256:<digest>`), and completes `ready` for every
+other row. This handles the confirmed old-spoke amplification schedule: a new
+hub accepts a legacy row up to its 1 MiB compatibility ceiling, then quarantines
+that row rather than bricking its browser or downstream peer projection.
 
-## Consistency boundary
+Likely row-size causes are `command`, `cwd`, `remotes`, `title`, `subtitle`,
+`socket_path`, and `conversation_file`. Rows contain no scrollback/transcript.
+They are never truncated or arbitrary-byte-split.
 
-`sseFanout.Subscribe` takes the same mutex as `BroadcastFrames`, installs the
-subscriber, and copies the current full projection before releasing it. A
-mutation therefore falls on exactly one side of the boundary:
+Sender and receiver use symmetric transaction limits:
 
-- before capture: reflected by baseline epoch N; or
-- after capture: queued as a later full replacement epoch N+1.
+- 100,000 staged rows
+- 64 MiB receiver encoded staging
+- sender accepts at most 63 MiB of row JSON, reserving 1 MiB for batch envelopes
+- at most 256 individual diagnostics, followed by one bounded summary
+- Go SSE line/event accumulation ceiling: 1 MiB for transitional protocol 2
 
-The HTTP handler serially writes all events for one epoch, including `ready`,
-before reading the next fanout message. A concurrent mutation cannot overtake
-baseline readiness. The bounded fanout may drop intermediate full replacements
-for a slow subscriber, but retains a later authoritative replacement, matching
-ADR 0001's existing latest-only semantics. Activity remains intentionally
-lossy.
+A malformed/overflow transaction is abandoned without changing visible state.
+A strictly newer begin starts cleanly, so rejection does not create permanent
+staleness. Correct senders remain inside receiver bounds.
 
-Staging belongs to one transport connection in the Go peer. Browser staging is
-cleared on EventSource error and reset by every begin marker. Disconnect before
-ready therefore cannot expose or carry partial rows into reconnect.
+## Epoch and consistency schedules
+
+`fanout.Subscribe` installs the subscriber and captures its baseline under the
+same mutex as publication. A mutation is either included in baseline epoch N or
+queued as a later full replacement. The handler serializes all of N through
+`ready` before reading N+1.
+
+Epochs must increase strictly within one transport in both browser and peer
+receivers. Duplicate/older begin events are ignored without destroying a newer
+in-flight transaction; stale batch/ready cannot publish. Disconnect releases
+staging and resets epoch history, allowing the next transport to restart at 1.
+Browser tests prove release by sending batch+ready without a new begin after an
+error; the partial rows do not publish.
+
+The complete session transaction has one 10-second write deadline. Cancellation
+is checked between fragment writes. The deadline is cleared after completion,
+so timeout no longer multiplies by event count.
 
 ## Compatibility
 
-Browser assets are daemon-served/version-locked and always receive protocol 3.
-New peer clients request `?as=peer&session_stream=3`.
+Protocol 3 is explicit for all consumers:
 
-- New hub -> old spoke: the old daemon ignores the query parameter and sends
-  legacy `snapshot.sessions`; the new hub still handles it authoritatively.
-- Old hub -> new spoke: absence of `session_stream=3` selects the legacy event.
-- New hub -> new spoke: bounded begin/batch/ready events.
-- Unknown requested versions select legacy fallback rather than guessing.
+- current browser: `/v1/events?session_stream=3`
+- current peer: `/v1/events?as=peer&session_stream=3`
+- unversioned browser tab/custom consumer: transitional protocol-2
+  `snapshot.sessions`
+- old peer omitting the marker: protocol 2
+- new hub to old spoke: old spoke ignores the marker; new hub accepts protocol 2
+- unknown requested version: legacy fallback rather than guessing
 
-Thus mixed peers do not silently ignore/misparse new event names. The legacy
-fallback remains intrinsically unbounded and can still exceed an old peer's
-Scanner limit for very large sets; retaining wire compatibility and fixing an
-old binary's parser cannot both be guaranteed by the new spoke.
+The new browser also retains a legacy listener defensively. An old tab opened
+across a daemon upgrade requests no marker and therefore continues receiving the
+event it understands rather than silently freezing.
 
-## Oversized-path inspection
+## SSE parser
 
-`snapshot.sessions` and `snapshot.world` are distinct frames. The actual large
-row projection is `snapshot.sessions`; peer subscriptions suppress world
-entirely. `snapshot.world` carries project membership IDs but no session rows.
-With 1,000 eight-character IDs in one project its encoded payload measured
-**11,110 bytes**, below the session event budget. World framing was therefore
-left unchanged.
+The Go SSE client now follows event boundaries: all `data:` fields are
+accumulated, joined with `\n`, and dispatched once at the blank line. Field order
+is unconstrained, no-event blocks use type `message`, comments do not terminate
+an event, and empty/no-data blocks do not dispatch. Both individual lines and
+the accumulated event remain bounded.
+
+## `snapshot.world` scope
+
+World remains a single semantic object, separate from session rows. It now has
+an explicit **512 KiB JSON sender maximum**, below the Go transport's 1 MiB
+ceiling. Oversize/encode failure emits a small `snapshot.world.error`; no
+unbounded world line is written. Browser updates retain the previous world; an
+initial error exposes safe empty defaults so session availability is preserved.
+
+The realistic transport-seam fixture includes 1,000 memberships across 50
+projects, path/remote match rules, 20 peers, health, launchers, peer projects,
+and peer discovery. It measures **26,177 bytes**, about 5% of the explicit
+maximum. The earlier synthetic ID-only fixture was rejected as insufficient.
+
+I did not semantically fragment world: at gmux's documented supported scale
+(single user, dozens of sessions/peers; ADR 0001 explicitly says the snapshot
+model is unsuitable for thousands), the composed stress fixture is 20× below
+the sender maximum. Arbitrarily large operator metadata is now rejected before
+the transport rather than producing an unbounded SSE line. Claims are narrowed:
+48 KiB applies to protocol-3 session events; world has its separate 512 KiB
+maximum; transitional protocol-2 sessions retain the 1 MiB client ceiling.
 
 ## Reproduction and measurements
 
-Before code changes, a realistic 1,000-row projection (commands, cwd/workspace,
-remotes, title/subtitle, socket path, conversation reference, runner/project
-metadata; no transcripts) produced:
+Pre-change realistic fixture:
 
 ```
 legacy payload=860535 frame=860568 max_line=860541 events=1
 lines=1 err=bufio.Scanner: token too long
 ```
 
-The checked-in deterministic Go fixture (slightly narrower but still realistic)
-measures old versus protocol 3:
+Checked-in 1,000-row fixture:
 
-| metric | old full event | protocol 3 |
+| metric | old | protocol 3 |
 |---|---:|---:|
-| rows | 1,000 | 1,000 |
-| maximum JSON event payload | 687,678 B | 48,889 B |
-| total SSE bytes | 687,711 B | 688,721 B |
-| event count | 1 | 17 |
-| serialization latency (median of 5 benchmark runs) | ~1.47 ms | ~2.71 ms |
+| max session JSON event | 687,678 B | 48,889 B |
+| total session SSE bytes | 687,711 B | 688,721 B |
+| session event count | 1 | 17 |
+| median serialization, 3 runs | ~1.30 ms | ~1.77 ms |
 
-Total wire overhead is 1,010 bytes (~0.15%). Serialization adds ~1.24 ms on the
-fixture. On a local/in-memory initial synchronization this is the measured
-latency delta; real links are dominated by transferring the same ~689 KiB, while
-the receiver intentionally exposes the set at the final ready marker rather
-than incrementally. Benchmark command:
-
-```
-go test -run '^$' -bench BenchmarkInitialSync1000 -benchmem -count=5 ./internal/sessionstream
-```
+Wire overhead is 1,010 bytes (~0.15%). The measured local serialization delta is
+~0.47 ms. Quarantine adds one bounded diagnostic per bad row (subject to the
+diagnostic cap) and does not affect healthy fixtures.
 
 ## Evidence map
 
-- Legacy >64 KiB reproduction, empty/one/many rows, event bounds,
-  oversized-single-row failure, byte/event measurements:
+- bounds, empty/one/many, legacy Scanner reproduction, quarantine, safe IDs,
+  sender/receiver limit symmetry, measurements:
   `internal/sessionstream/sessionstream_test.go`
-- Scanner compatibility acceptance and hard ceiling:
+- standard multiline SSE parsing and line/aggregate limits:
   `internal/sseclient/client_test.go`
-- Browser disconnect/reconnect and mutation staging:
-  `apps/gmux-web/src/sse-reconnect.test.ts`
-- Peer disconnect, reconnect, atomic readiness, mutation epoch, legacy spoke:
+- peer reconnect, diagnostics-through-ready, overflow recovery, monotonic epoch,
+  old-spoke-large-row amplification:
   `internal/peering/session_stream_test.go`
-- Subscribe/publication boundary, browser/peer version selection, world size:
+- browser explicit negotiation, legacy fallback, real disconnect release,
+  monotonic epoch, degraded ready:
+  `apps/gmux-web/src/sse-reconnect.test.ts`
+- subscription boundary, compatibility matrix, realistic world transport bound,
+  oversized-world diagnostic:
   `cmd/gmuxd/session_stream_boundary_test.go`
-- Real server event order and matched world:
-  `cmd/gmuxd/serve_switch_integration_test.go`
+- transaction-wide deadline/cancellation:
+  `cmd/gmuxd/sse_transaction_test.go`
+- production initial event contract:
+  `cmd/gmuxd/production_container_e2e_test.go`
 
 ## Open tradeoffs
 
-- Full session sets are still re-enumerated after mutations. This PR bounds
-  transport frames and atomic application; it does not implement deltas,
-  archive/live-set selection, resumable epochs, or server-side replay.
-- A single semantic row over 48 KiB is rejected rather than split. A future
-  protocol could model specific large fields semantically, but arbitrary-byte
-  checkpointing is intentionally avoided.
-- `snapshot.world` remains one event. The measured many-session path is small;
-  independently unbounded project/peer metadata may warrant its own semantic
-  framing if real deployments approach the Scanner ceiling.
-- Browser EventSource provides no custom negotiation headers; this is safe only
-  because the browser bundle and daemon are served/versioned together.
+- Every mutation still re-enumerates the full selected set; no delta/replay or
+  archive/live-set policy is introduced.
+- Quarantined rows are absent from the SSE projection until they shrink. They
+  remain inspectable/actionable through one-shot CLI/REST paths.
+- Transitional protocol-2 session frames are still single events for one
+  release; the new client bounds them at 1 MiB.
+- World is bounded rejection rather than fragmentation. If supported deployment
+  scale grows near 512 KiB, it should gain its own semantic row transaction.

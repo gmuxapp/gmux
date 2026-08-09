@@ -830,10 +830,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			w.Header().Set("Connection", "keep-alive")
 			rc := http.NewResponseController(w)
 			asPeer := r.URL.Query().Get("as") == "peer"
-			// Browser assets are served by this daemon and therefore always use
-			// protocol 3. Peers explicitly opt in; an old peer omits the marker
-			// and receives protocol 2's snapshot.sessions fallback rather than
-			// silently ignoring the new event names.
+			// Protocol 3 is explicit for every consumer. The current browser adds
+			// the marker; an old tab, peer, or custom consumer omits it and gets
+			// protocol 2 for one transitional release.
 			semanticSessions := useSemanticSessionStream(asPeer, r.URL.Query().Get("session_stream"))
 			initial, ch, cancel := fanout.Subscribe()
 			defer cancel()
@@ -853,19 +852,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				sessionEpoch++
 				events, encodeErr := sessionstream.Encode(sessionEpoch, payload.Sessions, func(s wire.Session) string { return s.ID })
 				if encodeErr != nil {
-					log.Printf("session stream: refusing epoch %d: %v", sessionEpoch, encodeErr)
-					errorEvent := sessionstream.ErrorEvent(encodeErr)
-					if sendErr := sendSSEBytesFrame(rc, w, errorEvent.Type, errorEvent.Data); sendErr != nil {
-						return sendErr
-					}
 					return encodeErr
 				}
-				for _, event := range events {
-					if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
-						return err
-					}
-				}
-				return nil
+				return sendSSETransaction(r.Context(), rc, w, events)
 			}
 			if err := sendSessions(initial.Sessions); err != nil {
 				return
@@ -880,7 +869,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					h.Sessions = counts
 					initial.World.Health = &h
 				}
-				if err := sendSSEFrame(rc, w, "snapshot.world", initial.World); err != nil {
+				if err := sendWorldSSEFrame(rc, w, initial.World); err != nil {
 					return
 				}
 			}
@@ -919,7 +908,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						continue
 					}
 					if msg.Frames.World != nil {
-						if err := sendSSEFrame(rc, w, "snapshot.world", msg.Frames.World); err != nil {
+						if err := sendWorldSSEFrame(rc, w, msg.Frames.World); err != nil {
 							return
 						}
 					}

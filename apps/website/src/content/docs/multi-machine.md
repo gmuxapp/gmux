@@ -112,7 +112,7 @@ The hub connects to these public gmuxd endpoints on each spoke:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /v1/events?as=peer` | SSE snapshot stream — full `snapshot.sessions` on connect and on every change |
+| `GET /v1/events?as=peer&session_stream=3` | SSE snapshot stream — bounded begin/batch/ready full replacement on connect and every change; old peers omitting the version temporarily receive legacy `snapshot.sessions` |
 | `GET /v1/projects` | Spoke's projects + discovered list (refreshed on `projects-update` events) |
 | `GET /v1/health` | Version, hostname, node ID, available launchers |
 | `POST /v1/launch` | Forward launch requests |

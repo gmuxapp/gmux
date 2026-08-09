@@ -244,7 +244,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		t.Fatalf("invalid PUT changed catalog: %+v", catalog.Projects)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
+	req, err := http.NewRequest(http.MethodGet, "http://localhost/v1/events?session_stream=3", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,6 +332,23 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	}
 	if defLauncher != "shell" {
 		t.Fatalf("snapshot.world default_launcher=%q, want shell: %s", defLauncher, data)
+	}
+
+	// One-release compatibility: an old tab/custom consumer sends no marker
+	// and must still receive the event name it understands.
+	legacyReq, err := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyResp, err := client.Do(legacyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyScanner := bufio.NewScanner(legacyResp.Body)
+	legacyEvent, _ := readFirstSSEEvent(t, legacyScanner)
+	legacyResp.Body.Close()
+	if legacyEvent != "snapshot.sessions" {
+		t.Fatalf("legacy first SSE=%q", legacyEvent)
 	}
 
 	if !unixipc.Shutdown(sock) {

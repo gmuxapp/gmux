@@ -3,20 +3,23 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
 
-// Subscribe captures the baseline and installs the subscriber under the same
-// mutex BroadcastFrames uses. This deterministic boundary is what lets the
-// handler finish baseline epoch N and then deliver a concurrently committed
-// replacement as epoch N+1 without a lost mutation.
 func TestSessionStreamVersionCompatibility(t *testing.T) {
-	if !useSemanticSessionStream(false, "") {
-		t.Fatal("version-locked browser must receive protocol 3")
+	if useSemanticSessionStream(false, "") {
+		t.Fatal("unversioned browser/custom consumer must receive transitional legacy stream")
+	}
+	if !useSemanticSessionStream(false, "3") {
+		t.Fatal("new browser did not opt into protocol 3")
 	}
 	if useSemanticSessionStream(true, "") {
 		t.Fatal("old peer must receive legacy fallback")
@@ -29,25 +32,83 @@ func TestSessionStreamVersionCompatibility(t *testing.T) {
 	}
 }
 
-func TestThousandSessionWorldIsSeparateAndBounded(t *testing.T) {
-	ids := make([]string, 1000)
-	for i := range ids {
-		ids[i] = fmt.Sprintf("%08x", i)
+func realisticThousandSessionWorld() wire.WorldPayload {
+	projects := make([]wire.ProjectItem, 50)
+	for i := range projects {
+		ids := make([]string, 20)
+		for j := range ids {
+			ids[j] = fmt.Sprintf("%08x", i*20+j)
+		}
+		projects[i] = wire.ProjectItem{
+			Slug:     fmt.Sprintf("project-%02d", i),
+			Match:    []wire.MatchRule{{Path: fmt.Sprintf("/home/user/dev/project-%02d", i)}, {Remote: fmt.Sprintf("github.com/example/project-%02d", i), Exact: true}},
+			Sessions: ids,
+			NodeID:   "node-local",
+		}
 	}
-	world := wire.WorldPayload{Projects: []wire.ProjectItem{{Slug: "large", Sessions: ids}}}
+	peers := make([]peering.PeerInfo, 20)
+	peerProjects := make(map[string][]peering.SpokeProject, len(peers))
+	peerDiscovered := make(map[string][]peering.SpokeDiscovered, len(peers))
+	for i := range peers {
+		name := fmt.Sprintf("peer-%02d", i)
+		peers[i] = peering.PeerInfo{Name: name, URL: "https://" + name + ".example", Status: "connected", SessionCount: 50, Version: "2.1.0", NodeID: "node-" + name}
+		peerProjects[name] = []peering.SpokeProject{{Slug: "gmux", LaunchCwd: "/home/user/dev/gmux"}}
+		peerDiscovered[name] = []peering.SpokeDiscovered{{SuggestedSlug: "work", Remote: "github.com/example/work", Paths: []string{"/home/user/work"}, SessionCount: 3, ActiveCount: 1}}
+	}
+	launchers := []peering.LauncherDef{{ID: "shell", Label: "Shell", Command: []string{"gmux", "new"}, Available: true}, {ID: "pi", Label: "Pi", Command: []string{"gmux", "agent"}, Available: true}}
+	return wire.WorldPayload{
+		Projects: projects, Peers: peers,
+		Health:    &central.HealthInfo{Service: "gmuxd", Version: "2.1.0", NodeID: "node-local", Status: "ready", Hostname: "workstation", Sessions: central.SessionCounts{LocalAlive: 667, Dead: 333}},
+		Launchers: launchers, DefaultLauncher: "shell", PeerProjects: peerProjects, PeerDiscovered: peerDiscovered,
+	}
+}
+
+func TestRealisticComposedWorldBoundAtTransportSeam(t *testing.T) {
+	world := realisticThousandSessionWorld()
 	data, err := json.Marshal(world)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) > sessionstream.MaxEventPayload {
-		t.Fatalf("snapshot.world payload=%d exceeds session event budget=%d", len(data), sessionstream.MaxEventPayload)
+	if len(data) > maxWorldEventPayload {
+		t.Fatalf("realistic world=%d limit=%d", len(data), maxWorldEventPayload)
 	}
-	if string(data) == "" {
-		t.Fatal("empty world encoding")
+
+	recorder := httptest.NewRecorder()
+	if err := sendWorldSSEFrame(http.NewResponseController(recorder), recorder, &world); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("1000-session snapshot.world payload=%d (membership IDs only; no session rows)", len(data))
+	for _, line := range strings.Split(recorder.Body.String(), "\n") {
+		if len(line) > maxWorldEventPayload+len("data: ") {
+			t.Fatalf("transport line=%d", len(line))
+		}
+	}
+	if !strings.Contains(recorder.Body.String(), "event: snapshot.world\n") {
+		t.Fatal("world event not emitted")
+	}
+	t.Logf("realistic composed 1000-session world payload=%d, explicit limit=%d", len(data), maxWorldEventPayload)
 }
 
+func TestOversizedWorldEmitsBoundedDiagnosticNotPayload(t *testing.T) {
+	world := wire.WorldPayload{Projects: []wire.ProjectItem{{Slug: strings.Repeat("x", maxWorldEventPayload)}}}
+	recorder := httptest.NewRecorder()
+	if err := sendWorldSSEFrame(http.NewResponseController(recorder), recorder, &world); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: snapshot.world.error\n") || strings.Contains(body, "event: snapshot.world\n") {
+		t.Fatalf("unexpected transport output prefix: %.120s", body)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if len(line) > 1024 {
+			t.Fatalf("diagnostic line unexpectedly large: %d", len(line))
+		}
+	}
+}
+
+// Subscribe captures the baseline and installs the subscriber under the same
+// mutex BroadcastFrames uses. This deterministic boundary is what lets the
+// handler finish baseline epoch N and then deliver a concurrently committed
+// replacement as epoch N+1 without a lost mutation.
 func TestFanoutSubscribeSnapshotBoundary(t *testing.T) {
 	f := newSSEFanout()
 	f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{{ID: "before"}}}})

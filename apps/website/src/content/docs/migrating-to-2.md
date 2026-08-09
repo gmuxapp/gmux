@@ -120,9 +120,9 @@ A peer's name is now frozen at first contact (ADR 0017): renaming a machine does
 
 The daemon accepts the legacy runner `session_file` event for one release (dropped in v2.1) but writes/emits only the new names. The `GMUX_ADAPTER` env var is unchanged (it was already named that in 1.6). URL path segments (`/project/pi/slug`) are unchanged, so bookmarks keep working — though a Claude `/rename` now moves the slug with the title.
 
-### Wire protocol v2
+### Wire protocol v2 and bounded session stream v3
 
-Custom consumers of the daemon SSE stream: the per-event `session-upsert`/`session-remove` surface and bulk-GET prefetch are gone. Subscribe to `GET /v1/events` and consume full-replacement `snapshot.sessions` / `snapshot.world` payloads plus lossy `session-activity` pings. `GET /v1/sessions` remains for one-shot listing.
+Custom consumers of the daemon SSE stream: the per-event `session-upsert`/`session-remove` surface and bulk-GET prefetch are gone. Unversioned `GET /v1/events` retains the full-replacement `snapshot.sessions` event for one transitional release. New consumers should request `GET /v1/events?session_stream=3` and stage `snapshot.sessions.begin` plus complete-row `snapshot.sessions.batch` events until the matching `snapshot.sessions.ready`; `snapshot.sessions.error` reports an omitted oversized row without invalidating the transaction. `snapshot.world` and lossy `session-activity` remain separate. `GET /v1/sessions` remains for one-shot listing.
 
 ### Same-origin enforcement
 

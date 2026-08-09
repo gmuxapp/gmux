@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -126,18 +125,68 @@ func TestEncodeLargeCorpusBoundsEveryEventAndMeasures(t *testing.T) {
 	t.Logf("1000 rows: old max event=%d total=%d events=1; new max event=%d total=%d events=%d", len(legacy), oldTotal, maxPayload, total, len(events))
 }
 
-func TestEncodeRejectsOversizedSingleSemanticRow(t *testing.T) {
-	row := fixtureRows(1)[0]
-	row.Command = []string{strings.Repeat("x", MaxEventPayload)}
-	events, err := Encode(1, []testRow{row}, func(r testRow) string { return r.ID })
-	if !errors.Is(err, ErrRowTooLarge) || len(events) != 0 {
-		t.Fatalf("events=%d err=%v, want ErrRowTooLarge and no partial stream", len(events), err)
+func TestEncodeQuarantinesOversizedRowAndCompletesReady(t *testing.T) {
+	good := fixtureRows(1)[0]
+	bad := fixtureRows(1)[0]
+	bad.ID = strings.Repeat("unsafe-id", 40)
+	bad.Command = []string{strings.Repeat("x", MaxEventPayload)}
+	events, err := Encode(1, []testRow{bad, good}, func(r testRow) string { return r.ID })
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, field := range []string{"command", "conversation_file"} {
-		if !strings.Contains(err.Error(), field) {
-			t.Errorf("error does not identify %s: %v", field, err)
+	if events[0].Type != EventBegin || events[len(events)-1].Type != EventReady {
+		t.Fatalf("events=%v", eventTypes(events))
+	}
+	var gotRows int
+	var diagnostic Error
+	for _, event := range events {
+		switch event.Type {
+		case EventBatch:
+			var batch Batch[testRow]
+			if err := json.Unmarshal(event.Data, &batch); err != nil {
+				t.Fatal(err)
+			}
+			gotRows += len(batch.Sessions)
+		case EventError:
+			if err := json.Unmarshal(event.Data, &diagnostic); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
+	if gotRows != 1 || diagnostic.Code != "row_too_large" || !strings.HasPrefix(diagnostic.ID, "sha256:") {
+		t.Fatalf("rows=%d diagnostic=%+v", gotRows, diagnostic)
+	}
+	if len(streamData(t, diagnostic)) > MaxEventPayload {
+		t.Fatal("diagnostic is not bounded")
+	}
+}
+
+func TestSenderLimitsAreStrictlyInsideReceiverLimits(t *testing.T) {
+	if transactionWouldOverflow(MaxStagedRows-1, 0, 1) {
+		t.Fatal("last supported row rejected")
+	}
+	if !transactionWouldOverflow(MaxStagedRows, 0, 1) {
+		t.Fatal("row-count limit not enforced")
+	}
+	acceptedLimit := MaxStagedBytes - aggregateEnvelopeReserve
+	if transactionWouldOverflow(0, acceptedLimit-1, 1) {
+		t.Fatal("last supported byte rejected")
+	}
+	if !transactionWouldOverflow(0, acceptedLimit, 1) {
+		t.Fatal("aggregate byte limit not enforced")
+	}
+	if aggregateEnvelopeReserve < MaxEventPayload {
+		t.Fatal("no envelope safety margin")
+	}
+}
+
+func streamData(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func BenchmarkInitialSync1000(b *testing.B) {

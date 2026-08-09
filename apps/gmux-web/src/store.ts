@@ -1217,20 +1217,24 @@ type SessionsBootstrap = {
 }
 
 let sessionsBootstrap: SessionsBootstrap | null = null
+let lastSessionEpoch = 0
 
 /** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
  * atomic-visibility tests. Production calls them only from EventSource. */
 export function beginSessionsBootstrap(version: number, epoch: number): void {
-  sessionsBootstrap = version === SESSION_STREAM_VERSION && Number.isSafeInteger(epoch)
-    ? { epoch, rows: [], bytes: 0 }
-    : null
-}
-
-export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
-  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) {
+  if (version !== SESSION_STREAM_VERSION || !Number.isSafeInteger(epoch) || epoch <= 0) {
     sessionsBootstrap = null
     return
   }
+  // Epochs are strictly increasing within one EventSource transport. Ignore
+  // replay without destroying a newer transaction already in flight.
+  if (epoch <= lastSessionEpoch) return
+  lastSessionEpoch = epoch
+  sessionsBootstrap = { epoch, rows: [], bytes: 0 }
+}
+
+export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return
   if (sessionsBootstrap.rows.length + rows.length > MAX_STAGED_SESSION_ROWS
       || sessionsBootstrap.bytes + encodedBytes > MAX_STAGED_SESSION_BYTES) {
     sessionsBootstrap = null
@@ -1241,10 +1245,7 @@ export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], 
 }
 
 export function readySessionsBootstrap(epoch: number): boolean {
-  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) {
-    sessionsBootstrap = null
-    return false
-  }
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return false
   const rows = sessionsBootstrap.rows
   sessionsBootstrap = null
   applySessionsSnapshot(rows.map(toUISession))
@@ -1253,6 +1254,11 @@ export function readySessionsBootstrap(epoch: number): boolean {
 
 export function discardSessionsBootstrap(): void {
   sessionsBootstrap = null
+}
+
+export function resetSessionsTransport(): void {
+  sessionsBootstrap = null
+  lastSessionEpoch = 0
 }
 
 export function applySessionsSnapshot(list: Session[]): void {
@@ -1821,11 +1827,12 @@ export function initStore(): () => void {
   // both kinds (sessions, world) immediately on subscribe, so we
   // don't need a bulk-GET prefetch on first load or on reconnect.
   // Missed deltas don't matter: each snapshot is a full replacement.
-  const source = new EventSource('/v1/events')
+  resetSessionsTransport()
+  const source = new EventSource('/v1/events?session_stream=3')
   source.addEventListener('error', () => {
     // A transport reconnect starts a new epoch. Never retain unpublished
     // rows from the interrupted response.
-    discardSessionsBootstrap()
+    resetSessionsTransport()
     // Browser EventSource auto-reconnects; flag the UI as degraded
     // until the next snapshot arrives. `sessionsLoaded` stays true
     // once it has flipped, so reconnect doesn't blank the sidebar.
@@ -1874,9 +1881,22 @@ export function initStore(): () => void {
   })
 
   source.addEventListener('snapshot.sessions.error', (e) => {
-    discardSessionsBootstrap()
-    connState.value = sessionsLoaded.value ? 'reconnecting' : 'error'
+    // A diagnostic quarantines one row but does not invalidate the epoch.
+    // ready still atomically publishes every row which fit.
     console.warn('snapshot.sessions.error:', e.data)
+  })
+
+  // Transitional fallback for a proxy or one-release-old daemon which ignores
+  // the explicit protocol marker. Old tabs request no marker and receive this
+  // event from a new daemon as well.
+  source.addEventListener('snapshot.sessions', (e) => {
+    try {
+      resetSessionsTransport()
+      const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
+      applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
+    } catch (err) {
+      console.warn('snapshot.sessions: bad event', err)
+    }
   })
 
   source.addEventListener('snapshot.world', (e) => {
@@ -1905,6 +1925,14 @@ export function initStore(): () => void {
     } catch (err) {
       console.warn('snapshot.world: bad event', err)
     }
+  })
+
+  source.addEventListener('snapshot.world.error', (e) => {
+    // World remains one explicitly bounded semantic object. Retain a prior
+    // world on update failure; on initial hydration expose the safe empty
+    // defaults so an oversized operator configuration does not brick sessions.
+    if (!worldLoaded.value) worldLoaded.value = true
+    console.warn('snapshot.world.error:', e.data)
   })
 
   source.addEventListener('session-activity', (e) => {

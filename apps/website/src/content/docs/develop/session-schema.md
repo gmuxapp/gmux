@@ -38,7 +38,7 @@ Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `
 
 ### gmuxd → frontend
 
-gmuxd exposes the aggregated state to the browser via `GET /v1/events` (SSE). Session state arrives as coalesced `snapshot.sessions` full-replacement snapshots (ADR 0001); `session-activity` is forwarded as a bare signal. `GET /v1/sessions` remains for CLI/scripting. A wire-conversion layer controls which fields are serialized in both: internal fields are excluded, their derived outputs included instead.
+gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream=3` (SSE). Coalesced full replacements use bounded `snapshot.sessions.begin` / complete-row `.batch` / atomic `.ready` transactions (ADR 0001); a non-fatal `.error` identifies an omitted oversized row. `session-activity` is forwarded as a bare signal. Unversioned consumers temporarily retain legacy `snapshot.sessions`, and `GET /v1/sessions` remains for CLI/scripting. A wire-conversion layer controls which fields are serialized: internal fields are excluded, their derived outputs included instead.
 
 ### Field map
 

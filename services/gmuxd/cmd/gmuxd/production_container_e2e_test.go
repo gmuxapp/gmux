@@ -395,7 +395,7 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 	}
 }
 func assertInitialSSE(t *testing.T, e *prodEnv, id string, unread bool) {
-	req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/events?session_stream=3", nil)
 	ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
 	defer c()
 	resp, err := unixipc.Client(e.socket()).Do(req.WithContext(ctx))
@@ -405,33 +405,58 @@ func assertInitialSSE(t *testing.T, e *prodEnv, id string, unread bool) {
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
 	name, data := readSSE(t, sc)
-	if name != "snapshot.sessions" {
+	if name != "snapshot.sessions.begin" {
 		t.Fatalf("first SSE=%q", name)
 	}
-	var sf struct {
-		Sessions []struct {
-			ID     string `json:"id"`
-			Unread bool   `json:"unread"`
-		} `json:"sessions"`
+	var begin struct {
+		Epoch uint64 `json:"epoch"`
 	}
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(data, &begin); err != nil || begin.Epoch == 0 {
+		t.Fatalf("bad begin %s: %v", data, err)
 	}
 	found := false
-	for _, s := range sf.Sessions {
-		if s.ID == id {
-			found = true
-			if s.Unread != unread {
-				t.Fatalf("SSE unread=%v want %v", s.Unread, unread)
+	for {
+		name, data = readSSE(t, sc)
+		if name == "snapshot.sessions.ready" {
+			var ready struct {
+				Epoch uint64 `json:"epoch"`
+			}
+			if err := json.Unmarshal(data, &ready); err != nil || ready.Epoch != begin.Epoch {
+				t.Fatalf("bad ready %s: %v", data, err)
+			}
+			break
+		}
+		if name == "snapshot.sessions.error" {
+			continue
+		}
+		if name != "snapshot.sessions.batch" {
+			t.Fatalf("bootstrap SSE=%q", name)
+		}
+		var sf struct {
+			Epoch    uint64 `json:"epoch"`
+			Sessions []struct {
+				ID     string `json:"id"`
+				Unread bool   `json:"unread"`
+			} `json:"sessions"`
+		}
+		if err := json.Unmarshal(data, &sf); err != nil || sf.Epoch != begin.Epoch {
+			t.Fatalf("bad batch %s: %v", data, err)
+		}
+		for _, s := range sf.Sessions {
+			if s.ID == id {
+				found = true
+				if s.Unread != unread {
+					t.Fatalf("SSE unread=%v want %v", s.Unread, unread)
+				}
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("first sessions frame omitted %s: %s", id, data)
+		t.Fatalf("session bootstrap omitted %s", id)
 	}
 	name, data = readSSE(t, sc)
 	if name != "snapshot.world" {
-		t.Fatalf("second SSE=%q", name)
+		t.Fatalf("post-ready SSE=%q", name)
 	}
 	var world map[string]json.RawMessage
 	if err := json.Unmarshal(data, &world); err != nil {
