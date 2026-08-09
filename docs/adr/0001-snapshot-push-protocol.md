@@ -227,6 +227,55 @@ HTTP action responses and SSE snapshots arrive on independent
 channels. A 200 OK can land before the snapshot reflecting the
 action's effect. The optimistic overlay covers the gap.
 
+## Amendment: bounded semantic session replacement (protocol 3)
+
+A full `snapshot.sessions` JSON line grows without bound. At roughly 1,000
+ordinary session rows it is hundreds of KiB, exceeding both the 64 KiB default
+`bufio.Scanner` token and the former 256 KiB compatibility ceiling. Protocol 3
+keeps the full-replacement semantics of this ADR but frames each replacement as
+a transaction:
+
+1. `snapshot.sessions.begin` — `{version:3, epoch}` resets private receiver
+   staging.
+2. Zero or more `snapshot.sessions.batch` events — `{epoch,sessions:[...]}`.
+   Batches contain complete session rows and have a 48 KiB JSON payload limit.
+3. `snapshot.sessions.ready` — `{epoch}` atomically replaces the visible set
+   with staging (including the empty set).
+4. `snapshot.sessions.error` reports a rejected replacement; receivers discard
+   staging and retain the previous ready set.
+
+The 48 KiB budget is 16 KiB below Scanner's 64 KiB default, leaving room for
+SSE syntax and future envelope metadata. Rows are not byte-fragmented. A single
+row that cannot fit fails the replacement before `begin` is emitted; likely
+causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
+`socket_path`, or `conversation_file` fields. Session rows do not contain
+scrollback or transcripts. Receivers additionally cap unpublished staging at
+100,000 rows / 64 MiB. Go SSE clients retain a bounded 1 MiB line ceiling only
+for protocol-2 compatibility (enough for the measured 1,000-row legacy frame).
+
+`Subscribe` installs the fanout subscriber and captures its full baseline while
+holding the same mutex used by publication. Consequently, a mutation is either
+in the baseline epoch or queued as a later full replacement. One connection
+serializes every begin/batch/ready transaction, so a later replacement cannot
+overtake readiness. Disconnect destroys connection-local staging; reconnect
+starts from a fresh baseline.
+
+Browser assets are daemon-served and always use protocol 3. Peer clients request
+`?as=peer&session_stream=3`. A new hub also accepts the legacy
+`snapshot.sessions` response from an old spoke. A new spoke sends legacy
+`snapshot.sessions` when an old hub omits `session_stream=3`; this fallback may
+still be large, but it cannot be silently misparsed. Unknown requested protocol
+versions use the legacy fallback rather than guessing.
+
+After `ready`, ordinary publication semantics are unchanged: each mutation
+still produces a coalesced full replacement, now transactionally batched. This
+amendment does not implement archive/live-set selection; a future implementation
+changes which complete rows enter a transaction, not its framing.
+
+`snapshot.world` remains a separate event and does not carry session rows. It
+can carry project membership IDs; the 1,000-session measurement remains below
+the session-event budget, so changing world framing is outside this amendment.
+
 ## Consequences
 
 ### Positive

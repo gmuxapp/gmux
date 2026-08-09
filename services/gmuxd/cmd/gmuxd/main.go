@@ -660,6 +660,10 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 //     daemon sees, including namespaced activity that hubs have
 //     re-broadcast from network peers — the UI renders all of those
 //     sessions and needs the indicator updates.
+func useSemanticSessionStream(asPeer bool, requested string) bool {
+	return !asPeer || requested == "3"
+}
+
 func shouldForwardActivity(asPeer bool, sessionID string, isLocalPeer func(string) bool) bool {
 	if !asPeer {
 		return true
@@ -714,6 +718,14 @@ const sseWriteTimeout = 10 * time.Second
 func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	if err := sendSSE(w, event, payload); err != nil {
+		return err
+	}
+	return rc.Flush()
+}
+
+func sendSSEBytesFrame(rc *http.ResponseController, w io.Writer, event string, data []byte) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 		return err
 	}
 	return rc.Flush()

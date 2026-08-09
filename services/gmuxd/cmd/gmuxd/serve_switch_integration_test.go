@@ -255,10 +255,21 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	defer resp.Body.Close()
 	scanner := bufio.NewScanner(resp.Body)
 	event, data := readFirstSSEEvent(t, scanner)
-	if event != "snapshot.sessions" {
-		t.Fatalf("first SSE event=%q, want snapshot.sessions", event)
+	if event != "snapshot.sessions.begin" {
+		t.Fatalf("first SSE event=%q, want snapshot.sessions.begin", event)
+	}
+	var begin struct {
+		Epoch uint64 `json:"epoch"`
+	}
+	if err := json.Unmarshal(data, &begin); err != nil || begin.Epoch == 0 {
+		t.Fatalf("bad begin: %s (%v)", data, err)
+	}
+	event, data = readFirstSSEEvent(t, scanner)
+	if event != "snapshot.sessions.batch" {
+		t.Fatalf("second SSE event=%q, want snapshot.sessions.batch", event)
 	}
 	var sessionsFrame struct {
+		Epoch    uint64 `json:"epoch"`
 		Sessions []struct {
 			ID string `json:"id"`
 		} `json:"sessions"`
@@ -266,12 +277,22 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	if err := json.Unmarshal(data, &sessionsFrame); err != nil {
 		t.Fatal(err)
 	}
-	if len(sessionsFrame.Sessions) != 1 || sessionsFrame.Sessions[0].ID != "1dehpbm1" {
-		t.Fatalf("unexpected snapshot.sessions frame: %s", data)
+	if sessionsFrame.Epoch != begin.Epoch || len(sessionsFrame.Sessions) != 1 || sessionsFrame.Sessions[0].ID != "1dehpbm1" {
+		t.Fatalf("unexpected snapshot.sessions.batch frame: %s", data)
+	}
+	event, data = readFirstSSEEvent(t, scanner)
+	if event != "snapshot.sessions.ready" {
+		t.Fatalf("third SSE event=%q, want snapshot.sessions.ready", event)
+	}
+	var ready struct {
+		Epoch uint64 `json:"epoch"`
+	}
+	if err := json.Unmarshal(data, &ready); err != nil || ready.Epoch != begin.Epoch {
+		t.Fatalf("bad ready: %s (%v)", data, err)
 	}
 	event, data = readFirstSSEEvent(t, scanner)
 	if event != "snapshot.world" {
-		t.Fatalf("second SSE event=%q, want matched snapshot.world", event)
+		t.Fatalf("fourth SSE event=%q, want matched snapshot.world", event)
 	}
 	var worldFrame map[string]json.RawMessage
 	if err := json.Unmarshal(data, &worldFrame); err != nil {

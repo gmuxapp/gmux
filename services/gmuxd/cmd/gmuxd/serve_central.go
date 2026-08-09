@@ -38,6 +38,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
@@ -829,18 +830,42 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			w.Header().Set("Connection", "keep-alive")
 			rc := http.NewResponseController(w)
 			asPeer := r.URL.Query().Get("as") == "peer"
+			// Browser assets are served by this daemon and therefore always use
+			// protocol 3. Peers explicitly opt in; an old peer omits the marker
+			// and receives protocol 2's snapshot.sessions fallback rather than
+			// silently ignoring the new event names.
+			semanticSessions := useSemanticSessionStream(asPeer, r.URL.Query().Get("session_stream"))
 			initial, ch, cancel := fanout.Subscribe()
 			defer cancel()
 			isLocalPeer := func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }
+			var sessionEpoch uint64
 			sendSessions := func(payload *wire.SessionsPayload) error {
 				if payload == nil {
 					return nil
 				}
 				if asPeer {
 					filtered := payload.FilterOwned(isLocalPeer)
-					return sendSSEFrame(rc, w, "snapshot.sessions", filtered)
+					payload = &filtered
 				}
-				return sendSSEFrame(rc, w, "snapshot.sessions", payload)
+				if !semanticSessions {
+					return sendSSEFrame(rc, w, "snapshot.sessions", payload)
+				}
+				sessionEpoch++
+				events, encodeErr := sessionstream.Encode(sessionEpoch, payload.Sessions, func(s wire.Session) string { return s.ID })
+				if encodeErr != nil {
+					log.Printf("session stream: refusing epoch %d: %v", sessionEpoch, encodeErr)
+					errorEvent := sessionstream.ErrorEvent(encodeErr)
+					if sendErr := sendSSEBytesFrame(rc, w, errorEvent.Type, errorEvent.Data); sendErr != nil {
+						return sendErr
+					}
+					return encodeErr
+				}
+				for _, event := range events {
+					if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 			if err := sendSessions(initial.Sessions); err != nil {
 				return

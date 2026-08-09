@@ -28,10 +28,12 @@ import (
 	"time"
 )
 
-// Default buffer size for SSE event decoding. Matches the size used
-// by peering's hand-rolled scanner prior to extraction. Large enough
-// to accept gmuxd session-upsert payloads with long command arrays.
-const defaultBufferSize = 256 * 1024
+// DefaultMaxLineBytes is a bounded compatibility ceiling for legacy peers
+// which still send one full snapshot.sessions data line. Protocol 3 frames
+// are capped at 48 KiB; 1 MiB admits the measured 1,000-row legacy fixture as
+// defense in depth for version skew, not as the primary framing mechanism. A
+// larger line is rejected before unbounded allocation.
+const DefaultMaxLineBytes = 1024 * 1024
 
 // ErrStreamEnded is returned by Subscribe when the server closed the
 // stream cleanly (no error from the scanner, EOF). Callers use this
@@ -100,8 +102,8 @@ func WithTransport(t http.RoundTripper) Option {
 	}
 }
 
-// WithBufferSize sets the maximum size of a single SSE event payload.
-// Defaults to 256 KiB. Events larger than this cause Subscribe to
+// WithBufferSize sets the maximum size of a single SSE line.
+// Defaults to DefaultMaxLineBytes. Events larger than this cause Subscribe to
 // return a protocol error.
 func WithBufferSize(n int) Option {
 	return func(c *Client) {
@@ -175,7 +177,7 @@ func New(url string, opts ...Option) *Client {
 	c := &Client{
 		url:     url,
 		headers: make(http.Header),
-		bufSize: defaultBufferSize,
+		bufSize: DefaultMaxLineBytes,
 	}
 	c.headers.Set("Accept", "text/event-stream")
 	for _, opt := range opts {

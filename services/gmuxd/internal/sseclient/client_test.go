@@ -315,6 +315,33 @@ func TestSubscribe_StreamEnded(t *testing.T) {
 	}
 }
 
+func TestSubscribe_DefaultCompatibilityCeilingIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		size      int
+		wantEvent bool
+	}{
+		{name: "measured-size legacy frame above former 256KiB ceiling", size: 900 * 1024, wantEvent: true},
+		{name: "reject above bounded 1MiB ceiling", size: 1200 * 1024, wantEvent: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSSEServer(t)
+			s.setFrames("event: legacy\ndata: " + strings.Repeat("x", tc.size) + "\n\n")
+			if tc.wantEvent {
+				events, _ := waitForEvents(t, New(s.URL), 1, time.Second)
+				if len(events) != 1 {
+					t.Fatalf("events=%d, want 1", len(events))
+				}
+				return
+			}
+			err := New(s.URL).Subscribe(context.Background(), nil, func(Event) {})
+			if err == nil || errors.Is(err, ErrStreamEnded) {
+				t.Fatalf("err=%v, want bounded protocol error", err)
+			}
+		})
+	}
+}
+
 func TestSubscribe_OversizedEvent(t *testing.T) {
 	// A single data: line larger than the buffer must produce a
 	// protocol error, not silent truncation. Use a small buffer so

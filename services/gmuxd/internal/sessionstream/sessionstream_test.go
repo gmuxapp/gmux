@@ -1,0 +1,173 @@
+package sessionstream
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+type testRow struct {
+	ID               string            `json:"id"`
+	CreatedAt        string            `json:"created_at"`
+	Command          []string          `json:"command"`
+	Cwd              string            `json:"cwd"`
+	Adapter          string            `json:"adapter"`
+	WorkspaceRoot    string            `json:"workspace_root"`
+	Remotes          map[string]string `json:"remotes"`
+	SemanticAgent    bool              `json:"semantic_agent"`
+	Alive            bool              `json:"alive"`
+	PID              int               `json:"pid"`
+	Title            string            `json:"title"`
+	Subtitle         string            `json:"subtitle"`
+	UnreadToken      string            `json:"unread_token"`
+	SocketPath       string            `json:"socket_path"`
+	Slug             string            `json:"slug"`
+	ConversationFile string            `json:"conversation_file"`
+	RunnerVersion    string            `json:"runner_version"`
+	BinaryHash       string            `json:"binary_hash"`
+	ProjectSlug      string            `json:"project_slug"`
+	ProjectIndex     int               `json:"project_index"`
+}
+
+func fixtureRows(n int) []testRow {
+	rows := make([]testRow, n)
+	for i := range rows {
+		id := fmt.Sprintf("%08x", i)
+		rows[i] = testRow{
+			ID: id, CreatedAt: "2026-08-09T12:00:00Z",
+			Command: []string{"pi", "--mode", "rpc", "work on semantic session streaming"},
+			Cwd:     fmt.Sprintf("/home/user/dev/project-%d", i%25), Adapter: "pi",
+			WorkspaceRoot: fmt.Sprintf("/home/user/dev/project-%d", i%25),
+			Remotes:       map[string]string{"origin": "github.com/gmuxapp/gmux"}, SemanticAgent: true,
+			Alive: i%3 != 0, PID: 10000 + i, Title: fmt.Sprintf("Implement production task %d", i),
+			Subtitle: "Working through tests and review feedback", UnreadToken: "token-" + id,
+			SocketPath: "/run/user/1000/gmux/" + id + ".sock", Slug: fmt.Sprintf("production-task-%d", i),
+			ConversationFile: "/home/user/.pi/agent/sessions/" + id + ".jsonl",
+			RunnerVersion:    "2.1.0", BinaryHash: "abcdef0123456789",
+			ProjectSlug: fmt.Sprintf("project-%d", i%25), ProjectIndex: i / 25,
+		}
+	}
+	return rows
+}
+
+func TestLegacySnapshotReproducesDefaultScannerFailure(t *testing.T) {
+	payload, err := json.Marshal(struct {
+		Sessions []testRow `json:"sessions"`
+	}{fixtureRows(1000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := append([]byte("event: snapshot.sessions\ndata: "), payload...)
+	frame = append(frame, '\n', '\n')
+	scanner := bufio.NewScanner(bytes.NewReader(frame))
+	for scanner.Scan() {
+	}
+	if scanner.Err() == nil || !strings.Contains(scanner.Err().Error(), "token too long") {
+		t.Fatalf("legacy scanner error=%v, want token too long (payload=%d)", scanner.Err(), len(payload))
+	}
+}
+
+func TestEncodeEmptyAndOneRow(t *testing.T) {
+	for _, rows := range [][]testRow{nil, fixtureRows(1)} {
+		events, err := Encode(7, rows, func(r testRow) string { return r.ID })
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 2
+		if len(rows) == 1 {
+			want = 3
+		}
+		if len(events) != want || events[0].Type != EventBegin || events[len(events)-1].Type != EventReady {
+			t.Fatalf("events=%v, want begin/[batch]/ready", eventTypes(events))
+		}
+	}
+}
+
+func TestEncodeLargeCorpusBoundsEveryEventAndMeasures(t *testing.T) {
+	rows := fixtureRows(1000)
+	legacy, err := json.Marshal(struct {
+		Sessions []testRow `json:"sessions"`
+	}{rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := Encode(1, rows, func(r testRow) string { return r.ID })
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxPayload, total := 0, 0
+	var gotRows int
+	for _, event := range events {
+		if len(event.Data) > MaxEventPayload {
+			t.Fatalf("%s payload=%d exceeds %d", event.Type, len(event.Data), MaxEventPayload)
+		}
+		lineBytes := len("data: ") + len(event.Data)
+		if lineBytes >= bufio.MaxScanTokenSize {
+			t.Fatalf("%s SSE data line=%d is not below Scanner's %d-byte default", event.Type, lineBytes, bufio.MaxScanTokenSize)
+		}
+		maxPayload = max(maxPayload, len(event.Data))
+		total += len("event: ") + len(event.Type) + 1 + lineBytes + 2
+		if event.Type == EventBatch {
+			var batch Batch[testRow]
+			if err := json.Unmarshal(event.Data, &batch); err != nil {
+				t.Fatal(err)
+			}
+			gotRows += len(batch.Sessions)
+		}
+	}
+	if gotRows != len(rows) {
+		t.Fatalf("decoded rows=%d want %d", gotRows, len(rows))
+	}
+	oldTotal := len("event: snapshot.sessions\ndata: \n\n") + len(legacy)
+	t.Logf("1000 rows: old max event=%d total=%d events=1; new max event=%d total=%d events=%d", len(legacy), oldTotal, maxPayload, total, len(events))
+}
+
+func TestEncodeRejectsOversizedSingleSemanticRow(t *testing.T) {
+	row := fixtureRows(1)[0]
+	row.Command = []string{strings.Repeat("x", MaxEventPayload)}
+	events, err := Encode(1, []testRow{row}, func(r testRow) string { return r.ID })
+	if !errors.Is(err, ErrRowTooLarge) || len(events) != 0 {
+		t.Fatalf("events=%d err=%v, want ErrRowTooLarge and no partial stream", len(events), err)
+	}
+	for _, field := range []string{"command", "conversation_file"} {
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("error does not identify %s: %v", field, err)
+		}
+	}
+}
+
+func BenchmarkInitialSync1000(b *testing.B) {
+	rows := fixtureRows(1000)
+	b.Run("legacy-single-event", func(b *testing.B) {
+		for b.Loop() {
+			data, err := json.Marshal(struct {
+				Sessions []testRow `json:"sessions"`
+			}{rows})
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = data
+		}
+	})
+	b.Run("semantic-batches", func(b *testing.B) {
+		for b.Loop() {
+			events, err := Encode(1, rows, func(r testRow) string { return r.ID })
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = events
+		}
+	})
+}
+
+func eventTypes(events []Event) []string {
+	out := make([]string, len(events))
+	for i := range events {
+		out[i] = events[i].Type
+	}
+	return out
+}

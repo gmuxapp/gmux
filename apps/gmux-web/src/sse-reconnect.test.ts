@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { connState, initStore } from './store'
+import { _rawSessions, connState, initStore } from './store'
 
 // A minimal EventSource stand-in that lets the test drive the listeners
 // initStore registers (the `error` handler and the snapshot handlers).
@@ -49,6 +49,12 @@ describe('SSE reconnecting state', () => {
     return FakeEventSource.instances[0]
   }
 
+  function ready(epoch = 1, sessions: unknown[] = []) {
+    source().emit('snapshot.sessions.begin', { version: 3, epoch })
+    if (sessions.length > 0) source().emit('snapshot.sessions.batch', { epoch, sessions })
+    source().emit('snapshot.sessions.ready', { epoch })
+  }
+
   it('goes to error when the initial connect drops before any snapshot', () => {
     cleanup = initStore()
     expect(connState.value).toBe('connecting')
@@ -58,8 +64,8 @@ describe('SSE reconnecting state', () => {
 
   it('goes to reconnecting (not error) when an established stream drops', () => {
     cleanup = initStore()
-    // First snapshot establishes the connection.
-    source().emit('snapshot.sessions', { sessions: [] })
+    // First ready marker establishes the connection.
+    ready()
     expect(connState.value).toBe('connected')
     // The established stream drops: transient, not a hard failure.
     source().emit('error')
@@ -68,10 +74,44 @@ describe('SSE reconnecting state', () => {
 
   it('clears back to connected once the next snapshot arrives', () => {
     cleanup = initStore()
-    source().emit('snapshot.sessions', { sessions: [] })
+    ready()
     source().emit('error')
     expect(connState.value).toBe('reconnecting')
-    source().emit('snapshot.sessions', { sessions: [] })
+    ready(2)
     expect(connState.value).toBe('connected')
+  })
+
+  it('discards an interrupted bootstrap without exposing partial rows', () => {
+    cleanup = initStore()
+    ready(1, [{ id: 'old', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 2 })
+    source().emit('snapshot.sessions.batch', { epoch: 2, sessions: [
+      { id: 'partial', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['old'])
+    source().emit('error')
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['old'])
+    ready(3, [{ id: 'fresh', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
+    expect(_rawSessions.value.map(s => s.id)).toEqual(['fresh'])
+  })
+
+  it('publishes a mutation captured during bootstrap only at its later ready', () => {
+    cleanup = initStore()
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 1 })
+    source().emit('snapshot.sessions.batch', { epoch: 1, sessions: [
+      { id: 's', title: 'before', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    // The fanout captures this replacement after subscribe; it is serialized
+    // after epoch 1 and cannot overtake epoch 1's ready marker.
+    source().emit('snapshot.sessions.ready', { epoch: 1 })
+    expect(_rawSessions.value.map(s => s.title)).toEqual(['before'])
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 2 })
+    source().emit('snapshot.sessions.batch', { epoch: 2, sessions: [
+      { id: 's', title: 'after', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' },
+    ] })
+    expect(_rawSessions.value.map(s => s.title)).toEqual(['before'])
+    source().emit('snapshot.sessions.ready', { epoch: 2 })
+    expect(_rawSessions.value).toHaveLength(1)
+    expect(_rawSessions.value[0].title).toBe('after')
   })
 })

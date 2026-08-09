@@ -14,6 +14,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/apiclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
 )
 
@@ -421,6 +422,9 @@ func (p *Peer) run(ctx context.Context) {
 // established (used to decide whether to reset backoff).
 func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 	sse := p.api.Events()
+	// Staging belongs to one transport connection. If it disconnects before
+	// ready, this local value disappears and no partial projection is visible.
+	var bootstrap peerSessionBootstrap
 
 	err := sse.Subscribe(ctx,
 		func() {
@@ -437,7 +441,7 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 			p.fetchProjects(ctx)
 		},
 		func(ev sseclient.Event) {
-			p.handleEvent(ctx, ev.Type, ev.Data)
+			p.handleStreamEvent(ctx, ev.Type, ev.Data, &bootstrap)
 		},
 	)
 
@@ -466,6 +470,62 @@ type sseActivity struct {
 // sseSnapshotSessions is the wire format for snapshot.sessions.
 type sseSnapshotSessions struct {
 	Sessions []SessionProjection `json:"sessions"`
+}
+
+type peerSessionBootstrap struct {
+	epoch  uint64
+	active bool
+	rows   []SessionProjection
+	bytes  int
+}
+
+func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []byte, staging *peerSessionBootstrap) {
+	switch eventType {
+	case sessionstream.EventBegin:
+		var begin sessionstream.Begin
+		if err := json.Unmarshal(data, &begin); err != nil || begin.Version != sessionstream.ProtocolVersion {
+			*staging = peerSessionBootstrap{}
+			log.Printf("peering: %s: bad session bootstrap begin", p.Config.Name)
+			return
+		}
+		*staging = peerSessionBootstrap{epoch: begin.Epoch, active: true}
+		return
+	case sessionstream.EventBatch:
+		var batch sessionstream.Batch[SessionProjection]
+		if err := json.Unmarshal(data, &batch); err != nil || !staging.active || batch.Epoch != staging.epoch {
+			*staging = peerSessionBootstrap{}
+			log.Printf("peering: %s: bad or out-of-epoch session bootstrap batch", p.Config.Name)
+			return
+		}
+		if len(staging.rows)+len(batch.Sessions) > sessionstream.MaxStagedRows || staging.bytes+len(data) > sessionstream.MaxStagedBytes {
+			*staging = peerSessionBootstrap{}
+			log.Printf("peering: %s: session bootstrap exceeds staging limit", p.Config.Name)
+			return
+		}
+		staging.rows = append(staging.rows, batch.Sessions...)
+		staging.bytes += len(data)
+		return
+	case sessionstream.EventReady:
+		var ready sessionstream.Ready
+		if err := json.Unmarshal(data, &ready); err != nil || !staging.active || ready.Epoch != staging.epoch {
+			*staging = peerSessionBootstrap{}
+			log.Printf("peering: %s: bad or out-of-epoch session bootstrap ready", p.Config.Name)
+			return
+		}
+		rows := staging.rows
+		*staging = peerSessionBootstrap{}
+		p.applySessionsSnapshot(rows)
+		return
+	case sessionstream.EventError:
+		*staging = peerSessionBootstrap{}
+		log.Printf("peering: %s: spoke rejected session bootstrap: %s", p.Config.Name, data)
+		return
+	case "snapshot.sessions":
+		// Protocol-2 response from an older spoke. It is authoritative and
+		// cannot be combined with a partial protocol-3 transaction.
+		*staging = peerSessionBootstrap{}
+	}
+	p.handleEvent(ctx, eventType, data)
 }
 
 // isForwardedFromKnownOrigin checks whether a session ID (before

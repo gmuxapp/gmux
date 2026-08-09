@@ -1190,10 +1190,10 @@ function commitWithSlugRewrite(
 }
 
 /**
- * Apply a wholesale `snapshot.sessions` payload (protocol 2 / ADR 0001):
+ * Apply one ready wholesale session replacement (ADR 0001 protocol 3):
  * the daemon re-sends the *entire* session list on any session state
- * change, and we replace `_rawSessions` in one shot rather than patching
- * individual entries.
+ * change as bounded batches, and the ready handler replaces `_rawSessions`
+ * in one shot rather than exposing batches or patching individual entries.
  *
  * Because the replacement is wholesale, a slug change on the currently
  * viewed session (a rename, or a pi `/resume` that swaps the active
@@ -1206,6 +1206,55 @@ function commitWithSlugRewrite(
  * the new slug in place instead of the stale slug failing to resolve and
  * booting the user back home.
  */
+const SESSION_STREAM_VERSION = 3
+const MAX_STAGED_SESSION_ROWS = 100_000
+const MAX_STAGED_SESSION_BYTES = 64 * 1024 * 1024
+
+type SessionsBootstrap = {
+  epoch: number
+  rows: ProtocolSession[]
+  bytes: number
+}
+
+let sessionsBootstrap: SessionsBootstrap | null = null
+
+/** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
+ * atomic-visibility tests. Production calls them only from EventSource. */
+export function beginSessionsBootstrap(version: number, epoch: number): void {
+  sessionsBootstrap = version === SESSION_STREAM_VERSION && Number.isSafeInteger(epoch)
+    ? { epoch, rows: [], bytes: 0 }
+    : null
+}
+
+export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) {
+    sessionsBootstrap = null
+    return
+  }
+  if (sessionsBootstrap.rows.length + rows.length > MAX_STAGED_SESSION_ROWS
+      || sessionsBootstrap.bytes + encodedBytes > MAX_STAGED_SESSION_BYTES) {
+    sessionsBootstrap = null
+    return
+  }
+  sessionsBootstrap.rows.push(...rows)
+  sessionsBootstrap.bytes += encodedBytes
+}
+
+export function readySessionsBootstrap(epoch: number): boolean {
+  if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) {
+    sessionsBootstrap = null
+    return false
+  }
+  const rows = sessionsBootstrap.rows
+  sessionsBootstrap = null
+  applySessionsSnapshot(rows.map(toUISession))
+  return true
+}
+
+export function discardSessionsBootstrap(): void {
+  sessionsBootstrap = null
+}
+
 export function applySessionsSnapshot(list: Session[]): void {
   // Detect newly-arrived IDs vs the previous snapshot so a pending launch
   // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
@@ -1774,6 +1823,9 @@ export function initStore(): () => void {
   // Missed deltas don't matter: each snapshot is a full replacement.
   const source = new EventSource('/v1/events')
   source.addEventListener('error', () => {
+    // A transport reconnect starts a new epoch. Never retain unpublished
+    // rows from the interrupted response.
+    discardSessionsBootstrap()
     // Browser EventSource auto-reconnects; flag the UI as degraded
     // until the next snapshot arrives. `sessionsLoaded` stays true
     // once it has flipped, so reconnect doesn't blank the sidebar.
@@ -1787,17 +1839,44 @@ export function initStore(): () => void {
     else if (connState.value === 'connected') connState.value = 'reconnecting'
   })
 
-  // Protocol 2 (ADR 0001). The server pushes two snapshot kinds plus
-  // bare activity. We replace `_rawSessions` and `_rawWorld`
-  // wholesale on each snapshot; the projection layer derives
-  // everything else.
-  source.addEventListener('snapshot.sessions', (e) => {
+  // Protocol 3 streams complete semantic rows into private staging. No row
+  // becomes visible until the matching ready marker atomically replaces the
+  // projection. A later epoch is an ordinary full replacement too.
+  source.addEventListener('snapshot.sessions.begin', (e) => {
     try {
-      const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
-      applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
+      const { version, epoch } = JSON.parse(e.data) as { version: number, epoch: number }
+      beginSessionsBootstrap(version, epoch)
     } catch (err) {
-      console.warn('snapshot.sessions: bad event', err)
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.begin: bad event', err)
     }
+  })
+
+  source.addEventListener('snapshot.sessions.batch', (e) => {
+    try {
+      const { epoch, sessions: rows } = JSON.parse(e.data) as { epoch: number, sessions: ProtocolSession[] }
+      if (!Array.isArray(rows)) throw new Error('sessions must be an array')
+      appendSessionsBootstrap(epoch, rows, e.data.length)
+    } catch (err) {
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.batch: bad event', err)
+    }
+  })
+
+  source.addEventListener('snapshot.sessions.ready', (e) => {
+    try {
+      const { epoch } = JSON.parse(e.data) as { epoch: number }
+      if (!readySessionsBootstrap(epoch)) console.warn('snapshot.sessions.ready: no matching bootstrap')
+    } catch (err) {
+      discardSessionsBootstrap()
+      console.warn('snapshot.sessions.ready: bad event', err)
+    }
+  })
+
+  source.addEventListener('snapshot.sessions.error', (e) => {
+    discardSessionsBootstrap()
+    connState.value = sessionsLoaded.value ? 'reconnecting' : 'error'
+    console.warn('snapshot.sessions.error:', e.data)
   })
 
   source.addEventListener('snapshot.world', (e) => {
