@@ -174,19 +174,22 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
     })
   }
 
-  // Close on outside click
+  // Close on outside press. pointerdown rather than mousedown, for the
+  // same reason as the other two popovers: touch gestures that
+  // preventDefault kill the synthesized mouse cascade, and an outside
+  // press that never arrives leaves the menu stranded.
   useEffect(() => {
     if (state !== 'open') return
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       const t = e.target as Node
       if (containerRef.current?.contains(t)) return
       if (menuRef.current?.contains(t)) return
       setState('idle')
     }
-    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0)
+    const timer = setTimeout(() => document.addEventListener('pointerdown', handler), 0)
     return () => {
       clearTimeout(timer)
-      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('pointerdown', handler)
     }
   }, [state])
 

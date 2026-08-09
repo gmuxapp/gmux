@@ -131,8 +131,8 @@ function CountsLine({ tree }: { tree: FamilyNode }) {
 }
 
 /** The family panel: a non-modal popover anchored under the header's family
- * trigger, matching the ⋮ menu's behavior — closes on outside mousedown and
- * Escape, no focus trap. Clicking a row navigates without closing it so a
+ * trigger, matching the ⋮ menu's behavior — closes on an outside
+ * pointerdown and Escape, no focus trap. Clicking a row navigates without closing it so a
  * family can be traversed in place.
  *
  * Shows the whole family from the root, wherever you're standing, with
@@ -162,17 +162,23 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
       onClose()
       triggerRef.current?.focus()
     }
-    const onMouseDown = (event: MouseEvent) => {
+    // pointerdown, not mousedown: the terminal's touch handlers
+    // preventDefault on several gesture paths, which suppresses the
+    // browser's synthesized mouse cascade — so a tap on the terminal
+    // never reached a mousedown listener and the panel stayed open over
+    // the session you were tapping back into. pointerdown fires ahead of
+    // touchstart and can't be cancelled by it.
+    const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node
       if (panelRef.current?.contains(target)) return
       if (triggerRef.current?.contains(target)) return // trigger's own click toggles
       onClose()
     }
     document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('pointerdown', onPointerDown)
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('pointerdown', onPointerDown)
     }
   }, [onClose, triggerRef])
 
