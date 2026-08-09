@@ -249,9 +249,10 @@ The 48 KiB budget is 16 KiB below Scanner's 64 KiB default, leaving room for
 SSE syntax and future envelope metadata. Rows are not byte-fragmented. A single
 row that cannot fit is omitted, identified safely (long IDs become SHA-256
 identities), and does not prevent the rest of the set becoming ready. Browsers
-show a persistent omitted-session count and safe details until a later complete
-bootstrap clears it; peers retain the bounded diagnostic for the transaction
-and log it. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
+show a persistent omitted-session total and at most 256 safe details until a
+later complete bootstrap clears it. A non-droppable counted summary keeps the
+total exact above the detail cap; peers retain bounded diagnostics for the
+transaction and log them. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
 `socket_path`, or `conversation_file` fields. Session rows do not contain
 scrollback or transcripts. Sender and receiver share 100,000-row / 64 MiB
 transaction bounds, with sender envelope headroom. A rejected malformed

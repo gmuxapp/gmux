@@ -161,6 +161,40 @@ func TestEncodeQuarantinesOversizedRowAndCompletesReady(t *testing.T) {
 	}
 }
 
+func TestEncodeDiagnosticSummaryPreservesTotalAboveDetailCap(t *testing.T) {
+	rows := make([]testRow, 300)
+	huge := strings.Repeat("x", MaxEventPayload)
+	for i := range rows {
+		rows[i] = fixtureRows(1)[0]
+		rows[i].ID = fmt.Sprintf("oversized-%03d", i)
+		rows[i].Command = []string{huge}
+	}
+	events, err := Encode(1, rows, func(r testRow) string { return r.ID })
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, total := 0, 0
+	var summary Error
+	for _, event := range events {
+		if event.Type != EventError {
+			continue
+		}
+		var diagnostic Error
+		if err := json.Unmarshal(event.Data, &diagnostic); err != nil {
+			t.Fatal(err)
+		}
+		total += diagnostic.Count
+		if diagnostic.ID != "" {
+			details++
+		} else {
+			summary = diagnostic
+		}
+	}
+	if details != maxDiagnostics || total != len(rows) || summary.Code != "diagnostics_suppressed" || summary.Count != 44 {
+		t.Fatalf("details=%d total=%d summary=%+v", details, total, summary)
+	}
+}
+
 func TestSenderLimitsAreStrictlyInsideReceiverLimits(t *testing.T) {
 	if transactionWouldOverflow(MaxStagedRows-1, 0, 1) {
 		t.Fatal("last supported row rejected")

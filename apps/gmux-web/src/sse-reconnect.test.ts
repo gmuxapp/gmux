@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { _rawSessions, connState, initStore, sessionStreamWarnings } from './store'
+import {
+  _rawSessions, appendSessionStreamWarning, connState, initStore,
+  sessionStreamOmittedTotal, sessionStreamWarnings,
+} from './store'
 
 // A minimal EventSource stand-in that lets the test drive the listeners
 // initStore registers (the `error` handler and the snapshot handlers).
@@ -158,8 +161,28 @@ describe('SSE reconnecting state', () => {
     expect(sessionStreamWarnings.value).toEqual([
       { code: 'row_too_large', id: 'bad', message: 'omitted', count: 1 },
     ])
+    expect(sessionStreamOmittedTotal.value).toBe(1)
     ready(2, [{ id: 'good', adapter: 'shell', alive: true, status: null, unread: false, unread_token: '' }])
     expect(sessionStreamWarnings.value).toEqual([])
+    expect(sessionStreamOmittedTotal.value).toBe(0)
+  })
+
+  it('keeps the exact omitted total above the bounded detail cap', () => {
+    cleanup = initStore()
+    source().emit('snapshot.sessions.begin', { version: 3, epoch: 1 })
+    for (let i = 0; i < 256; i++) {
+      appendSessionStreamWarning(1, {
+        id: `safe-${i}`, code: 'row_too_large', message: 'omitted', count: 1,
+      })
+    }
+    // The sender emits this no-ID summary after its 256 detailed diagnostics.
+    // It must update the total even though it cannot consume a detail slot.
+    appendSessionStreamWarning(1, {
+      id: '', code: 'diagnostics_suppressed', message: '44 additional rows omitted', count: 44,
+    })
+    source().emit('snapshot.sessions.ready', { epoch: 1 })
+    expect(sessionStreamOmittedTotal.value).toBe(300)
+    expect(sessionStreamWarnings.value).toHaveLength(256)
   })
 
   it('publishes a mutation captured during bootstrap only at its later ready', () => {

@@ -19,8 +19,9 @@ framing. This does not implement archive/live-set selection.
 A row larger than 48 KiB no longer aborts or closes the stream. The sender omits
 only that row, emits a bounded diagnostic with a fixed reason and safe identity
 (IDs over 128 bytes become `sha256:<digest>`), and completes `ready` for every
-other row. The browser publishes a persistent omitted-session count with safe
-ID/reason details; a later clean bootstrap clears it. Peers retain each bounded
+other row. The browser publishes a persistent exact omitted-session total with
+at most 256 safe ID/reason details; the sender's counted summary cannot consume
+or be dropped by the detail cap, and a later clean bootstrap clears both. Peers retain each bounded
 diagnostic for the transaction and log it. This handles the confirmed old-spoke
 amplification schedule: a new hub accepts a legacy row up to its 1 MiB
 compatibility ceiling, then quarantines that row rather than bricking its

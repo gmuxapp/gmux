@@ -246,6 +246,7 @@ effect(() => {
 // Local-only UI state (never sourced from the wire).
 export type SessionStreamWarning = { id: string, code: string, message: string, count: number }
 export const sessionStreamWarnings = signal<SessionStreamWarning[]>([])
+export const sessionStreamOmittedTotal = signal(0)
 export const sessionsLoaded = signal(false)
 /**
  * Whether the leading-edge `snapshot.world` (projects, peers, health)
@@ -1217,6 +1218,7 @@ type SessionsBootstrap = {
   rows: ProtocolSession[]
   bytes: number
   warnings: SessionStreamWarning[]
+  omittedTotal: number
 }
 
 type SessionStreamMode = 'unknown' | 'legacy' | 'v3'
@@ -1237,7 +1239,7 @@ export function beginSessionsBootstrap(version: number, epoch: number): void {
   if (epoch <= lastSessionEpoch) return
   sessionStreamMode = 'v3'
   lastSessionEpoch = epoch
-  sessionsBootstrap = { epoch, rows: [], bytes: 0, warnings: [] }
+  sessionsBootstrap = { epoch, rows: [], bytes: 0, warnings: [], omittedTotal: 0 }
 }
 
 export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], encodedBytes = 0): void {
@@ -1253,15 +1255,22 @@ export function appendSessionsBootstrap(epoch: number, rows: ProtocolSession[], 
 
 export function appendSessionStreamWarning(epoch: number, warning: SessionStreamWarning): void {
   if (sessionStreamMode !== 'v3' || !sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return
-  if (sessionsBootstrap.warnings.length < 256) sessionsBootstrap.warnings.push(warning)
+  const count = Number.isSafeInteger(warning.count) && warning.count > 0 ? warning.count : 1
+  sessionsBootstrap.omittedTotal = Math.min(Number.MAX_SAFE_INTEGER, sessionsBootstrap.omittedTotal + count)
+  // Keep safe per-row detail bounded. The sender's final counted summary has
+  // no ID and updates omittedTotal even after this list reaches its cap.
+  if (warning.id && sessionsBootstrap.warnings.length < 256) {
+    sessionsBootstrap.warnings.push({ ...warning, count })
+  }
 }
 
 export function readySessionsBootstrap(epoch: number): boolean {
   if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return false
-  const { rows, warnings } = sessionsBootstrap
+  const { rows, warnings, omittedTotal } = sessionsBootstrap
   sessionsBootstrap = null
   applySessionsSnapshot(rows.map(toUISession))
   sessionStreamWarnings.value = warnings
+  sessionStreamOmittedTotal.value = omittedTotal
   return true
 }
 
@@ -1843,6 +1852,7 @@ export function initStore(): () => void {
   // Missed deltas don't matter: each snapshot is a full replacement.
   resetSessionsTransport()
   sessionStreamWarnings.value = []
+  sessionStreamOmittedTotal.value = 0
   const source = new EventSource('/v1/events?session_stream=3')
   source.addEventListener('error', () => {
     // A transport reconnect starts a new epoch. Never retain unpublished
@@ -1918,6 +1928,7 @@ export function initStore(): () => void {
       discardSessionsBootstrap()
       applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
       sessionStreamWarnings.value = []
+      sessionStreamOmittedTotal.value = 0
     } catch (err) {
       console.warn('snapshot.sessions: bad event', err)
     }

@@ -21,7 +21,7 @@ import {
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
-  aliveOnly, setAliveOnly, tabHref, sessionStreamWarnings,
+  aliveOnly, setAliveOnly, tabHref, sessionStreamWarnings, sessionStreamOmittedTotal,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -643,7 +643,9 @@ export function Sidebar({
   const totalVisible = foldersVal.reduce((n, f) => n + f.sessions.length, 0)
   const connected = connState.value === 'connected'
   const streamWarnings = sessionStreamWarnings.value
-  const omittedSessionCount = streamWarnings.reduce((sum, warning) => sum + warning.count, 0)
+  const omittedSessionCount = sessionStreamOmittedTotal.value
+  const detailedOmittedCount = streamWarnings.reduce((sum, warning) => sum + warning.count, 0)
+  const suppressedOmittedCount = Math.max(0, omittedSessionCount - detailedOmittedCount)
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -682,11 +684,14 @@ export function Sidebar({
             * background can act as a fixed backdrop behind it (see the
             * cavity in styles.css). Purely presentational. */}
           <div class="sidebar-list">
-          {streamWarnings.length > 0 && (
+          {omittedSessionCount > 0 && (
             <div
               class="sidebar-stream-warning"
               role="status"
-              title={streamWarnings.map(w => `${w.id || 'unknown'}: ${w.message || w.code}`).join('\n')}
+              title={[
+                ...streamWarnings.map(w => `${w.id}: ${w.message || w.code}`),
+                ...(suppressedOmittedCount > 0 ? [`${suppressedOmittedCount} additional omitted sessions`] : []),
+              ].join('\n')}
             >
               ⚠ {omittedSessionCount} {omittedSessionCount === 1 ? 'session is' : 'sessions are'} omitted from the live list
             </div>
