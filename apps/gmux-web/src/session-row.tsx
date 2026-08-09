@@ -58,8 +58,9 @@ export interface SessionRowProps {
 
 /** Compact "Nm" / "Nh" / "Nd" relative-time for the full row's age.
  *  Sub-minute collapses to "now" so a fresh row doesn't tick every
- *  second. */
-function formatAge(stampIso: string | undefined, now: number): string | null {
+ *  second. Shared with the family panel, which sorts by the same
+ *  timestamp and so has to show it. */
+export function formatAge(stampIso: string | undefined, now: number): string | null {
   if (!stampIso) return null
   const t = Date.parse(stampIso)
   if (!Number.isFinite(t)) return null

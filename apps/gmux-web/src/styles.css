@@ -2343,7 +2343,9 @@ body {
   z-index: 100;
   width: max-content;
   min-width: 320px;
-  max-width: min(440px, calc(100vw - 24px));
+  /* Wider than it was: the panel now shows the whole family from the
+     root, so deep rows pay for their indentation out of this budget. */
+  max-width: min(560px, calc(100vw - 24px));
   max-height: min(65vh, 520px);
   display: flex;
   flex-direction: column;
@@ -2379,7 +2381,16 @@ body {
 .family-row-proc.working { color: var(--accent); }
 .family-row.process .family-row-title { color: var(--text-muted); }
 .family-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.family-row-kind { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+/* Age: the key every level is sorted by, so it stays on screen. Tabular
+   figures keep the column from wobbling as rows tick over. */
+.family-row-age {
+  margin-left: auto;
+  padding-left: 8px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 /* Collapsed-group summary row: a ghost row, quieter than real rows. */
 .family-more {
   min-height: 30px;
