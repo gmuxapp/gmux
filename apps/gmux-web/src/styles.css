@@ -3204,21 +3204,29 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    /* Phones: 7-column × 2-row grid. The empty top-left corner and the
+    /* Phones: 7-column × 2-row grid. Esc sits above the hamburger; the
        scroll-end / empty top-right simply fall out of the template (no
        placeholder elements needed). */
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     grid-template-rows: repeat(2, 40px);
     grid-template-areas:
-      '.    esc  tab  wl  au  wr  end'
+      'esc  stab tab  wl  au  wr  end'
       'menu ctrl alt  al  ad  ar  send';
     /* One knob for spacing: the visual gap between keys. Hitboxes bridge it
        automatically (each .mkey-face extends half of it), so there are no
        dead gaps between buttons no matter what you set this to. */
     --key-gap: 5px;
     gap: var(--key-gap);
-    padding: 0 4px calc(4px + env(safe-area-inset-bottom));
+    /* Keep the first/last controls inside landscape cutouts as well as the
+       bottom home-indicator inset. The custom properties make the mechanism
+       easy to exercise with synthetic side insets in browser tests. */
+    --mobile-safe-area-left: env(safe-area-inset-left, 0px);
+    --mobile-safe-area-right: env(safe-area-inset-right, 0px);
+    padding-top: 0;
+    padding-right: max(4px, var(--mobile-safe-area-right));
+    padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(4px, var(--mobile-safe-area-left));
     background: transparent;
     /* No z-index: the bar must NOT form a stacking context, so its keys'
        borders (z:1) and glyphs (z:3) can sit on either side of the
@@ -3229,6 +3237,7 @@ body {
      only the template (above / below) changes between layouts. */
   .mk-menu { grid-area: menu; }
   .mk-esc  { grid-area: esc; }
+  .mk-shift-tab { grid-area: stab; }
   .mk-tab  { grid-area: tab; }
   .mk-ctrl { grid-area: ctrl; }
   .mk-alt  { grid-area: alt; }
@@ -3378,6 +3387,15 @@ body {
     background: var(--unread);
     /* Ring in the page background so the dot reads cleanly against the button border */
     box-shadow: 0 0 0 1.5px var(--bg-base);
+  }
+
+  /* In the mobile keyboard, Esc now occupies the cell above the menu. Keep
+     this instance's badge inside the menu face so it does not cross that
+     key's painted hit surface. Other MenuButton placements retain the
+     established overhanging badge position above. */
+  .mobile-bottom-bar .mobile-bottom-action.menu-btn.mk-menu.bg-waiting::after {
+    top: 4px;
+    right: 4px;
   }
 
   /* Re-blink when a new session enters the waiting state */
@@ -4033,9 +4051,9 @@ body {
 /* Single row, word-jumps dropped. */
 @media (pointer: coarse) and (min-width: 600px) {
   .mobile-bottom-bar {
-    grid-template-columns: repeat(10, 1fr);
+    grid-template-columns: repeat(11, 1fr);
     grid-template-rows: 40px;
-    grid-template-areas: 'menu esc tab ctrl alt al au ad ar send';
+    grid-template-areas: 'menu esc stab tab ctrl alt al au ad ar send';
   }
   /* Word-jumps aren't part of the single-row layout. */
   .mk-wl,
@@ -4062,8 +4080,8 @@ body {
 /* Wider still: fold the word-jumps back in, flanking the arrow cluster. */
 @media (pointer: coarse) and (min-width: 820px) {
   .mobile-bottom-bar {
-    grid-template-columns: repeat(12, 1fr);
-    grid-template-areas: 'menu esc tab ctrl alt wl al au ad ar wr send';
+    grid-template-columns: repeat(13, 1fr);
+    grid-template-areas: 'menu esc stab tab ctrl alt wl al au ad ar wr send';
   }
   .mk-wl,
   .mk-wr {

@@ -171,6 +171,12 @@ describe('applyArmedModifiers', () => {
     expect(applyArmedModifiers('\x1b[A', true, true).seq).toBe('\x1b[1;7A')   // ctrl+alt+up
   })
 
+  it('encodes armed modifiers on BackTab without splitting the key', () => {
+    expect(applyArmedModifiers('\x1b[Z', false, false).seq).toBe('\x1b[Z')
+    expect(applyArmedModifiers('\x1b[Z', true, false).seq).toBe('\x1b[1;5Z')
+    expect(applyArmedModifiers('\x1b[Z', false, true).seq).toBe('\x1b[1;3Z')
+  })
+
   it('encodes alt+enter as ESC CR', () => {
     expect(applyArmedModifiers('\r', false, true))
       .toEqual({ seq: '\x1b\r', ctrlApplied: false, altApplied: true })
