@@ -172,7 +172,9 @@ describe('flat panel projection', () => {
     // working-unread agent is working (dot precedence), the dead unread
     // one is unread (not alive-gated), processes count like anyone else,
     // and the root + quiet members only land in the total.
-    expect(familyCounts([tree])).toEqual({ error: 1, working: 3, unread: 2, total: 8 })
+    expect(familyCounts([tree])).toEqual({
+      error: 1, workingAgents: 2, workingProcesses: 1, unread: 2, total: 8,
+    })
   })
 
   it('counts the same family from anywhere inside it', () => {
@@ -186,7 +188,9 @@ describe('flat panel projection', () => {
     // One scope, so the line reads the same on every row you visit —
     // and the root is one of the members it counts.
     expect(fromDeep).toEqual(fromRoot)
-    expect(fromRoot).toEqual({ error: 0, working: 0, unread: 0, total: 4 })
+    expect(fromRoot).toEqual({
+      error: 0, workingAgents: 0, workingProcesses: 0, unread: 0, total: 4,
+    })
   })
 })
 

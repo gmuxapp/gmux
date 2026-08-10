@@ -135,19 +135,35 @@ function unreadMembers(tree: FamilyNode): Session[] {
  * wire spells "waiting on you", shortened to `waiting` because it sits
  * beside three other segments.
  *
- * Each segment names a state and shows the dot the rows use for it, so
+ * Each segment names a state and shows the glyph the rows use for it, so
  * the header and the tree can be read against each other without
- * translating. `total` gets no dot: it isn't a state. */
+ * translating — including the `$`, because a family is routinely mostly
+ * processes and "3 active" reads very differently depending on whether
+ * that means subagents thinking or shells running. `total` gets no
+ * glyph: it isn't a state. */
 function CountsLine({ tree }: { tree: FamilyNode }) {
   const counts = familyCounts([tree])
-  const segments: { key: string; dot?: string; count: number; label: string; cls?: string }[] = []
+  const segments: {
+    key: string
+    dot?: string
+    process?: boolean
+    count: number
+    label: string
+    cls?: string
+  }[] = []
   // Same precedence the dot itself resolves by: error, then active,
-  // then waiting.
+  // then waiting. Processes follow the agents they belong to.
   if (counts.error > 0) {
     segments.push({ key: 'error', dot: 'error', count: counts.error, label: 'error', cls: 'attention' })
   }
-  if (counts.working > 0) {
-    segments.push({ key: 'active', dot: 'working', count: counts.working, label: 'active' })
+  if (counts.workingAgents > 0) {
+    segments.push({ key: 'active', dot: 'working', count: counts.workingAgents, label: 'active' })
+  }
+  if (counts.workingProcesses > 0) {
+    // `running`, not `active`: one turn model (ADR 0023), but a command
+    // runs where an agent works, and this codebase already says
+    // "running process" in the sidebar's own summary.
+    segments.push({ key: 'running', process: true, count: counts.workingProcesses, label: 'running' })
   }
   if (counts.unread > 0) {
     segments.push({ key: 'waiting', dot: 'unread', count: counts.unread, label: 'waiting', cls: 'attention' })
@@ -161,6 +177,7 @@ function CountsLine({ tree }: { tree: FamilyNode }) {
           class={`family-count${segment.cls ? ` family-count-${segment.cls}` : ''}`}
         >
           {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
+          {segment.process && <span class="family-row-proc working" aria-hidden="true">$</span>}
           {segment.count} {segment.label}
         </span>
       ))}

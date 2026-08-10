@@ -161,15 +161,27 @@ test.describe('the family line and the panel tally', () => {
     const segments = await counts.locator('.family-count').evaluateAll(nodes => nodes.map(n => ({
       text: n.textContent?.replace(/\s+/g, ' ').trim(),
       dot: n.querySelector('.session-dot-indicator')?.className ?? null,
+      proc: n.querySelector('.family-row-proc')?.textContent ?? null,
     })))
     for (const segment of segments) {
       if (/total/.test(segment.text ?? '')) {
-        expect(segment.dot, 'total is not a state, so it gets no dot').toBeNull()
+        expect(segment.dot, 'total is not a state, so it gets no glyph').toBeNull()
+        expect(segment.proc).toBeNull()
         continue
       }
-      expect(segment.text).toMatch(/^\d+ (error|active|waiting)$/)
-      expect(segment.dot).toMatch(/session-dot-indicator (error|working|unread)/)
+      expect(segment.text).toMatch(/^\$?\d+ (error|active|running|waiting)$/)
+      // Running commands are counted apart from thinking agents and wear
+      // the same `$` their rows do, because a family is routinely mostly
+      // processes and one number for both hides that.
+      if (/running/.test(segment.text ?? '')) {
+        expect(segment.proc).toBe('$')
+        expect(segment.dot).toBeNull()
+      } else {
+        expect(segment.dot).toMatch(/session-dot-indicator (error|working|unread)/)
+        expect(segment.proc).toBeNull()
+      }
     }
+    expect(segments.some(s => /running/.test(s.text ?? '')), 'a running process in the fixtures').toBe(true)
     expect(segments.some(s => /waiting|active|error/.test(s.text ?? ''))).toBe(true)
   })
 })

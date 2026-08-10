@@ -304,18 +304,29 @@ export function projectFamily(selected: Session, source: FamilySource): FamilyDr
  * the row dots can never disagree. */
 export interface FamilyCounts {
   error: number
-  working: number
+  /** Semantic-agent members mid-turn. */
+  workingAgents: number
+  /** Non-agent members running a command. Split from the agents for the
+   * same reason the rows carry different glyphs: three subagents
+   * thinking and three shells running are different news, and a family
+   * is routinely mostly shells. */
+  workingProcesses: number
   unread: number
   total: number
 }
 
 export function familyCounts(trees: readonly FamilyNode[]): FamilyCounts {
-  const counts: FamilyCounts = { error: 0, working: 0, unread: 0, total: 0 }
+  const counts: FamilyCounts = {
+    error: 0, workingAgents: 0, workingProcesses: 0, unread: 0, total: 0,
+  }
   const visit = (node: FamilyNode) => {
     const s = node.session
     counts.total++
     if (s.alive && s.status?.error) counts.error++
-    else if (s.alive && s.status?.active) counts.working++
+    else if (s.alive && s.status?.active) {
+      if (isProcessSession(s)) counts.workingProcesses++
+      else counts.workingAgents++
+    }
     else if (s.unread) counts.unread++
     for (const child of node.children) visit(child)
   }
