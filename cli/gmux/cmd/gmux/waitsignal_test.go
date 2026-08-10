@@ -47,13 +47,33 @@ func TestWaitSignalWritesStdoutAndDiesWithShellStatus(t *testing.T) {
 	}
 }
 
+func TestCommandWaitSignalUsesNeutralLanguage(t *testing.T) {
+	oldDie := dieFromSignal
+	dieFromSignal = func(os.Signal) {}
+	t.Cleanup(func() { dieFromSignal = oldDie })
+
+	var out bytes.Buffer
+	stop, observed := observeInterruptedWait(&out, false, false)
+	p, _ := os.FindProcess(os.Getpid())
+	_ = p.Signal(syscall.SIGINT)
+	select {
+	case <-observed:
+	case <-time.After(time.Second):
+		t.Fatal("signal was not observed")
+	}
+	stop()
+	if got := out.String(); got != "[Wait interrupted; session activity continues]\n" {
+		t.Fatalf("notice=%q", got)
+	}
+}
+
 func TestWaitSignalStopJoinsNoticeWriteBeforePublishing(t *testing.T) {
 	oldDie := dieFromSignal
 	dieFromSignal = func(os.Signal) {}
 	t.Cleanup(func() { dieFromSignal = oldDie })
 
 	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
-	stop, observed := observeInterruptedWait(writer, false)
+	stop, observed := observeInterruptedWait(writer, false, true)
 	p, _ := os.FindProcess(os.Getpid())
 	_ = p.Signal(syscall.SIGINT)
 	select {
@@ -97,7 +117,7 @@ func TestWaitSignalSecondSignalBypassesBlockedNotice(t *testing.T) {
 	t.Cleanup(func() { dieFromSignal, exitImmediately = oldDie, oldExit })
 
 	writer := blockingSignalWriter{started: make(chan struct{}), release: make(chan struct{})}
-	stop, _ := observeInterruptedWait(writer, false)
+	stop, _ := observeInterruptedWait(writer, false, true)
 	p, _ := os.FindProcess(os.Getpid())
 	_ = p.Signal(syscall.SIGINT)
 	select {

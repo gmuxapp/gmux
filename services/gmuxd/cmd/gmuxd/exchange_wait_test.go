@@ -45,7 +45,7 @@ func TestObservationalPromptWaitIgnoresInstructionsUntilSourceClose(t *testing.T
 func TestRunnerLossPartialRefusesStaleExchange(t *testing.T) {
 	frame := &sessioncoord.TurnFrame{Current: &sessioncoord.TurnCurrent{TurnSeq: 9, Exchanges: []sessioncoord.TurnExchange{{Ordinal: 1, User: "repeat"}}}}
 	close := runnerLossClose(frame)
-	if close == nil || close.Output != "" || len(close.Exchanges) != 1 {
+	if close == nil || close.Output != "" || len(close.Exchanges) != 1 || close.Diagnostic != "" {
 		t.Fatalf("%+v", close)
 	}
 }

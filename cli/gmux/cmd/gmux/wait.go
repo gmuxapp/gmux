@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 // The global gmux exit taxonomy (ADR 0027 §8). It is deliberately small
@@ -142,7 +143,11 @@ func cmdWait(refs []string, timeoutSecs int, forText, forRegex string, quiet boo
 		}
 	}
 
-	stopNotice, signalObserved := observeInterruptedWait(os.Stdout, quiet)
+	agentWait := true
+	for _, sess := range sessions {
+		agentWait = agentWait && isAgentSession(sess)
+	}
+	stopNotice, signalObserved := observeInterruptedWait(os.Stdout, quiet, agentWait)
 	var wg sync.WaitGroup
 	wg.Add(len(sessions))
 	for i := range sessions {
@@ -193,6 +198,7 @@ func cmdWait(refs []string, timeoutSecs int, forText, forRegex string, quiet boo
 // process-wide signal notice.
 func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTimeout time.Duration, forText, forRegex string, quiet bool, stdout io.Writer) int {
 	predicate := forText != "" || forRegex != ""
+	agent := isAgentSession(sess)
 	if timeoutSecs > 0 && serverTimeout < time.Millisecond {
 		return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
 	}
@@ -255,7 +261,7 @@ func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTi
 		if timeoutSecs > 0 && waitInvocationExpired(ctx) {
 			return reportLocalWaitTimeout(predicate, quiet, timeoutSecs, stdout)
 		}
-		code := reportWaitResult(env.Data, predicate, quiet, stdout)
+		code := reportWaitResult(env.Data, predicate, quiet, agent, stdout)
 		if code == waitExitOK {
 			if err := consumeSession(sess, env.Data.UnreadToken); err != nil {
 				fmt.Fprintf(os.Stderr, "gmux: wait could not mark %s read: %v\n", displayID(sess), err)
@@ -281,7 +287,7 @@ func waitSession(ctx context.Context, sess cliSession, timeoutSecs int, serverTi
 		if timeoutSecs > 0 && waitInvocationExpired(ctx) {
 			return reportLocalWaitTimeout(false, quiet, timeoutSecs, stdout)
 		}
-		return renderExchangeWait(env.Data, quiet, timeoutSecs, "", stdout)
+		return renderWait(env.Data, quiet, timeoutSecs, "", agent, stdout)
 	case http.StatusUnprocessableEntity:
 		// Current daemons only send 422 on the send --wait path
 		// (input_no_submit); older daemons also rejected sessions
@@ -359,7 +365,7 @@ type waitResult struct {
 // which one hit a limitation: `send --wait` shares every exit decision here but
 // is deliberately result-free, so telling its caller the daemon "predates
 // result-bearing waits" would describe a feature they did not ask for.
-func reportWaitResult(res waitResult, predicate, quiet bool, stdout io.Writer) int {
+func reportWaitResult(res waitResult, predicate, quiet, agent bool, stdout io.Writer) int {
 	switch res.Reason {
 	case "matched":
 		// Predicate waits are synchronization-only; matched bytes remain in the
@@ -370,7 +376,7 @@ func reportWaitResult(res waitResult, predicate, quiet bool, stdout io.Writer) i
 			fmt.Fprintln(os.Stderr, "gmux: the session exited before its output matched")
 			return waitExitError
 		}
-		return renderExchangeWait(res, quiet, 0, "", stdout)
+		return renderWait(res, quiet, 0, "", agent, stdout)
 	case "idle":
 		if predicate {
 			// A predicate wait resolves on "matched" or "died" only;
@@ -378,7 +384,7 @@ func reportWaitResult(res waitResult, predicate, quiet bool, stdout io.Writer) i
 			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q for an output condition\n", res.Reason)
 			return waitExitError
 		}
-		return reportTurnConclusion(res, quiet, stdout)
+		return reportTurnConclusion(res, quiet, agent, stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", res.Reason)
 		return waitExitError
@@ -391,8 +397,44 @@ func reportWaitResult(res waitResult, predicate, quiet bool, stdout io.Writer) i
 // predates turn conclusions always resolves a closed turn as bare "idle", and
 // silently treating that as success would report a failed or interrupted turn as
 // a clean one — under exit 0, with no result. Fail loudly and name the fix.
-func reportTurnConclusion(res waitResult, quiet bool, stdout io.Writer) int {
-	return renderExchangeWait(res, quiet, 0, "", stdout)
+func reportTurnConclusion(res waitResult, quiet, agent bool, stdout io.Writer) int {
+	return renderWait(res, quiet, 0, "", agent, stdout)
+}
+
+func isAgentSession(sess cliSession) bool {
+	_, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationExchangeRenderer)
+	return ok
+}
+
+func renderWait(res waitResult, quiet bool, timeoutSecs int, submitted string, agent bool, stdout io.Writer) int {
+	if agent {
+		return renderExchangeWait(res, quiet, timeoutSecs, submitted, stdout)
+	}
+	if res.Outcome == "" {
+		fmt.Fprintln(os.Stderr, "gmux: daemon response has no turn outcome; restart gmuxd to resolve version skew")
+		return waitExitError
+	}
+	exit := waitExitOK
+	marker := ""
+	switch res.Outcome {
+	case waitOutcomeSnapshot:
+		marker = "[Session inactive]"
+	case waitOutcomeCompleted:
+		marker = "[Session activity completed]"
+	case waitOutcomeInterrupted:
+		marker, exit = "[Session activity interrupted]", waitExitInterrupted
+	case waitOutcomeError:
+		marker, exit = "[Session activity failed: "+failureReason(res, false)+"]", waitExitError
+	case outcomeTimeout:
+		marker, exit = fmt.Sprintf("[Wait timed out after %ds; session remains active]", timeoutSecs), waitExitError
+	default:
+		fmt.Fprintf(os.Stderr, "gmux: unexpected turn outcome %q\n", res.Outcome)
+		return waitExitError
+	}
+	if !quiet {
+		fmt.Fprintln(stdout, marker)
+	}
+	return exit
 }
 
 func renderExchangeWait(res waitResult, quiet bool, timeoutSecs int, submitted string, stdout io.Writer) int {
@@ -440,7 +482,7 @@ func renderExchangeWait(res waitResult, quiet bool, timeoutSecs int, submitted s
 	}
 	if !quiet {
 		_, _ = stdout.Write(adapter.RenderExchangeReport(adapter.ExchangeReport{
-			Exchanges: exchanges, Outcome: outcome, Diagnostic: failureReason(res), UnscopedTerminal: unscopedTerminal,
+			Exchanges: exchanges, Outcome: outcome, Diagnostic: failureReason(res, true), UnscopedTerminal: unscopedTerminal,
 			TerminalPartial:   res.TerminalPartial || (res.Output != "" && outcome != adapter.ExchangeCompleted && outcome != adapter.ExchangeSnapshot),
 			TerminalTruncated: res.Truncated, TimeoutSeconds: timeoutSecs,
 			OmittedExchanges: res.OmittedExchanges, OmittedBytes: res.OmittedBytes,
@@ -457,12 +499,15 @@ func valueOrZero(v *int) int {
 	return 0
 }
 
-func failureReason(res waitResult) string {
+func failureReason(res waitResult, agent bool) string {
 	if res.Diagnostic != "" {
 		return res.Diagnostic
 	}
 	if res.Cause == causeRunnerDied {
-		return "agent activity was lost"
+		if agent {
+			return "agent activity was lost"
+		}
+		return "session process exited before the activity completed"
 	}
 	if res.Cause != "" {
 		return res.Cause

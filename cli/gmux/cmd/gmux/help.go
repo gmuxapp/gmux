@@ -218,11 +218,11 @@ For renderer-capable agents, prints an exchange-structured report on stdout.
 Steers, follow-ups, and human instructions are additional user boundaries and
 do not end the wait. A late wait immediately reports the latest exchange.
 Timeout, interruption, and activity failure are valid stdout reports; the exit
-code is the verdict. --quiet suppresses reports. Predicate and non-agent waits
-keep synchronization-only behavior.
+code is the verdict. --quiet suppresses reports. Non-agent sessions use neutral
+session-activity markers; predicate waits remain synchronization-only.
 
 Exit codes: 0 completed/matched, 2 intentionally interrupted, 1 failure or
-timeout. A local signal prints '[Wait interrupted; agent remains active]' and exits 128+N.
+timeout. A local signal says the observed agent or sessions remain active and exits 128+N.
 `,
 
 	"kill": `gmux kill: terminate a session

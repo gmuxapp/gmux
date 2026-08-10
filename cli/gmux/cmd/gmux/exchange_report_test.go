@@ -79,7 +79,7 @@ func TestAgentPromptGrammarMatrix(t *testing.T) {
 func TestWaitVersionSkewTruncationDiagnosticsAndPartialLabels(t *testing.T) {
 	var out bytes.Buffer
 	stderr := captureStderr(t, func() {
-		if code := reportTurnConclusion(waitResult{}, false, &out); code != waitExitError {
+		if code := reportTurnConclusion(waitResult{}, false, true, &out); code != waitExitError {
 			t.Fatalf("missing outcome exit=%d", code)
 		}
 	})
@@ -93,7 +93,9 @@ func TestWaitVersionSkewTruncationDiagnosticsAndPartialLabels(t *testing.T) {
 		{"old timeout", func(out *bytes.Buffer) int {
 			return renderExchangeWait(waitResult{Reason: "timeout"}, false, 3, "", out)
 		}},
-		{"old died", func(out *bytes.Buffer) int { return reportWaitResult(waitResult{Reason: "died"}, false, false, out) }},
+		{"old died", func(out *bytes.Buffer) int {
+			return reportWaitResult(waitResult{Reason: "died"}, false, false, true, out)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var oldOut bytes.Buffer
@@ -108,11 +110,11 @@ func TestWaitVersionSkewTruncationDiagnosticsAndPartialLabels(t *testing.T) {
 		})
 	}
 	var predicateOut bytes.Buffer
-	if code := reportWaitResult(waitResult{Reason: "matched"}, true, false, &predicateOut); code != waitExitOK || predicateOut.Len() != 0 {
+	if code := reportWaitResult(waitResult{Reason: "matched"}, true, false, true, &predicateOut); code != waitExitOK || predicateOut.Len() != 0 {
 		t.Fatalf("matched predicate exit=%d out=%q", code, predicateOut.String())
 	}
 	predicateErr := captureStderr(t, func() {
-		if code := reportWaitResult(waitResult{Reason: "died"}, true, false, &predicateOut); code != waitExitError {
+		if code := reportWaitResult(waitResult{Reason: "died"}, true, false, true, &predicateOut); code != waitExitError {
 			t.Fatalf("died predicate exit=%d", code)
 		}
 	})
@@ -121,11 +123,11 @@ func TestWaitVersionSkewTruncationDiagnosticsAndPartialLabels(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := reportTurnConclusion(waitResult{Outcome: waitOutcomeSnapshot, Exchanges: []adapter.Exchange{{User: "history"}}}, false, &out); code != waitExitOK || !strings.Contains(out.String(), "[USER]: history") {
+	if code := reportTurnConclusion(waitResult{Outcome: waitOutcomeSnapshot, Exchanges: []adapter.Exchange{{User: "history"}}}, false, true, &out); code != waitExitOK || !strings.Contains(out.String(), "[USER]: history") {
 		t.Fatalf("current snapshot exit=%d out=%q", code, out.String())
 	}
 	out.Reset()
-	if code := reportTurnConclusion(waitResult{Outcome: waitOutcomeSnapshot}, false, &out); code != waitExitOK || out.String() != "[No exchanges yet]\n" {
+	if code := reportTurnConclusion(waitResult{Outcome: waitOutcomeSnapshot}, false, true, &out); code != waitExitOK || out.String() != "[No exchanges yet]\n" {
 		t.Fatalf("empty snapshot exit=%d out=%q", code, out.String())
 	}
 
@@ -252,6 +254,71 @@ func TestWaitExitTaxonomyAndSignalFormatting(t *testing.T) {
 	report := string(adapter.RenderExchangeReport(adapter.ExchangeReport{Outcome: adapter.ExchangeWaitSignal}))
 	if !strings.Contains(report, "[Wait interrupted; agent remains active") {
 		t.Fatalf("signal report=%q", report)
+	}
+}
+
+func TestWaitSessionClassification(t *testing.T) {
+	for _, tc := range []struct {
+		adapter string
+		agent   bool
+	}{{"pi", true}, {"claude", true}, {"codex", true}, {"shell", false}, {"editor", false}, {"", false}} {
+		if got := isAgentSession(cliSession{Adapter: tc.adapter}); got != tc.agent {
+			t.Errorf("adapter %q agent=%v, want %v", tc.adapter, got, tc.agent)
+		}
+	}
+}
+
+func TestWaitRunnerLossUsesSessionAppropriateLanguage(t *testing.T) {
+	res := waitResult{Outcome: waitOutcomeError, Cause: causeRunnerDied}
+	for _, tc := range []struct {
+		agent bool
+		want  string
+	}{{true, "[Agent failed: agent activity was lost]"}, {false, "[Session activity failed: session process exited before the activity completed]"}} {
+		var out bytes.Buffer
+		if code := renderWait(res, false, 0, "", tc.agent, &out); code != waitExitError || !strings.Contains(out.String(), tc.want) {
+			t.Errorf("agent=%v exit=%d report=%q, want %q", tc.agent, code, out.String(), tc.want)
+		}
+	}
+}
+
+func TestWaitRenderingUsesSessionAppropriateLanguage(t *testing.T) {
+	outcomes := []struct {
+		outcome      string
+		agentMarker  string
+		sharedMarker string
+		code         int
+	}{
+		{waitOutcomeSnapshot, "[No exchanges yet]", "[Session inactive]", 0},
+		{waitOutcomeCompleted, "[AGENT]: done", "[Session activity completed]", 0},
+		{waitOutcomeInterrupted, "[Agent interrupted]", "[Session activity interrupted]", 2},
+		{waitOutcomeError, "[Agent failed: provider failed]", "[Session activity failed: provider failed]", 1},
+		{outcomeTimeout, "[Wait timed out after 9s; agent active", "[Wait timed out after 9s; session remains active]", 1},
+	}
+	for _, tc := range outcomes {
+		for _, agent := range []bool{false, true} {
+			name := map[bool]string{false: "command", true: "agent"}[agent] + "/" + tc.outcome
+			t.Run(name, func(t *testing.T) {
+				var out bytes.Buffer
+				res := waitResult{Outcome: tc.outcome, Diagnostic: "provider failed"}
+				if agent && tc.outcome != waitOutcomeSnapshot {
+					res.Output = "done"
+					res.Exchanges = []adapter.Exchange{{User: "ask", Iterations: 1}}
+				}
+				if code := renderWait(res, false, 9, "", agent, &out); code != tc.code {
+					t.Fatalf("exit=%d want=%d", code, tc.code)
+				}
+				marker := tc.sharedMarker
+				if agent {
+					marker = tc.agentMarker
+				}
+				if !strings.Contains(out.String(), marker) {
+					t.Fatalf("report=%q, want %q", out.String(), marker)
+				}
+				if !agent && strings.Contains(strings.ToLower(out.String()), "agent") {
+					t.Fatalf("command report uses agent language: %q", out.String())
+				}
+			})
+		}
 	}
 }
 

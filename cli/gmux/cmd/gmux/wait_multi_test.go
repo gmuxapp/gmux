@@ -69,6 +69,29 @@ func TestWaitMultiConcurrentAndArgvOrderedHeaders(t *testing.T) {
 	}
 }
 
+func TestWaitCommandSessionsUseNeutralReportsSingleAndMulti(t *testing.T) {
+	for _, refs := range [][]string{{"alpha"}, {"alpha", "beta"}} {
+		t.Run(strconv.Itoa(len(refs)), func(t *testing.T) {
+			sessions := waitTestSessions()
+			for i := range sessions {
+				sessions[i].Adapter = "shell"
+			}
+			d := startStubDaemon(t, sessions)
+			d.on(func(w http.ResponseWriter, _ *http.Request) {
+				writeEnvelope(w, http.StatusOK, map[string]any{"reason": "idle", "outcome": waitOutcomeCompleted})
+			})
+			var code int
+			stdout := captureStdout(t, func() { code = cmdWait(refs, 0, "", "", false) })
+			if code != 0 || strings.Count(stdout, "[Session activity completed]") != len(refs) {
+				t.Fatalf("exit=%d stdout=%q", code, stdout)
+			}
+			if strings.Contains(strings.ToLower(stdout), "agent") || strings.Contains(stdout, "[No exchanges yet]") {
+				t.Fatalf("command report uses agent/exchange language: %q", stdout)
+			}
+		})
+	}
+}
+
 func TestWaitSingleKeepsHeaderlessOutput(t *testing.T) {
 	d := startStubDaemon(t, waitTestSessions())
 	d.on(func(w http.ResponseWriter, _ *http.Request) { writeWaitOutcome(w, waitOutcomeCompleted, "done") })
