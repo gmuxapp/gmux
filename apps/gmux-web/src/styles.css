@@ -3211,7 +3211,7 @@ body {
     grid-template-columns: repeat(7, 1fr);
     grid-template-rows: repeat(2, 40px);
     grid-template-areas:
-      '.    esc  tab  wl  au  wr  end'
+      'esc  stab tab  wl  au  wr  end'
       'menu ctrl alt  al  ad  ar  send';
     /* One knob for spacing: the visual gap between keys. Hitboxes bridge it
        automatically (each .mkey-face extends half of it), so there are no
@@ -3229,6 +3229,7 @@ body {
      only the template (above / below) changes between layouts. */
   .mk-menu { grid-area: menu; }
   .mk-esc  { grid-area: esc; }
+  .mk-shift-tab { grid-area: stab; }
   .mk-tab  { grid-area: tab; }
   .mk-ctrl { grid-area: ctrl; }
   .mk-alt  { grid-area: alt; }
@@ -4033,9 +4034,9 @@ body {
 /* Single row, word-jumps dropped. */
 @media (pointer: coarse) and (min-width: 600px) {
   .mobile-bottom-bar {
-    grid-template-columns: repeat(10, 1fr);
+    grid-template-columns: repeat(11, 1fr);
     grid-template-rows: 40px;
-    grid-template-areas: 'menu esc tab ctrl alt al au ad ar send';
+    grid-template-areas: 'menu esc stab tab ctrl alt al au ad ar send';
   }
   /* Word-jumps aren't part of the single-row layout. */
   .mk-wl,
@@ -4062,8 +4063,8 @@ body {
 /* Wider still: fold the word-jumps back in, flanking the arrow cluster. */
 @media (pointer: coarse) and (min-width: 820px) {
   .mobile-bottom-bar {
-    grid-template-columns: repeat(12, 1fr);
-    grid-template-areas: 'menu esc tab ctrl alt wl al au ad ar wr send';
+    grid-template-columns: repeat(13, 1fr);
+    grid-template-areas: 'menu esc stab tab ctrl alt wl al au ad ar wr send';
   }
   .mk-wl,
   .mk-wr {

@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { applyArmedModifiers } from './keyboard'
+import { keyComboToSequence } from './config'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
@@ -548,7 +549,7 @@ function MobileTerminalBar({
 
   // The bar is a CSS grid laid out via named areas (.mk-* → grid-area), so the
   // DOM order below is only tab/reading order — the visual arrangement lives
-  // in styles.css. Narrow phones get a 7×2 grid (empty top-left corner;
+  // in styles.css. Narrow phones get a 7×2 grid (Esc sits above the hamburger;
   // scroll-end or empty top-right). Wider viewports (landscape / tablets)
   // collapse to a single row, and the widest step folds the word-jumps back
   // in. Keys never relabel; ctrl/alt only arm + highlight.
@@ -557,8 +558,9 @@ function MobileTerminalBar({
   return (
     <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
       <MenuButton variant="bar" onMenu={onMenu} />
-      <button class="mobile-bottom-action mk-esc" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
-      <button class="mobile-bottom-action mk-tab" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
+      <button class="mobile-bottom-action mk-esc" disabled={!canSend} aria-label="Escape" onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
+      <button class="mobile-bottom-action mk-shift-tab" disabled={!canSend} aria-label="Shift+Tab (BackTab)" onClick={() => sendKey(keyComboToSequence('shift+tab'))} title="Shift+Tab (BackTab)"><span class="mkey-face">⇧tab</span></button>
+      <button class="mobile-bottom-action mk-tab" disabled={!canSend} aria-label="Tab" onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
       <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
       <button class={`${armedClass(altArmed)} mk-alt`} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}><span class="mkey-face">alt</span></button>
       <button class="mobile-bottom-action mk-wl" disabled={!canSend} {...repeat(() => sendWord('\x1b[D'), WORD_REPEAT_MS)} title="Word left"><span class="mkey-face"><IconWordLeft /></span></button>

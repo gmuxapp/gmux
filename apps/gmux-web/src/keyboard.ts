@@ -298,7 +298,7 @@ export interface ArmedModifierResult {
  *    CSI-u for uppercase), alt via ESC prefix, both combined when armed
  *    together (legacy ESC + control code; CSI-u modifier bits for
  *    uppercase).
- *  - CSI cursor keys (arrows, Home, End): modifier parameter injection,
+ *  - CSI cursor keys (arrows, Home, End, BackTab): modifier parameter injection,
  *    e.g. \x1b[D + ctrl → \x1b[1;5D (the standard word-left encoding).
  *  - Enter / Tab / Esc: alt uses the universal ESC prefix. Ctrl has no
  *    legacy encoding for these (ctrl+enter is byte-identical to enter),
@@ -319,7 +319,7 @@ export function applyArmedModifiers(
 
   // CSI cursor-key sequences: inject the modifier parameter.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching real ESC (\x1b) in terminal control sequences
-  const csi = /^\x1b\[([A-DHF])$/.exec(data)
+  const csi = /^\x1b\[([A-DFHZ])$/.exec(data)
   if (csi) return { seq: `\x1b[1;${mod}${csi[1]}`, ctrlApplied: ctrl, altApplied: alt }
 
   // Enter / Tab / Esc with ctrl involved: CSI-u (no legacy encoding exists).

@@ -218,7 +218,9 @@ export function keyComboToSequence(combo: string): string {
   } else if (baseKey === 'escape' || baseKey === 'esc') {
     seq = '\x1b'
   } else if (baseKey === 'tab') {
-    seq = '\t'
+    // xterm's canonical BackTab/Shift+Tab sequence. Do not synthesize a
+    // browser Tab event: terminal applications expect ESC [ Z as one key.
+    seq = shift && !ctrl && !alt ? '\x1b[Z' : '\t'
   } else if (baseKey === 'backspace') {
     // Ctrl+Backspace: ESC DEL (readline backward-kill-word) so it deletes a
     // word rather than a char. Plain backspace: \x7f (DEL).
