@@ -456,6 +456,7 @@ const IconDown  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconLeft  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M10 7H4m0 0 3-3M4 7l3 3"/></svg>
 const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M4 7h6m0 0-3-3m3 3-3 3"/></svg>
 
+const IconBackTab  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M12 7H5m0 0 3-3M5 7l3 3"/></svg>
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
@@ -559,7 +560,7 @@ function MobileTerminalBar({
     <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
       <MenuButton variant="bar" onMenu={onMenu} />
       <button class="mobile-bottom-action mk-esc" disabled={!canSend} aria-label="Escape" onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
-      <button class="mobile-bottom-action mk-shift-tab" disabled={!canSend} aria-label="Shift+Tab (BackTab)" onClick={() => sendKey(keyComboToSequence('shift+tab'))} title="Shift+Tab (BackTab)"><span class="mkey-face">⇧tab</span></button>
+      <button class="mobile-bottom-action mk-shift-tab" disabled={!canSend} aria-label="Shift+Tab (BackTab)" onClick={() => sendKey(keyComboToSequence('shift+tab'))} title="Shift+Tab (BackTab)"><span class="mkey-face"><IconBackTab /></span></button>
       <button class="mobile-bottom-action mk-tab" disabled={!canSend} aria-label="Tab" onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
       <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
       <button class={`${armedClass(altArmed)} mk-alt`} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}><span class="mkey-face">alt</span></button>
