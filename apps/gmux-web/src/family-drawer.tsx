@@ -102,7 +102,10 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, pinned, now, 
             aria-expanded={summary.expanded}
             onClick={() => onToggle(summary.key)}
           >
-            <span class="family-more-chevron" aria-hidden="true">{summary.expanded ? '▾' : '▸'}</span>
+            {/* The summary sits below the rows it controls, so collapsing
+              * takes them back upwards: `▴`, not the `▾` that would point
+              * at the empty space where nothing is about to happen. */}
+            <span class="family-more-chevron" aria-hidden="true">{summary.expanded ? '▴' : '▸'}</span>
             {summary.label}
           </button>
         </li>
