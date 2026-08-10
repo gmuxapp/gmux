@@ -184,4 +184,46 @@ test.describe('the family line and the panel tally', () => {
     expect(segments.some(s => /running/.test(s.text ?? '')), 'a running process in the fixtures').toBe(true)
     expect(segments.some(s => /waiting|active|error/.test(s.text ?? ''))).toBe(true)
   })
+
+  test('each tally filters the tree to its own state, and back', async ({ page }) => {
+    // Standing on an `active` member, so the `error` filter excludes the
+    // very row you're on — the case that has to keep working.
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    const counts = page.locator('.family-counts')
+    await counts.waitFor()
+    const rows = page.locator('.family-row')
+    const titles = () => rows.evaluateAll(nodes =>
+      nodes.map(n => n.querySelector('.family-row-title')?.textContent ?? ''))
+    const tally = (label: string) => counts.locator('.family-count').filter({ hasText: label })
+
+    const unfiltered = await titles()
+    expect(unfiltered.length).toBeGreaterThan(4)
+
+    await tally('error').click()
+    await expect(tally('error')).toHaveAttribute('aria-pressed', 'true')
+    const errored = await titles()
+    expect(errored.length).toBeLessThan(unfiltered.length)
+    expect(errored.some(t => t.startsWith('investigate a really long descendant'))).toBe(true)
+    // Everything still on screen is either the error, an ancestor that
+    // reaches it, or you.
+    await expect(page.locator('.family-row.selected')).toHaveCount(1)
+    await expect(page.locator('.family-row[aria-current="page"]')).toBeVisible()
+
+    // A filter for a state nothing on your spine is in still keeps you.
+    await tally('running').click()
+    await expect(tally('error')).toHaveAttribute('aria-pressed', 'false')
+    const running = await titles()
+    expect(running.some(t => t.includes('pnpm test'))).toBe(true)
+    expect(running.some(t => t.startsWith('investigate a really long descendant'))).toBe(false)
+    await expect(page.locator('.family-row[aria-current="page"]')).toBeVisible()
+
+    // Pressing the live filter clears it; so does `total`.
+    await tally('running').click()
+    expect(await titles()).toEqual(unfiltered)
+    await tally('error').click()
+    expect((await titles()).length).toBeLessThan(unfiltered.length)
+    await tally('total').click()
+    expect(await titles()).toEqual(unfiltered)
+  })
 })

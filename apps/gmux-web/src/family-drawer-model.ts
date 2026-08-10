@@ -1,4 +1,4 @@
-import { isProcessSession, type FamilyNode } from './family'
+import { familyStateOf, isProcessSession, type FamilyNode, type FamilyState } from './family'
 
 /** When a member last said anything, as a timestamp. */
 function activityOf(node: FamilyNode): number {
@@ -58,6 +58,29 @@ export interface LevelSplit {
   summary: { key: string; expanded: boolean; label: string } | null
 }
 
+export interface FamilyView {
+  /** Rows to draw. */
+  readonly visible: ReadonlySet<string>
+  /** Rows that were allowed to compete for the budget — everyone when
+   * nothing is filtered, and only the matches (plus the structure that
+   * reaches them) when something is. `+N more` counts against this, so
+   * a filter's folds never offer to expand what the filter excluded. */
+  readonly universe: ReadonlySet<string>
+}
+
+export interface FamilyViewOptions {
+  /** Your own spine, root to selection: never folded, never filtered
+   * out. You are standing on it, and a map that omits where you are is
+   * a map of somewhere else. */
+  pinned?: ReadonlySet<string>
+  /** Show only members in this state, or everyone. */
+  filter?: FamilyState | null
+  budget?: number
+  floor?: number
+  staleAfterMs?: number
+  processStaleAfterMs?: number
+}
+
 /** Choose the rows worth the panel's budget: the most recent members of
  * the family, plus whatever structure it takes to reach them.
  *
@@ -86,12 +109,16 @@ export interface LevelSplit {
  * that stood in for it. */
 export function visibleFamilyRows(
   tree: FamilyNode,
-  pinned: ReadonlySet<string> = new Set(),
-  budget: number = FAMILY_ROW_BUDGET,
-  staleAfterMs: number = FAMILY_STALE_AFTER_MS,
-  floor: number = FAMILY_ROW_FLOOR,
-  processStaleAfterMs: number = FAMILY_PROCESS_STALE_AFTER_MS,
-): ReadonlySet<string> {
+  options: FamilyViewOptions = {},
+): FamilyView {
+  const {
+    pinned = new Set<string>(),
+    filter = null,
+    budget = FAMILY_ROW_BUDGET,
+    floor = FAMILY_ROW_FLOOR,
+    staleAfterMs = FAMILY_STALE_AFTER_MS,
+    processStaleAfterMs = FAMILY_PROCESS_STALE_AFTER_MS,
+  } = options
   const parentOf = new Map<string, string>()
   const nodeById = new Map<string, FamilyNode>()
   const flat: FamilyNode[] = []
@@ -114,6 +141,27 @@ export function visibleFamilyRows(
   const familyNewest = subtreeNewest.get(tree.session.id) ?? 0
   const staleBefore = familyNewest - staleAfterMs
   const processStaleBefore = familyNewest - processStaleAfterMs
+
+  // A filter answers a question the panel's own triage was guessing at,
+  // so the guessing stops: asked for the errors, you get every error,
+  // stale or not, however many commands one agent ran. What survives is
+  // the line budget, because a filter can still match three hundred
+  // members.
+  //
+  // Structure comes along: an unmatched ancestor is how a match is
+  // reachable, and a row you cannot see the parent of is a claim about
+  // the family that the panel can't back up.
+  const universe = new Set<string>([tree.session.id, ...pinned])
+  if (filter) {
+    for (const node of flat) {
+      if (familyStateOf(node.session) !== filter) continue
+      for (let id: string | undefined = node.session.id; id && !universe.has(id); id = parentOf.get(id)) {
+        universe.add(id)
+      }
+    }
+  } else {
+    for (const node of flat) universe.add(node.session.id)
+  }
 
   const visible = new Set<string>()
   const shownKids = new Map<string, number>()
@@ -171,7 +219,7 @@ export function visibleFamilyRows(
   const fill = (ceiling: number, triage: boolean) => {
     for (const node of byRecency) {
       const id = node.session.id
-      if (visible.has(id)) continue
+      if (visible.has(id) || !universe.has(id)) continue
       // Stale branches fold whole rather than spending the budget on the
       // tail of finished work. They stay reachable behind `+N more`:
       // this is the panel declining to volunteer them, not hiding them.
@@ -203,10 +251,17 @@ export function visibleFamilyRows(
     }
   }
 
-  fill(budget, true)
+  // Triage — staleness and one-command-per-agent — is the panel guessing
+  // what you want to see. A filter is you saying it, so triage turns off
+  // wholesale: asked for the errors, you get the two-day-old one on a
+  // branch nothing else has touched, not a fold where it should be.
+  fill(budget, !filter)
   // Then top the panel back up to the floor with whatever is left, most
   // recent first — a family that finished yesterday still gets a map.
-  if (lines < floor) fill(Math.min(floor, budget), false)
+  // Not while filtering: there the panel was asked a question, and
+  // padding the answer with rows that don't match is answering a
+  // different one.
+  if (!filter && lines < floor) fill(Math.min(floor, budget), false)
 
   // Finally, draw every row that costs nothing: the last hidden leaf of
   // a level, whose summary occupies exactly the line the row would. No
@@ -218,15 +273,16 @@ export function visibleFamilyRows(
     changed = false
     for (const node of byRecency) {
       const id = node.session.id
-      if (visible.has(id) || node.children.length > 0) continue
+      if (visible.has(id) || node.children.length > 0 || !universe.has(id)) continue
       const parent = parentOf.get(id)
       if (parent === undefined || !visible.has(parent)) continue
-      if ((shownKids.get(parent) ?? 0) + 1 !== (nodeById.get(parent)?.children.length ?? 0)) continue
+      const eligibleKids = nodeById.get(parent)?.children.filter(c => universe.has(c.session.id)).length ?? 0
+      if ((shownKids.get(parent) ?? 0) + 1 !== eligibleKids) continue
       admit(id)
       changed = true
     }
   }
-  return visible
+  return { visible, universe }
 }
 
 /** Apply the budget to one children level: what the panel renders.
@@ -239,15 +295,20 @@ export function splitLevel(
   nodes: readonly FamilyNode[],
   parentId: string,
   expanded: ReadonlySet<string>,
-  visible: ReadonlySet<string>,
+  view: FamilyView,
 ): LevelSplit {
+  // `+N more` and `show fewer` both count against the universe, not the
+  // level: under a filter, the rows it excluded were never on offer, so
+  // counting them would advertise an expansion that contradicts what
+  // was asked for.
+  const eligible = nodes.filter(node => view.universe.has(node.session.id))
   if (expanded.has(parentId)) {
-    return { shown: nodes, summary: { key: parentId, expanded: true, label: 'show fewer' } }
+    return { shown: eligible, summary: { key: parentId, expanded: true, label: 'show fewer' } }
   }
-  const shown = nodes.filter(node => visible.has(node.session.id))
-  if (shown.length === nodes.length) return { shown, summary: null }
+  const shown = eligible.filter(node => view.visible.has(node.session.id))
+  if (shown.length === eligible.length) return { shown, summary: null }
   return {
     shown,
-    summary: { key: parentId, expanded: false, label: `+${nodes.length - shown.length} more` },
+    summary: { key: parentId, expanded: false, label: `+${eligible.length - shown.length} more` },
   }
 }

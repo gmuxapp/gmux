@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { familyCounts, isProcessSession, projectFamily, type FamilyNode } from './family'
-import { splitLevel, visibleFamilyRows } from './family-drawer-model'
+import {
+  familyCounts, isProcessSession, projectFamily,
+  type FamilyNode, type FamilyState,
+} from './family'
+import { splitLevel, visibleFamilyRows, type FamilyView } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import { activityMap, markSessionRead, projects, sessions, sessionDotState, tabHref } from './store'
@@ -11,13 +14,13 @@ function hrefFor(session: Session): string | undefined {
   return path ? tabHref(path) : undefined
 }
 
-function FamilyRow({ node, selectedId, depth, expanded, visible, now, onToggle }: {
+function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
   node: FamilyNode
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
-  /** The rows the panel's budget chose to draw. */
-  visible: ReadonlySet<string>
+  /** What the panel's budget chose to draw, and what it chose from. */
+  view: FamilyView
   /** Render-time clock, passed down so every row in one paint agrees. */
   now: number
   onToggle: (key: string) => void
@@ -56,7 +59,7 @@ function FamilyRow({ node, selectedId, depth, expanded, visible, now, onToggle }
             selectedId={selectedId}
             depth={depth + 1}
             expanded={expanded}
-            visible={visible}
+            view={view}
             now={now}
             onToggle={onToggle}
           />
@@ -68,17 +71,17 @@ function FamilyRow({ node, selectedId, depth, expanded, visible, now, onToggle }
 
 /** One children level: capped rows plus a two-state summary row
  * (`+N more` / `show fewer`) keyed per parent. */
-function LevelRows({ nodes, parentId, selectedId, depth, expanded, visible, now, onToggle }: {
+function LevelRows({ nodes, parentId, selectedId, depth, expanded, view, now, onToggle }: {
   nodes: readonly FamilyNode[]
   parentId: string
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
-  visible: ReadonlySet<string>
+  view: FamilyView
   now: number
   onToggle: (key: string) => void
 }) {
-  const { shown, summary } = splitLevel(nodes, parentId, expanded, visible)
+  const { shown, summary } = splitLevel(nodes, parentId, expanded, view)
   return (
     <>
       {shown.map(node => (
@@ -88,7 +91,7 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, visible, now,
           selectedId={selectedId}
           depth={depth}
           expanded={expanded}
-          visible={visible}
+          view={view}
           now={now}
           onToggle={onToggle}
         />
@@ -141,10 +144,14 @@ function unreadMembers(tree: FamilyNode): Session[] {
  * processes and "3 active" reads very differently depending on whether
  * that means subagents thinking or shells running. `total` gets no
  * glyph: it isn't a state. */
-function CountsLine({ tree }: { tree: FamilyNode }) {
+function CountsLine({ tree, filter, onFilter }: {
+  tree: FamilyNode
+  filter: FamilyState | null
+  onFilter: (state: FamilyState | null) => void
+}) {
   const counts = familyCounts([tree])
   const segments: {
-    key: string
+    key: FamilyState | 'total'
     dot?: string
     process?: boolean
     count: number
@@ -168,19 +175,30 @@ function CountsLine({ tree }: { tree: FamilyNode }) {
   if (counts.unread > 0) {
     segments.push({ key: 'waiting', dot: 'unread', count: counts.unread, label: 'waiting', cls: 'attention' })
   }
+  // `total` is the way back: it's already the count of everyone, so it
+  // doubles as "no filter" rather than needing a clear button of its own.
   segments.push({ key: 'total', count: counts.total, label: 'total' })
   return (
     <div class="family-counts">
-      {segments.map(segment => (
-        <span
-          key={segment.key}
-          class={`family-count${segment.cls ? ` family-count-${segment.cls}` : ''}`}
-        >
-          {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
-          {segment.process && <span class="family-row-proc working" aria-hidden="true">$</span>}
-          {segment.count} {segment.label}
-        </span>
-      ))}
+      {segments.map(segment => {
+        const state = segment.key === 'total' ? null : segment.key
+        const active = filter === state
+        return (
+          <button
+            key={segment.key}
+            type="button"
+            // A tally you can press is a filter; pressing the one that's
+            // on turns it off, so the panel never traps you in a view.
+            class={`family-count${segment.cls ? ` family-count-${segment.cls}` : ''}${active ? ' active' : ''}`}
+            aria-pressed={active}
+            onClick={() => onFilter(active ? null : state)}
+          >
+            {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
+            {segment.process && <span class="family-row-proc working" aria-hidden="true">$</span>}
+            {segment.count} {segment.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -201,6 +219,9 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  // Per-open, like the expansion state beside it: a filter is a way of
+  // looking at the family right now, not a preference about it.
+  const [filter, setFilter] = useState<FamilyState | null>(null)
   const toggle = (key: string) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -260,14 +281,14 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   const projection = projectFamily(selected, sessions.value)
   // Your own path, root to selection: the budget may fold anything but this.
   const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
-  const visible = visibleFamilyRows(projection.tree, pinned)
+  const view = visibleFamilyRows(projection.tree, { pinned, filter })
   const outstanding = unreadMembers(projection.tree)
   // One clock for the whole paint, so sibling ages can't disagree.
   const now = Date.now()
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
-        <CountsLine tree={projection.tree} />
+        <CountsLine tree={projection.tree} filter={filter} onFilter={setFilter} />
         {outstanding.length > 0 && (
           <button
             type="button"
@@ -289,7 +310,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
             selectedId={selected.id}
             depth={0}
             expanded={expanded}
-            visible={visible}
+            view={view}
             now={now}
             onToggle={toggle}
           />

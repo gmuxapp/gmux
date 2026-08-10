@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   FAMILY_PROCESS_STALE_AFTER_MS, FAMILY_ROW_BUDGET, FAMILY_ROW_FLOOR, FAMILY_STALE_AFTER_MS,
-  splitLevel, visibleFamilyRows,
+  splitLevel, visibleFamilyRows, type FamilyView,
 } from './family-drawer-model'
 import { projectFamily, type FamilyNode } from './family'
 import { makeSession } from './test-helpers'
+import type { Session } from './types'
 
 const at = (minute: number) => `2026-08-04T10:${String(minute).padStart(2, '0')}:00Z`
 const root = makeSession({
@@ -24,11 +25,11 @@ function rootChildren(count: number) {
 /** Every line the panel would draw, walking the budget the way the
  * component does. Summary rows are lines too — that is the whole point
  * of the budget — so they are counted here as `+N more`. */
-function renderedLines(tree: FamilyNode, visible: ReadonlySet<string>): string[] {
+function renderedLines(tree: FamilyNode, view: FamilyView): string[] {
   const out: string[] = []
   const walk = (node: FamilyNode) => {
     out.push(node.session.id)
-    const { shown, summary } = splitLevel(node.children, node.session.id, new Set(), visible)
+    const { shown, summary } = splitLevel(node.children, node.session.id, new Set(), view)
     for (const kid of shown) walk(kid)
     if (summary) out.push(`${node.session.id}:${summary.label}`)
   }
@@ -39,17 +40,17 @@ function renderedLines(tree: FamilyNode, visible: ReadonlySet<string>): string[]
 describe('the panel draws at most a screenful, whatever the family looks like', () => {
   it('shows a small family whole, with no summary rows', () => {
     const tree = rootChildren(6)
-    const visible = visibleFamilyRows(tree)
-    expect(renderedLines(tree, visible)).toHaveLength(7)
-    expect(splitLevel(tree.children, 'root', new Set(), visible).summary).toBeNull()
+    const view = visibleFamilyRows(tree)
+    expect(renderedLines(tree, view)).toHaveLength(7)
+    expect(splitLevel(tree.children, 'root', new Set(), view).summary).toBeNull()
   })
 
   it('bounds a wide family and folds the rest into "+N more"', () => {
     const tree = rootChildren(40)
-    const visible = visibleFamilyRows(tree)
-    const rows = renderedLines(tree, visible)
+    const view = visibleFamilyRows(tree)
+    const rows = renderedLines(tree, view)
     expect(rows).toHaveLength(FAMILY_ROW_BUDGET)
-    const { shown, summary } = splitLevel(tree.children, 'root', new Set(), visible)
+    const { shown, summary } = splitLevel(tree.children, 'root', new Set(), view)
     expect(summary).toEqual({ key: 'root', expanded: false, label: `+${40 - shown.length} more` })
   })
 
@@ -82,7 +83,7 @@ describe('the panel draws at most a screenful, whatever the family looks like', 
       child('stale', 5), child('stale-kid', 4, 'stale'),
     ]
     const tree = projectFamily(root, snapshot).tree
-    const rows = renderedLines(tree, visibleFamilyRows(tree, new Set(), 4))
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { budget: 4 }))
     expect(rows).toContain('busy')
     expect(rows).toContain('busy-kid')
     // The stale branch folds whole, which a per-level cap could never
@@ -110,7 +111,7 @@ describe('the row you are on is never behind the fold', () => {
     })
     const projection = projectFamily(selected, [root, ...kids, selected])
     const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
-    const rows = renderedLines(projection.tree, visibleFamilyRows(projection.tree, pinned))
+    const rows = renderedLines(projection.tree, visibleFamilyRows(projection.tree, { pinned }))
     expect(rows).toContain(quietParent.id)
     expect(rows).toContain('selected')
     // Without the pin, the spine — and with it the selected row — goes.
@@ -127,8 +128,8 @@ describe('the row you are on is never behind the fold', () => {
     })
     const projection = projectFamily(selected, [root, ...kids, selected])
     const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
-    const visible = visibleFamilyRows(projection.tree, pinned)
-    expect(renderedLines(projection.tree, visible)).toHaveLength(FAMILY_ROW_BUDGET)
+    const view = visibleFamilyRows(projection.tree, { pinned })
+    expect(renderedLines(projection.tree, view)).toHaveLength(FAMILY_ROW_BUDGET)
   })
 })
 
@@ -136,8 +137,8 @@ describe('level rows', () => {
   it('keeps recency order rather than floating kept rows to the top', () => {
     const tree = rootChildren(40)
     const nodes = tree.children
-    const visible = visibleFamilyRows(tree, new Set([nodes[nodes.length - 1].session.id]))
-    const { shown } = splitLevel(nodes, 'root', new Set(), visible)
+    const view = visibleFamilyRows(tree, { pinned: new Set([nodes[nodes.length - 1].session.id]) })
+    const { shown } = splitLevel(nodes, 'root', new Set(), view)
     const order = shown.map(n => nodes.findIndex(x => x.session.id === n.session.id))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(shown[shown.length - 1].session.id).toBe(nodes[nodes.length - 1].session.id)
@@ -145,12 +146,12 @@ describe('level rows', () => {
 
   it('expands two-state per parent: everything plus "show fewer"', () => {
     const tree = rootChildren(40)
-    const visible = visibleFamilyRows(tree)
-    const { shown, summary } = splitLevel(tree.children, 'root', new Set(['root']), visible)
+    const view = visibleFamilyRows(tree)
+    const { shown, summary } = splitLevel(tree.children, 'root', new Set(['root']), view)
     expect(shown).toHaveLength(40)
     expect(summary).toEqual({ key: 'root', expanded: true, label: 'show fewer' })
     // Another parent's expansion state does not leak into this level.
-    expect(splitLevel(tree.children, 'root', new Set(['other-parent']), visible).shown.length)
+    expect(splitLevel(tree.children, 'root', new Set(['other-parent']), view).shown.length)
       .toBeLessThan(40)
   })
 })
@@ -200,14 +201,14 @@ describe('finished work folds itself away', () => {
     const snapshot = [day(0, 'root'), day(40, 'old', 'root'), day(41, 'older', 'old')]
     const projection = projectFamily(snapshot[2], snapshot)
     const pinned = new Set([...projection.ancestors.map(a => a.id), 'older'])
-    const rows = renderedLines(projection.tree, visibleFamilyRows(projection.tree, pinned))
+    const rows = renderedLines(projection.tree, visibleFamilyRows(projection.tree, { pinned }))
     expect(rows).toEqual(expect.arrayContaining(['old', 'older']))
   })
 
   it('folds nothing when the window is wider than the family', () => {
     const snapshot = [day(0, 'root'), day(5, 'a', 'root'), day(20, 'b', 'root')]
     const tree = projectFamily(snapshot[0], snapshot).tree
-    const wide = visibleFamilyRows(tree, new Set(), FAMILY_ROW_BUDGET, 48 * 3600_000)
+    const wide = visibleFamilyRows(tree, { staleAfterMs: 48 * 3600_000 })
     expect(renderedLines(tree, wide)).toEqual(expect.arrayContaining(['a', 'b']))
     // …and the default window is narrower than that, or the constant is
     // doing nothing.
@@ -245,7 +246,7 @@ describe('the floor', () => {
   it('never lifts the panel past the budget', () => {
     const kids = Array.from({ length: 60 }, (_, i) => hoursAgo(10 + i * 0.01, `k-${i}`, 'root'))
     const tree = projectFamily(kids[0], [hoursAgo(0, 'root'), ...kids]).tree
-    const rows = renderedLines(tree, visibleFamilyRows(tree, new Set(), 5, FAMILY_STALE_AFTER_MS, 40))
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { budget: 5, floor: 40 }))
     expect(rows.length).toBeLessThanOrEqual(5)
   })
 })
@@ -353,5 +354,106 @@ describe('a summary that saves no space is not drawn', () => {
     const rows = renderedLines(tree, visibleFamilyRows(tree))
     expect(rows).toContain('root:+1 more')
     expect(rows).not.toContain('old')
+  })
+})
+
+describe('filtering by a state the tally counts', () => {
+  const ago = (minutes: number, id: string, parent: string | undefined, extra: Partial<Session> = {}) =>
+    makeSession({
+      id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true,
+      created_at: '2026-08-04T00:00:00Z',
+      last_output_at: new Date(Date.parse('2026-08-04T20:00:00Z') - minutes * 60_000).toISOString(),
+      ...extra,
+    })
+  const errored = { status: { active: true, error: true } } as const
+  const waiting = { unread: true } as const
+
+  /** A family with something of each state, plus filler to make the
+   * budget and the staleness rules bite. */
+  const family = () => {
+    const noise = Array.from({ length: 20 }, (_, i) => ago(1 + i * 0.1, `noise-${i}`, 'root'))
+    return [
+      ago(0, 'root', undefined),
+      ...noise,
+      ago(2, 'boom', 'root', errored),
+      // Old enough that the panel's own triage would fold it away — and
+      // buried under an equally stale parent, so the free-leaf pass
+      // can't rescue it by accident: only the filter itself reaches it.
+      ago(48 * 60, 'old-branch', 'root'),
+      ago(48 * 60, 'ancient-boom', 'old-branch', errored),
+      ago(3, 'quiet', 'root'),
+      ago(4, 'deep-boom', 'quiet', errored),
+      ago(5, 'said-something', 'root', waiting),
+    ]
+  }
+
+  it('shows every member in the state, and nothing else that has one', () => {
+    const snapshot = family()
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: 'error' }))
+    expect(rows).toEqual(expect.arrayContaining(['boom', 'deep-boom', 'ancient-boom']))
+    expect(rows).not.toContain('said-something')
+    expect(rows).not.toContain('noise-0')
+    // The filter counts as the triage, so staleness stops guessing:
+    // asked for the errors, you get the two-day-old one too.
+  })
+
+  it('keeps the ancestors that reach a match, and says so', () => {
+    // `quiet` is in no state at all; it is how `deep-boom` is reachable.
+    const snapshot = family()
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: 'error' }))
+    expect(rows).toContain('quiet')
+    expect(rows.indexOf('quiet')).toBeLessThan(rows.indexOf('deep-boom'))
+  })
+
+  it('keeps the row you are standing on, whatever the filter says', () => {
+    const snapshot = family()
+    const projection = projectFamily(snapshot.find(s => s.id === 'said-something')!, snapshot)
+    const pinned = new Set([...projection.ancestors.map(a => a.id), 'said-something'])
+    const rows = renderedLines(projection.tree, visibleFamilyRows(projection.tree, {
+      pinned, filter: 'error',
+    }))
+    expect(rows).toContain('said-something')
+    expect(rows).toContain('boom')
+  })
+
+  it('counts only matches in `+N more`, never the rows it excluded', () => {
+    // Twenty non-matching siblings are not "more errors" — offering to
+    // expand them would contradict the question the filter asked.
+    const snapshot = family()
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const view = visibleFamilyRows(tree, { filter: 'error' })
+    expect(splitLevel(tree.children, 'root', new Set(), view).summary).toBeNull()
+    const rows = renderedLines(tree, view)
+    expect(rows.some(r => r.includes('more'))).toBe(false)
+  })
+
+  it('still obeys the line budget when a filter matches half the family', () => {
+    const many = Array.from({ length: 60 }, (_, i) => ago(1 + i * 0.01, `boom-${i}`, 'root', errored))
+    const snapshot = [ago(0, 'root', undefined), ...many]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: 'error' }))
+    expect(rows.length).toBeLessThanOrEqual(FAMILY_ROW_BUDGET)
+    expect(rows.filter(r => /^root:\+\d+ more$/.test(r))).toHaveLength(1)
+  })
+
+  it('shows an agent every command it is running, once you ask for commands', () => {
+    // The one-command-per-agent rule is triage too, and the filter is
+    // the question triage was guessing at.
+    const shells = Array.from({ length: 5 }, (_, i) => ago(1 + i, `sh-${i}`, 'agent', {
+      semantic_agent: undefined, adapter: 'shell', status: { active: true },
+    }))
+    const snapshot = [ago(0, 'root', undefined), ago(0.5, 'agent', 'root'), ...shells]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: 'running' }))
+    for (const shell of shells) expect(rows).toContain(shell.id)
+  })
+
+  it('shows the whole family again with no filter', () => {
+    const snapshot = family()
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: null }))
+    expect(rows).toContain('noise-0')
   })
 })

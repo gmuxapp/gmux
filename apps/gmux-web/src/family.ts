@@ -315,19 +315,34 @@ export interface FamilyCounts {
   total: number
 }
 
+/** The one state a member is counted under — and, since the panel's
+ * tally doubles as its filter, the one state it can be filtered by.
+ *
+ * The tally and the filter must be the same rule or the panel lies:
+ * pressing `3 error` and getting four rows is worse than not being able
+ * to press it. So both derive from here, and the precedence is the
+ * dot's own: error, then a running turn, then waiting on you. */
+export type FamilyState = 'error' | 'active' | 'running' | 'waiting'
+
+export function familyStateOf(session: Session): FamilyState | null {
+  if (session.alive && session.status?.error) return 'error'
+  if (session.alive && session.status?.active) return isProcessSession(session) ? 'running' : 'active'
+  if (session.unread) return 'waiting'
+  return null
+}
+
 export function familyCounts(trees: readonly FamilyNode[]): FamilyCounts {
   const counts: FamilyCounts = {
     error: 0, workingAgents: 0, workingProcesses: 0, unread: 0, total: 0,
   }
   const visit = (node: FamilyNode) => {
-    const s = node.session
     counts.total++
-    if (s.alive && s.status?.error) counts.error++
-    else if (s.alive && s.status?.active) {
-      if (isProcessSession(s)) counts.workingProcesses++
-      else counts.workingAgents++
+    switch (familyStateOf(node.session)) {
+      case 'error': counts.error++; break
+      case 'active': counts.workingAgents++; break
+      case 'running': counts.workingProcesses++; break
+      case 'waiting': counts.unread++; break
     }
-    else if (s.unread) counts.unread++
     for (const child of node.children) visit(child)
   }
   for (const tree of trees) visit(tree)

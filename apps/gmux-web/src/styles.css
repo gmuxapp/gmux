@@ -2397,16 +2397,34 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 2px 6px;
   font: 400 12px/1.4 'Source Sans 3', sans-serif;
   color: var(--text-muted);
 }
+/* Each tally is also the filter for its own state, so it looks like
+   something you can press without shouting: no chrome until you point
+   at it, a filled pill once it's on. */
 .family-count {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 2px 7px;
+  margin: -2px 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
+.family-count:hover { border-color: var(--border); }
+.family-count.active {
+  background: var(--bg-selected);
+  border-color: var(--border);
+  color: var(--text);
+}
+.family-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .family-count-attention { color: var(--unread); font-weight: 600; }
 .family-tree,
 .family-tree ul { list-style: none; margin: 0; padding: 0; }
