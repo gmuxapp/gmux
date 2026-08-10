@@ -1,4 +1,4 @@
-import type { FamilyNode } from './family'
+import { isProcessSession, type FamilyNode } from './family'
 
 /** When a member last said anything, as a timestamp. */
 function activityOf(node: FamilyNode): number {
@@ -43,6 +43,15 @@ export const FAMILY_ROW_FLOOR = 8
  * you had running before lunch, short enough to fold yesterday's. */
 export const FAMILY_STALE_AFTER_MS = 6 * 60 * 60 * 1000
 
+/** The same, for a process rather than an agent.
+ *
+ * A process is a command an agent ran, and a command is only interesting
+ * while it is the thing the agent is doing. An hour on from its last
+ * output it is a line in a log, and the panel is not a log — which is
+ * why processes also get only one row per agent (see `visibleFamilyRows`)
+ * rather than one each. */
+export const FAMILY_PROCESS_STALE_AFTER_MS = 60 * 60 * 1000
+
 export interface LevelSplit {
   shown: readonly FamilyNode[]
   /** Present iff the level has rows the budget folded away. */
@@ -81,6 +90,7 @@ export function visibleFamilyRows(
   budget: number = FAMILY_ROW_BUDGET,
   staleAfterMs: number = FAMILY_STALE_AFTER_MS,
   floor: number = FAMILY_ROW_FLOOR,
+  processStaleAfterMs: number = FAMILY_PROCESS_STALE_AFTER_MS,
 ): ReadonlySet<string> {
   const parentOf = new Map<string, string>()
   const nodeById = new Map<string, FamilyNode>()
@@ -103,9 +113,13 @@ export function visibleFamilyRows(
   walk(tree)
   const familyNewest = subtreeNewest.get(tree.session.id) ?? 0
   const staleBefore = familyNewest - staleAfterMs
+  const processStaleBefore = familyNewest - processStaleAfterMs
 
   const visible = new Set<string>()
   const shownKids = new Map<string, number>()
+  /** Agents already showing a command, so the rest of theirs stay in the
+   * fold rather than pushing other branches off the panel. */
+  const commandShown = new Set<string>()
   /** Lines drawn so far: visible rows plus one per folded level. */
   let lines = 0
   const folds = (id: string) =>
@@ -122,6 +136,9 @@ export function visibleFamilyRows(
       lines -= before - folds(parent)
     }
     visible.add(id)
+    if (isProcessSession(nodeById.get(id)?.session ?? tree.session) && parent !== undefined) {
+      commandShown.add(parent)
+    }
     lines += 1 + folds(id)
   }
   /** Exact inverse of `admit`, in reverse order of admission. */
@@ -147,10 +164,10 @@ export function visibleFamilyRows(
   const byRecency = [...flat].sort((a, b) =>
     activityOf(b) - activityOf(a) || a.session.id.localeCompare(b.session.id))
 
-  /** `triage` is the ordinary pass, where staleness applies. The top-up
-   * that follows drops it: it runs only when the panel would otherwise
-   * be emptier than a glance, and at that point a finished branch beats
-   * a blank panel. */
+  /** `triage` is the ordinary pass: staleness applies, and an agent
+   * shows one command. The top-up that follows drops both rules — it
+   * runs only when the panel would otherwise be emptier than a glance,
+   * and at that point a stale command beats a blank panel. */
   const fill = (ceiling: number, triage: boolean) => {
     for (const node of byRecency) {
       const id = node.session.id
@@ -159,6 +176,16 @@ export function visibleFamilyRows(
       // tail of finished work. They stay reachable behind `+N more`:
       // this is the panel declining to volunteer them, not hiding them.
       if (triage && (subtreeNewest.get(id) ?? 0) < staleBefore) continue
+      // An agent's commands are a log, and the panel shows the top of
+      // it: the one it is running now, while it is still running it.
+      // The rest stay in the level's fold, one click away, instead of
+      // spending a whole panel on one agent's shell history — the shape
+      // of a family that is 248 processes to 8 agents.
+      if (triage && isProcessSession(node.session)) {
+        const parent = parentOf.get(id)
+        if (parent !== undefined && commandShown.has(parent)) continue
+        if ((subtreeNewest.get(id) ?? 0) < processStaleBefore) continue
+      }
       // A row costs its own line plus every ancestor still missing: an
       // unreachable row would be a lie about the shape of the family.
       const spine: string[] = []
@@ -180,6 +207,25 @@ export function visibleFamilyRows(
   // Then top the panel back up to the floor with whatever is left, most
   // recent first — a family that finished yesterday still gets a map.
   if (lines < floor) fill(Math.min(floor, budget), false)
+
+  // Finally, draw every row that costs nothing: the last hidden leaf of
+  // a level, whose summary occupies exactly the line the row would. No
+  // rule above is worth a `+1 more` that saves no space and names
+  // nobody, and admitting one can free the next, so this runs to a
+  // fixed point. Line count cannot rise here — each of these retires
+  // the summary it replaces.
+  for (let changed = true; changed;) {
+    changed = false
+    for (const node of byRecency) {
+      const id = node.session.id
+      if (visible.has(id) || node.children.length > 0) continue
+      const parent = parentOf.get(id)
+      if (parent === undefined || !visible.has(parent)) continue
+      if ((shownKids.get(parent) ?? 0) + 1 !== (nodeById.get(parent)?.children.length ?? 0)) continue
+      admit(id)
+      changed = true
+    }
+  }
   return visible
 }
 

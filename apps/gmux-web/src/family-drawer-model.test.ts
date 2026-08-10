@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  FAMILY_ROW_BUDGET, FAMILY_ROW_FLOOR, FAMILY_STALE_AFTER_MS, splitLevel, visibleFamilyRows,
+  FAMILY_PROCESS_STALE_AFTER_MS, FAMILY_ROW_BUDGET, FAMILY_ROW_FLOOR, FAMILY_STALE_AFTER_MS,
+  splitLevel, visibleFamilyRows,
 } from './family-drawer-model'
 import { projectFamily, type FamilyNode } from './family'
 import { makeSession } from './test-helpers'
@@ -166,12 +167,14 @@ describe('finished work folds itself away', () => {
     // for being in the way. Enough live siblings to clear the floor, so
     // the fold is staleness talking and not the top-up.
     const live = Array.from({ length: 10 }, (_, i) => day(0.1 * i, `fresh-${i}`, 'root'))
-    const snapshot = [day(0, 'root'), ...live, day(20, 'yesterday', 'root')]
+    // Two of them: folding one lone leaf would save no line, so the
+    // panel would rightly draw it instead of counting it.
+    const snapshot = [day(0, 'root'), ...live, day(20, 'yesterday', 'root'), day(21, 'earlier', 'root')]
     const tree = projectFamily(snapshot[0], snapshot).tree
     const rows = renderedLines(tree, visibleFamilyRows(tree))
     expect(rows).toContain('fresh-0')
     expect(rows).not.toContain('yesterday')
-    expect(rows).toContain('root:+1 more')
+    expect(rows).toContain('root:+2 more')
   })
 
   it('keeps an old family whole, because it is only old by the clock', () => {
@@ -244,5 +247,111 @@ describe('the floor', () => {
     const tree = projectFamily(kids[0], [hoursAgo(0, 'root'), ...kids]).tree
     const rows = renderedLines(tree, visibleFamilyRows(tree, new Set(), 5, FAMILY_STALE_AFTER_MS, 40))
     expect(rows.length).toBeLessThanOrEqual(5)
+  })
+})
+
+describe("an agent's commands are a log, not a level", () => {
+  const ago = (minutes: number, id: string, parent: string | undefined, process: boolean) => makeSession({
+    id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: !process,
+    created_at: '2026-08-04T00:00:00Z',
+    last_output_at: new Date(Date.parse('2026-08-04T20:00:00Z') - minutes * 60_000).toISOString(),
+  })
+
+  it('shows an agent the command it is running, not the ten before it', () => {
+    // The observed shape: one agent with a wall of near-identical shell
+    // lines, drowning every other branch in the family.
+    const shells = Array.from({ length: 10 }, (_, i) => ago(2 + i, `sh-${i}`, 'busy', true))
+    const others = Array.from({ length: 5 }, (_, i) => ago(3 + i, `agent-${i}`, 'root', false))
+    const snapshot = [ago(0, 'root', undefined, false), ago(1, 'busy', 'root', false), ...shells, ...others]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree))
+    expect(rows).toContain('sh-0')
+    expect(rows.filter(r => r.startsWith('sh-') && !r.includes(':'))).toHaveLength(1)
+    // The freed lines go to the rest of the family, which is the point.
+    expect(rows).toEqual(expect.arrayContaining(['agent-0', 'agent-4']))
+    // Nothing is lost: the remainder is one click away on its own level.
+    expect(rows).toContain('busy:+9 more')
+  })
+
+  it('gives each agent its own command', () => {
+    const snapshot = [
+      ago(0, 'root', undefined, false),
+      ago(1, 'a', 'root', false), ago(2, 'a-sh', 'a', true),
+      ago(3, 'b', 'root', false), ago(4, 'b-sh', 'b', true),
+    ]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    expect(renderedLines(tree, visibleFamilyRows(tree))).toEqual(
+      expect.arrayContaining(['a-sh', 'b-sh']),
+    )
+  })
+
+  it('drops a command that stopped talking, well before an agent would', () => {
+    const stale = FAMILY_PROCESS_STALE_AFTER_MS / 60_000 + 30
+    // Enough live siblings that the floor's top-up never runs; this is
+    // triage talking, not an empty panel being padded.
+    const live = Array.from({ length: 10 }, (_, i) => ago(1 + i * 0.1, `live-${i}`, 'root', false))
+    const snapshot = [
+      ago(0, 'root', undefined, false),
+      ...live,
+      ago(stale, 'quiet-agent', 'root', false),
+      // Two stale commands, so folding them is a real saving; one alone
+      // would cost the same line folded or drawn, and be drawn.
+      ago(stale, 'old-command', 'root', true),
+      ago(stale + 1, 'older-command', 'root', true),
+    ]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree))
+    // Same age, different verdict: the agent is still worth a line at
+    // ninety minutes, the finished command is not.
+    expect(FAMILY_PROCESS_STALE_AFTER_MS).toBeLessThan(FAMILY_STALE_AFTER_MS)
+    expect(rows).toContain('quiet-agent')
+    expect(rows).not.toContain('old-command')
+  })
+
+  it('still maps a family that is nothing but commands', () => {
+    // 248 processes to 8 agents is a real family here. One command per
+    // agent would leave this one two rows deep, so the floor's top-up
+    // drops that rule too: a command log beats a blank panel.
+    const shells = Array.from({ length: 30 }, (_, i) => ago(2 + i * 0.1, `sh-${i}`, 'root', true))
+    const tree = projectFamily(shells[0], [ago(0, 'root', undefined, false), ...shells]).tree
+    expect(renderedLines(tree, visibleFamilyRows(tree)).length).toBeGreaterThanOrEqual(FAMILY_ROW_FLOOR)
+  })
+})
+
+describe('a summary that saves no space is not drawn', () => {
+  const ago = (minutes: number, id: string, parent: string | undefined, process = false) => makeSession({
+    id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: !process,
+    created_at: '2026-08-04T00:00:00Z',
+    last_output_at: new Date(Date.parse('2026-08-04T20:00:00Z') - minutes * 60_000).toISOString(),
+  })
+
+  it('names the last hidden command instead of counting it', () => {
+    // Two commands under one agent: the one-command rule would hide the
+    // second behind a "+1 more" that occupies the very line the command
+    // would have — costing the same and saying less.
+    const snapshot = [
+      ago(0, 'root', undefined), ago(1, 'agent', 'root'),
+      ago(2, 'sh-a', 'agent', true), ago(3, 'sh-b', 'agent', true),
+    ]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree))
+    expect(rows).toEqual(['root', 'agent', 'sh-a', 'sh-b'])
+    expect(rows.some(r => r.includes('more'))).toBe(false)
+  })
+
+  it('still counts a hidden subtree, which is not the same bargain', () => {
+    // The lone hidden row here has children of its own, so drawing it
+    // raises a summary underneath: two lines for what a summary says in
+    // one. The count stays.
+    const stale = FAMILY_STALE_AFTER_MS / 60_000 + 60
+    const live = Array.from({ length: 10 }, (_, i) => ago(1 + i * 0.1, `live-${i}`, 'root'))
+    const snapshot = [
+      ago(0, 'root', undefined), ...live,
+      ago(stale, 'old', 'root'), ago(stale + 1, 'older', 'old'), ago(stale + 2, 'oldest', 'old'),
+    ]
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    const rows = renderedLines(tree, visibleFamilyRows(tree))
+    expect(rows).toContain('root:+1 more')
+    expect(rows).not.toContain('old')
   })
 })
