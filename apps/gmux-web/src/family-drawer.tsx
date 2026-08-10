@@ -128,19 +128,40 @@ function unreadMembers(tree: FamilyNode): Session[] {
   return out
 }
 
+/** The header's tally, in the turn model's own words (ADR 0023: a
+ * session is active, idle, or waiting on you) and the sidebar's own
+ * dots. `working` is the CSS token for the active dot; the fact behind
+ * it is `status.active`, so it reads `active` here. `unread` is how the
+ * wire spells "waiting on you", shortened to `waiting` because it sits
+ * beside three other segments.
+ *
+ * Each segment names a state and shows the dot the rows use for it, so
+ * the header and the tree can be read against each other without
+ * translating. `total` gets no dot: it isn't a state. */
 function CountsLine({ tree }: { tree: FamilyNode }) {
   const counts = familyCounts([tree])
-  const segments: { text: string; cls?: string }[] = []
-  if (counts.error > 0) segments.push({ text: `${counts.error} error`, cls: 'attention' })
-  if (counts.working > 0) segments.push({ text: `${counts.working} working` })
-  if (counts.unread > 0) segments.push({ text: `${counts.unread} unread`, cls: 'attention' })
-  segments.push({ text: `${counts.total} total` })
+  const segments: { key: string; dot?: string; count: number; label: string; cls?: string }[] = []
+  // Same precedence the dot itself resolves by: error, then active,
+  // then waiting.
+  if (counts.error > 0) {
+    segments.push({ key: 'error', dot: 'error', count: counts.error, label: 'error', cls: 'attention' })
+  }
+  if (counts.working > 0) {
+    segments.push({ key: 'active', dot: 'working', count: counts.working, label: 'active' })
+  }
+  if (counts.unread > 0) {
+    segments.push({ key: 'waiting', dot: 'unread', count: counts.unread, label: 'waiting', cls: 'attention' })
+  }
+  segments.push({ key: 'total', count: counts.total, label: 'total' })
   return (
     <div class="family-counts">
-      {segments.map((segment, index) => (
-        <span key={segment.text} class={segment.cls ? `family-count-${segment.cls}` : undefined}>
-          {index > 0 && <span class="family-count-sep" aria-hidden="true"> · </span>}
-          {segment.text}
+      {segments.map(segment => (
+        <span
+          key={segment.key}
+          class={`family-count${segment.cls ? ` family-count-${segment.cls}` : ''}`}
+        >
+          {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
+          {segment.count} {segment.label}
         </span>
       ))}
     </div>

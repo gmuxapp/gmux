@@ -2390,9 +2390,22 @@ body {
 }
 .family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
 .family-drawer-scroll { flex: 1 1 auto; overflow: auto; padding: 6px 8px 8px; }
+/* One segment per state, each carrying the dot the rows use for it, so
+   the header reads as a key to the tree below rather than a separate
+   vocabulary. Spacing does the separating that a `·` used to. */
 .family-counts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
   font: 400 12px/1.4 'Source Sans 3', sans-serif;
   color: var(--text-muted);
+}
+.family-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
 }
 .family-count-attention { color: var(--unread); font-weight: 600; }
 .family-tree,

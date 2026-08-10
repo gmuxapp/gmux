@@ -143,4 +143,33 @@ test.describe('the family line and the panel tally', () => {
     const glyphColumn = withMember[0]!.memberGlyphX
     for (const g of withoutMember) expect(g!.plusX).toBe(glyphColumn)
   })
+
+  test("the panel's tally names states in the turn model's words", async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    const counts = page.locator('.family-counts')
+    await counts.waitFor()
+
+    // `unread` on the wire is "waiting on you" to a reader, and the CSS
+    // token `working` is the active dot; the header says what the turn
+    // model says (ADR 0023), not what the fields are called.
+    expect(await counts.textContent()).not.toMatch(/unread|working/)
+    await expect(counts.locator('.family-count').last()).toHaveText(/\d+ total/)
+
+    // Every state segment carries the dot its rows carry, so the header
+    // reads as a key to the tree rather than a second vocabulary.
+    const segments = await counts.locator('.family-count').evaluateAll(nodes => nodes.map(n => ({
+      text: n.textContent?.replace(/\s+/g, ' ').trim(),
+      dot: n.querySelector('.session-dot-indicator')?.className ?? null,
+    })))
+    for (const segment of segments) {
+      if (/total/.test(segment.text ?? '')) {
+        expect(segment.dot, 'total is not a state, so it gets no dot').toBeNull()
+        continue
+      }
+      expect(segment.text).toMatch(/^\d+ (error|active|waiting)$/)
+      expect(segment.dot).toMatch(/session-dot-indicator (error|working|unread)/)
+    }
+    expect(segments.some(s => /waiting|active|error/.test(s.text ?? ''))).toBe(true)
+  })
 })
