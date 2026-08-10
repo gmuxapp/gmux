@@ -3380,15 +3380,22 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    /* Keep the status badge attached to the menu face now that Esc sits
-       directly above it; the old overhang would collide with Esc's border. */
-    top: 4px;
-    right: 4px;
+    top: -3px;
+    right: -3px;
     z-index: 3;
     pointer-events: none;
     background: var(--unread);
     /* Ring in the page background so the dot reads cleanly against the button border */
     box-shadow: 0 0 0 1.5px var(--bg-base);
+  }
+
+  /* In the mobile keyboard, Esc now occupies the cell above the menu. Keep
+     this instance's badge inside the menu face so it does not cross that
+     key's painted hit surface. Other MenuButton placements retain the
+     established overhanging badge position above. */
+  .mobile-bottom-bar .mobile-bottom-action.menu-btn.mk-menu.bg-waiting::after {
+    top: 4px;
+    right: 4px;
   }
 
   /* Re-blink when a new session enters the waiting state */

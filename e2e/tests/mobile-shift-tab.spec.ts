@@ -6,24 +6,25 @@ test.describe('mobile Shift+Tab keyboard', () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
-      const sent: number[][] = []
+      const terminalInputs: number[][] = []
       const originalSend = WebSocket.prototype.send
       WebSocket.prototype.send = function (data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-        if (typeof data === 'string') {
-          sent.push([...new TextEncoder().encode(data)])
-        } else if (data instanceof ArrayBuffer) {
-          sent.push([...new Uint8Array(data)])
+        // Terminal input is the binary WebSocket path; resize/control
+        // messages are JSON strings and are intentionally excluded here.
+        let input: number[] | undefined
+        if (data instanceof ArrayBuffer) {
+          input = [...new Uint8Array(data)]
         } else if (ArrayBuffer.isView(data)) {
-          sent.push([...new Uint8Array(data.buffer, data.byteOffset, data.byteLength)])
+          input = [...new Uint8Array(data.buffer, data.byteOffset, data.byteLength)]
         }
+        if (input) terminalInputs.push(input)
         // Keep the shared harness shell pristine: observe the real browser
-        // send call but do not inject BackTab into the fixture's shell input.
-        const bytes = sent.at(-1)
-        if (!(bytes?.length === 3 && bytes[0] === 0x1b && bytes[1] === 0x5b && bytes[2] === 0x5a)) {
+        // input send call but do not inject BackTab into the fixture shell.
+        if (!(input?.length === 3 && input[0] === 0x1b && input[1] === 0x5b && input[2] === 0x5a)) {
           originalSend.call(this, data)
         }
       }
-      ;(window as unknown as { __mobileSent: number[][] }).__mobileSent = sent
+      ;(window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs = terminalInputs
     })
     await openApp(page)
     await gotoTestSession(page)
@@ -36,7 +37,7 @@ test.describe('mobile Shift+Tab keyboard', () => {
     await page.evaluate(() => {
       const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
       textarea?.focus()
-      ;(window as unknown as { __mobileSent: number[][] }).__mobileSent.length = 0
+      ;(window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs.length = 0
     })
     const before = await page.evaluate(() => ({
       active: document.activeElement?.className ?? '',
@@ -53,13 +54,13 @@ test.describe('mobile Shift+Tab keyboard', () => {
     await page.waitForTimeout(100)
 
     const result = await page.evaluate(() => ({
-      sent: (window as unknown as { __mobileSent: number[][] }).__mobileSent,
+      terminalInputs: (window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs,
       active: document.activeElement?.className ?? '',
       ctrl: document.querySelector('.mk-ctrl')?.getAttribute('aria-pressed'),
       alt: document.querySelector('.mk-alt')?.getAttribute('aria-pressed'),
       menuOpen: document.querySelector('.sidebar-overlay.visible') !== null,
     }))
-    expect(result.sent).toEqual([[0x1b, 0x5b, 0x5a]])
+    expect(result.terminalInputs).toEqual([[0x1b, 0x5b, 0x5a]])
     expect(result.active).toBe(before.active)
     expect(result.ctrl).toBe(before.ctrl)
     expect(result.alt).toBe(before.alt)
@@ -88,11 +89,12 @@ test.describe('mobile Shift+Tab keyboard', () => {
         const barRect = bar.getBoundingClientRect()
         const menu = get('.mk-menu')
         const esc = get('.mk-esc')
+        const escFace = get('.mk-esc .mkey-face')
         const stab = get('.mk-shift-tab')
         const tab = get('.mk-tab')
         const dotStyle = getComputedStyle(document.querySelector('.mk-menu')!, '::after')
         const dot = { x: menu.x + menu.width - Number.parseFloat(dotStyle.right) - Number.parseFloat(dotStyle.width), y: menu.y + Number.parseFloat(dotStyle.top), right: menu.x + menu.width - Number.parseFloat(dotStyle.right), bottom: menu.y + Number.parseFloat(dotStyle.top) + Number.parseFloat(dotStyle.height) }
-        return { bar: { x: barRect.x, right: barRect.right }, menu, esc, stab, tab, dot, words: [get('.mk-wl'), get('.mk-wr')], columns: getComputedStyle(bar).gridTemplateColumns.split(' ').length }
+        return { bar: { x: barRect.x, right: barRect.right }, menu, esc, escFace, stab, tab, dot, words: [get('.mk-wl'), get('.mk-wr')], columns: getComputedStyle(bar).gridTemplateColumns.split(' ').length }
       })
       expect(layout.bar.right).toBeLessThanOrEqual(width)
       expect(layout.bar.x).toBeGreaterThanOrEqual(0)
@@ -108,8 +110,8 @@ test.describe('mobile Shift+Tab keyboard', () => {
       expect(layout.dot.x).toBeGreaterThanOrEqual(layout.menu.x)
       expect(layout.dot.bottom).toBeLessThanOrEqual(layout.menu.bottom)
       expect(
-        layout.dot.right <= layout.esc.x || layout.dot.x >= layout.esc.right ||
-        layout.dot.bottom <= layout.esc.y || layout.dot.y >= layout.esc.bottom,
+        layout.dot.right <= layout.escFace.x || layout.dot.x >= layout.escFace.right ||
+        layout.dot.bottom <= layout.escFace.y || layout.dot.y >= layout.escFace.bottom,
       ).toBe(true)
       if (branch === 'portrait' || branch === 'small') {
         expect(layout.columns).toBe(7)
@@ -123,6 +125,29 @@ test.describe('mobile Shift+Tab keyboard', () => {
         expect(layout.words[1].display).not.toBe('none')
       }
     }
+
+    const safeAreaContract = await page.evaluate(() => {
+      const rules: CSSRule[] = []
+      const collect = (items: CSSRuleList) => {
+        for (const rule of items) {
+          rules.push(rule)
+          if ('cssRules' in rule && rule.cssRules) collect(rule.cssRules)
+        }
+      }
+      for (const sheet of document.styleSheets) {
+        try { collect(sheet.cssRules) } catch { /* cross-origin sheets are irrelevant */ }
+      }
+      const rule = rules.find(candidate => candidate instanceof CSSStyleRule && candidate.selectorText === '.mobile-bottom-bar' && candidate.style.getPropertyValue('--mobile-safe-area-left')) as CSSStyleRule | undefined
+      return {
+        left: rule?.style.getPropertyValue('--mobile-safe-area-left'),
+        right: rule?.style.getPropertyValue('--mobile-safe-area-right'),
+      }
+    })
+    // Chromium cannot synthesize env(safe-area-inset-*) values, so pin the
+    // production env-to-custom-property contract separately from the
+    // synthetic geometry test below. Removing either env declaration fails.
+    expect(safeAreaContract.left).toContain('env(safe-area-inset-left')
+    expect(safeAreaContract.right).toContain('env(safe-area-inset-right')
 
     await page.addStyleTag({ content: '.mobile-bottom-bar { --mobile-safe-area-left: 24px; --mobile-safe-area-right: 28px; }' })
     const safe = await page.evaluate(() => {
