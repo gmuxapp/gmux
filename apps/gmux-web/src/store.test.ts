@@ -1987,6 +1987,42 @@ describe('pending mutations overlay', () => {
       expect(out[1].unread).toBe(true)
     })
 
+    it('applies a mark-read per session in one pass, whatever the pile', () => {
+      // "Mark all read" stacks one mutation per family member, and this
+      // overlay is replayed on every recompute in the app until the
+      // server echoes them back. A pass per mutation made that cost
+      // mutations x sessions.
+      const sess = Array.from({ length: 200 }, (_, i) =>
+        makeSession({ id: `s${i}`, unread: true, unread_token: `t${i}` }))
+      const pending: PendingMutation[] = sess.map(s => (
+        { kind: 'mark-read', id: s.id, token: s.unread_token ?? '', at: 0 }))
+      const out = applyPending(sess, pending)
+      expect(out.every(s => !s.unread)).toBe(true)
+      expect(out).toHaveLength(200)
+    })
+
+    it('honours each token separately when several are in flight for one session', () => {
+      // The token binds a mark to the state it was issued against, so a
+      // session that spoke again escapes the older mark rather than
+      // being silenced by it.
+      const sess = [makeSession({ id: 'a', unread: true, unread_token: 'new' })]
+      const out = applyPending(sess, [
+        { kind: 'mark-read', id: 'a', token: 'stale', at: 0 },
+        { kind: 'mark-read', id: 'a', token: 'new', at: 0 },
+      ])
+      expect(out[0].unread).toBe(false)
+      const stillUnread = applyPending(sess, [{ kind: 'mark-read', id: 'a', token: 'stale', at: 0 }])
+      expect(stillUnread[0].unread).toBe(true)
+    })
+
+    it('dismissal wins over a mark-read for the same session, either order', () => {
+      const sess = [makeSession({ id: 'a', unread: true, unread_token: '' })]
+      const read: PendingMutation = { kind: 'mark-read', id: 'a', token: '', at: 0 }
+      const gone: PendingMutation = { kind: 'dismiss', id: 'a', at: 0 }
+      expect(applyPending(sess, [read, gone])).toEqual([])
+      expect(applyPending(sess, [gone, read])).toEqual([])
+    })
+
     it('dismiss removes the targeted session', () => {
       const sess = [makeSession({ id: 'a' }), makeSession({ id: 'b' })]
       const out = applyPending(sess, [{ kind: 'dismiss', id: 'a', at: 0 }])
