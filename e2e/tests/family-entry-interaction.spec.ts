@@ -106,3 +106,41 @@ test.describe('sidebar family entry', () => {
     }
   })
 })
+
+test.describe('the family line and the panel tally', () => {
+  test('the plus lines up with what it adds to', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    const geometry = await page.evaluate(() => {
+      const read = (entry: Element) => {
+        const slot = entry.querySelector('.family-slot')
+        const plus = entry.querySelector('.family-activity .family-plus')
+        if (!plus) return null
+        return {
+          plusText: plus.textContent,
+          plusX: Math.round(plus.getBoundingClientRect().x),
+          memberGlyphX: slot
+            ? Math.round(slot.querySelector('.family-glyph')!.getBoundingClientRect().x)
+            : null,
+          memberTitleX: slot
+            ? Math.round(slot.querySelector('.family-slot-title')!.getBoundingClientRect().x)
+            : null,
+        }
+      }
+      return [...document.querySelectorAll('.session-family')].map(read).filter(Boolean)
+    })
+
+    const withMember = geometry.filter(g => g!.memberTitleX !== null)
+    const withoutMember = geometry.filter(g => g!.memberTitleX === null)
+    expect(withMember.length, 'a family with a member row on screen').toBeGreaterThan(0)
+    expect(withoutMember.length, 'a family without one').toBeGreaterThan(0)
+
+    for (const g of geometry) expect(g!.plusText).toBe('+')
+    // Under the member's title: these are members in addition to the one
+    // named above, so the line starts where that name starts.
+    for (const g of withMember) expect(g!.plusX).toBe(g!.memberTitleX)
+    // With nothing above to add to, it stays in the glyph column, level
+    // with where a member's status would be.
+    const glyphColumn = withMember[0]!.memberGlyphX
+    for (const g of withoutMember) expect(g!.plusX).toBe(glyphColumn)
+  })
+})

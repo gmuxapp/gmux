@@ -234,14 +234,17 @@ function SessionItem({
  *  running process — each segment dropped at zero. It's a count, not a
  *  destination, so it has no target of its own; like the rest of the
  *  entry's slack it belongs to the group, which selects the root. */
-function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
+function FamilyActivityLine({ activity, nested }: { activity: FamilyActivity; nested: boolean }) {
   const label = familyActivityLabel(activity)
   return (
-    <div class="family-sub family-activity" title={label}>
-      {/* Same branch glyph, same column as the member row's: this row
-        * hangs off the root too, and says so whether or not anything
-        * here is highlighted. */}
-      <span class="family-glyph family-branch" aria-hidden="true">↳</span>
+    <div class={`family-sub family-activity${nested ? ' nested' : ''}`} title={label}>
+      {/* `+`: these are the members the entry hasn't named. When a
+        * member row sits above, the line steps in by one glyph column
+        * so the `+` lands under that member's title — the row reads as
+        * "and these as well", added to the one named above rather than
+        * hanging off the root beside it. With no member row there is
+        * nothing to add to, so it stays in the glyph column. */}
+      <span class="family-glyph family-plus" aria-hidden="true">+</span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
         {activity.error > 0 && (
@@ -379,7 +382,7 @@ function FamilyEntry({
           <span class="family-slot-title">{member.title}</span>
         </a>
       )}
-      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} />}
+      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} nested={member !== undefined} />}
     </div>
   )
 }

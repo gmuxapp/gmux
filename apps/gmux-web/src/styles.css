@@ -1074,6 +1074,12 @@ body {
   font-size: 10px;
   line-height: 1;
 }
+/* The activity line's own glyph: everyone the entry didn't name. */
+.family-plus {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
 
 /* Member row: the family member you're viewing, or the last one you
    did. Title-sized and title-coloured in every state — a peer of the
@@ -1127,6 +1133,12 @@ body {
   font-size: 12.5px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
+}
+/* Stepped in by one glyph column (7px glyph + 6px gap) when a member
+   row sits above, so the `+` starts under that member's title: these
+   are members in addition to the one named, not siblings of it. */
+.family-activity.nested {
+  padding-left: 42px;
 }
 .family-activity-glyphs {
   display: flex;
