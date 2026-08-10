@@ -2355,7 +2355,28 @@ body {
   box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
 }
 /* The counts line stays put; only the tree scrolls. */
-.family-drawer-head { flex: 0 0 auto; padding: 10px 14px 8px; border-bottom: 1px solid var(--border); }
+.family-drawer-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.family-drawer-head .family-counts { flex: 1 1 auto; }
+/* Quiet until wanted: it sits beside a counts line that is itself the
+   reason to press it, so it needs to be findable, not loud. */
+.family-mark-read {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 400 11px/1.4 'Source Sans 3', sans-serif;
+  cursor: pointer;
+}
+.family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
 .family-drawer-scroll { flex: 1 1 auto; overflow: auto; padding: 6px 8px 8px; }
 .family-counts {
   font: 400 12px/1.4 'Source Sans 3', sans-serif;

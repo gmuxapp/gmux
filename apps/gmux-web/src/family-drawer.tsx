@@ -3,7 +3,7 @@ import { familyCounts, isProcessSession, projectFamily, type FamilyNode } from '
 import { splitLevel, visibleFamilyRows } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
-import { activityMap, projects, sessions, sessionDotState, tabHref } from './store'
+import { activityMap, markSessionRead, projects, sessions, sessionDotState, tabHref } from './store'
 import type { Session } from './types'
 
 function hrefFor(session: Session): string | undefined {
@@ -114,6 +114,20 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, visible, now,
   )
 }
 
+/** Every member with something outstanding, in one pass over the tree.
+ * `markSessionRead` clears the error flag alongside the unread one, so
+ * both belong here — the button answers the counts line, and the counts
+ * line counts both. */
+function unreadMembers(tree: FamilyNode): Session[] {
+  const out: Session[] = []
+  const visit = (node: FamilyNode) => {
+    if (node.session.unread || node.session.status?.error) out.push(node.session)
+    for (const child of node.children) visit(child)
+  }
+  visit(tree)
+  return out
+}
+
 function CountsLine({ tree }: { tree: FamilyNode }) {
   const counts = familyCounts([tree])
   const segments: { text: string; cls?: string }[] = []
@@ -209,12 +223,25 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Your own path, root to selection: the budget may fold anything but this.
   const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
   const visible = visibleFamilyRows(projection.tree, pinned)
+  const outstanding = unreadMembers(projection.tree)
   // One clock for the whole paint, so sibling ages can't disagree.
   const now = Date.now()
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
         <CountsLine tree={projection.tree} />
+        {outstanding.length > 0 && (
+          <button
+            type="button"
+            class="family-mark-read"
+            // Iterating is the whole implementation: `markSessionRead` is
+            // optimistic and token-bound, so the panel clears instantly
+            // and a member that speaks again mid-flight keeps its dot.
+            onClick={() => { for (const session of outstanding) markSessionRead(session.id) }}
+          >
+            Mark all read
+          </button>
+        )}
       </div>
       <div class="family-drawer-scroll">
         <ul class="family-tree">
