@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { familyCounts, isProcessSession, projectFamily, type FamilyNode } from './family'
-import { splitLevel } from './family-drawer-model'
+import { splitLevel, visibleFamilyRows } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import { activityMap, projects, sessions, sessionDotState, tabHref } from './store'
@@ -11,13 +11,13 @@ function hrefFor(session: Session): string | undefined {
   return path ? tabHref(path) : undefined
 }
 
-function FamilyRow({ node, selectedId, depth, expanded, pinned, now, onToggle }: {
+function FamilyRow({ node, selectedId, depth, expanded, visible, now, onToggle }: {
   node: FamilyNode
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
-  /** Your own spine: rows the level cap must never fold away. */
-  pinned: ReadonlySet<string>
+  /** The rows the panel's budget chose to draw. */
+  visible: ReadonlySet<string>
   /** Render-time clock, passed down so every row in one paint agrees. */
   now: number
   onToggle: (key: string) => void
@@ -56,7 +56,7 @@ function FamilyRow({ node, selectedId, depth, expanded, pinned, now, onToggle }:
             selectedId={selectedId}
             depth={depth + 1}
             expanded={expanded}
-            pinned={pinned}
+            visible={visible}
             now={now}
             onToggle={onToggle}
           />
@@ -68,17 +68,17 @@ function FamilyRow({ node, selectedId, depth, expanded, pinned, now, onToggle }:
 
 /** One children level: capped rows plus a two-state summary row
  * (`+N more` / `show fewer`) keyed per parent. */
-function LevelRows({ nodes, parentId, selectedId, depth, expanded, pinned, now, onToggle }: {
+function LevelRows({ nodes, parentId, selectedId, depth, expanded, visible, now, onToggle }: {
   nodes: readonly FamilyNode[]
   parentId: string
   selectedId: string
   depth: number
   expanded: ReadonlySet<string>
-  pinned: ReadonlySet<string>
+  visible: ReadonlySet<string>
   now: number
   onToggle: (key: string) => void
 }) {
-  const { shown, summary } = splitLevel(nodes, parentId, expanded, pinned)
+  const { shown, summary } = splitLevel(nodes, parentId, expanded, visible)
   return (
     <>
       {shown.map(node => (
@@ -88,7 +88,7 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, pinned, now, 
           selectedId={selectedId}
           depth={depth}
           expanded={expanded}
-          pinned={pinned}
+          visible={visible}
           now={now}
           onToggle={onToggle}
         />
@@ -206,8 +206,9 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Promotion intentionally defers provenance: promoted sessions present as
   // roots even though parent_session_id remains immutable on the wire.
   const projection = projectFamily(selected, sessions.value)
-  // Your own path, root to selection: the cap may fold anything but this.
+  // Your own path, root to selection: the budget may fold anything but this.
   const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
+  const visible = visibleFamilyRows(projection.tree, pinned)
   // One clock for the whole paint, so sibling ages can't disagree.
   const now = Date.now()
   return (
@@ -223,7 +224,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
             selectedId={selected.id}
             depth={0}
             expanded={expanded}
-            pinned={pinned}
+            visible={visible}
             now={now}
             onToggle={toggle}
           />
