@@ -225,8 +225,8 @@ forwarding the bytes, it can't mistake the previous turn's idle state for the
 reply — unlike the racy `gmux send X Enter && gmux wait X` composition.
 `send --wait` shares the 0/1/2 verdict with `gmux wait`, but **not** the
 first-signal 128+N report/re-arm behavior: a local SIGINT or SIGTERM triggers
-ordinary process signal handling, not the `[Wait interrupted; agent remains
-active]` handler that `gmux wait` and `gmux agent prompt` install. The flags
+ordinary process signal handling, not the first-signal notice handler that
+`gmux wait` and `gmux agent prompt` install. The flags
 precede the id:
 
 ```bash
@@ -292,8 +292,8 @@ use its own codes.)
   agent stopped it)
 - `1` — anything else: the activity failed, the `--timeout` elapsed, the
   session exited before its output matched, or the command was misused
-- `128+N` — a first local SIGINT/SIGTERM stopped **the wait**, not the agent
-  (see below)
+- `128+N` — a first local SIGINT/SIGTERM stopped **the wait**, not the observed
+  session activity (see below)
 
 **A failed command fails its wait — only for lifetime turns.** A session whose
 turn is its whole lifetime (`gmux -d -- make build`, a shell *without* OSC 133
@@ -312,11 +312,14 @@ prompt comes back, whether the command succeeded or failed, and
 shell command's result, run it as its own session (`gmux -- make build`, whose
 exit code is propagated) rather than typing it into an interactive shell.
 
-**The report.** For a renderer-capable agent (pi today), `wait` prints an
-**exchange report** on stdout — the same document `agent prompt` and
-`agent logs` render (see [Agent sessions](#agent-sessions) for the format):
-what was asked, every further user message that entered the loop, how many
-iterations of work each caused, and the terminal response.
+**The report.** Ordinary command and process sessions use neutral activity
+markers such as `[Session activity completed]`, `[Session activity interrupted]`,
+and `[Session activity failed: <reason>]`. For a renderer-capable agent (pi
+today), `wait` instead prints an **exchange report** on stdout — the same
+document `agent prompt` and `agent logs` render (see
+[Agent sessions](#agent-sessions) for the format): what was asked, every further
+user message that entered the loop, how many iterations of work each caused,
+and the terminal response.
 
 A live report is carried within an honest transport budget. An activity that
 outgrows it never loses its outcome or terminal content, but display material
@@ -364,8 +367,10 @@ job; here is the bad news": an interrupted activity's report ends
 (exit 1). An authoritative timeout report ends
 `[Wait timed out after Ns; agent active, N iterations so far...]` (exit 1); if
 the whole-call deadline wins before that report arrives, gmux instead prints
-`[Wait timed out after Ns; session state unknown]`. In either case the agent
-keeps running. stderr is reserved for gmux's **inability** to produce
+`[Wait timed out after Ns; session state unknown]`. An ordinary session's
+authoritative timeout instead says
+`[Wait timed out after Ns; session remains active]`. In every case the observed
+session keeps running. stderr is reserved for gmux's **inability** to produce
 the report at all: an unknown session, an unsupported adapter, a daemon or
 protocol failure. A pre-arm resolution failure exits 1 with empty stdout, as
 does the applicable single-session inability-to-report case. Once a
@@ -392,27 +397,24 @@ fabricated verdict. To gate on an activity you are about to trigger, use
 `gmux agent prompt` or `gmux send --wait`, which arm the wait before
 delivering anything.
 
-**Signals.** A first `^C` (or SIGTERM) stops **the wait**, not the agent: gmux
-prints exactly
-
-```
-[Wait interrupted; agent remains active]
-```
-
-and exits `128+N`. The line is deliberately fact-free — until the wait
-completes, the CLI has received no exchange facts to report, and it states
-only what it knows rather than guessing; read the conversation with
-`gmux agent logs` afterwards. A second signal terminates immediately. Under
-`--quiet` the first signal prints nothing either — exit `128+N`,
-verdict-only. `gmux wait <id>` re-arms.
+**Signals.** A first `^C` (or SIGTERM) stops **the wait**, not the observed
+activity. An all-agent wait prints `[Wait interrupted; agent remains active]`;
+an ordinary or mixed-session wait prints
+`[Wait interrupted; session activity continues]`. It then exits `128+N`.
+The line is deliberately fact-free — until the wait completes, the CLI has
+received no outcome facts to report, and it states only what it knows rather
+than guessing. A second signal terminates immediately. Under `--quiet` the
+first signal prints nothing either — exit `128+N`, verdict-only. `gmux wait
+<id>` re-arms.
 
 Shell/process sessions and agents without rendered conversation history are
-still perfectly waitable. A non-quiet bare wait prints the exchange format's
-minimal status markers (typically `[No exchanges yet]`, plus an outcome marker
-for failure, interruption, or timeout) rather than terminal output; it does
-not silently produce an empty stream. Output-condition waits are the
-result-free exception: they synchronize and exit by the verdict without a
-report. Use `--quiet` to suppress all bare-wait report or marker output.
+still perfectly waitable. A non-quiet ordinary-session wait prints the neutral
+session-activity markers described above rather than terminal output. An agent
+without conversation history prints the exchange format's minimal markers,
+typically `[No exchanges yet]` plus an outcome marker for failure,
+interruption, or timeout. Output-condition waits are the result-free exception:
+they synchronize and exit by the verdict without a report. Use `--quiet` to
+suppress all bare-wait report or marker output.
 
 **Output conditions.** Instead of the idle signal, wait until specific text
 appears in the session's output:

@@ -791,7 +791,7 @@ func postInput(sess cliSession, body io.Reader, query string) int {
 		fmt.Fprintln(os.Stderr, "gmux: decode send --wait response:", err)
 		return 1
 	}
-	return reportWaitResult(env.Data, false, true, io.Discard)
+	return reportWaitResult(env.Data, false, true, false, io.Discard)
 }
 
 // maxSendBytes caps the number of bytes read from stdin for a single

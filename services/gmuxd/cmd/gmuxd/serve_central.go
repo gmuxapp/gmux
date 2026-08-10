@@ -1759,7 +1759,7 @@ func runnerLossClose(frame *sessioncoord.TurnFrame) *sessioncoord.TurnClose {
 	// can select an old answer), so the honest degraded report carries no partial.
 	return &sessioncoord.TurnClose{TurnSeq: cur.TurnSeq, Outcome: outcomeError, PreviousExchanges: cur.PreviousExchanges,
 		Exchanges: append([]sessioncoord.TurnExchange(nil), cur.Exchanges...), OmittedExchanges: cur.OmittedExchanges,
-		OmittedBytes: cur.OmittedBytes, Diagnostic: "agent activity was lost"}
+		OmittedBytes: cur.OmittedBytes}
 }
 
 func writeLateExchangeWait(w http.ResponseWriter, sess centralstore.Session, frame *sessioncoord.TurnFrame) {
