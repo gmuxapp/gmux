@@ -33,6 +33,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/ntfy"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
@@ -318,6 +319,29 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	notifier = newCentralNotifyRouter(presenceTable, defaultNotifyConfig())
 	daemonCtx, daemonCancel := context.WithCancel(context.Background())
 	defer daemonCancel()
+	if cfg.Notifications.Ntfy.Enabled {
+		hostname, _ := os.Hostname()
+		ntfyCfg := cfg.Notifications.Ntfy
+		publisher, publisherErr := ntfy.New(ntfy.Config{
+			ServerURL: ntfyCfg.ServerURL,
+			Topic:     ntfyCfg.Topic,
+			Token:     ntfyCfg.Token,
+			Username:  ntfyCfg.Username,
+			Password:  ntfyCfg.Password,
+			Priority:  ntfyCfg.Priority,
+			Tags:      append([]string(nil), ntfyCfg.Tags...),
+			ClickURL:  ntfyCfg.ClickURL,
+			Timeout:   time.Duration(ntfyCfg.Timeout),
+			Hostname:  hostname,
+		})
+		if publisherErr != nil {
+			_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", publisherErr)
+			return 1
+		}
+		defer publisher.Close()
+		notifier.external = publisher
+		log.Printf("ntfy: enabled (best_effort=true)")
+	}
 	go notifier.Run(daemonCtx, seed, events)
 
 	commonMux := http.NewServeMux()

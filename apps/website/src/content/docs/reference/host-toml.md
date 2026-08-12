@@ -33,6 +33,13 @@ devcontainers = true     # subscribe to Docker events, register gmux containers
 # Dead-session scrollback cache target.
 [sessions]
 scrollback_cache_mb = 256
+
+# Optional best-effort phone notifications via ntfy.
+# Use `chmod 600 ~/.config/gmux/host.toml` before enabling.
+[notifications.ntfy]
+enabled = false
+server_url = "https://ntfy.sh"
+topic = "gmux_USE_A_LONG_RANDOM_TOPIC"
 ```
 
 ## Node identity
@@ -86,6 +93,46 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 
 Session values must be non-negative.
 
+### `[notifications.ntfy]`
+
+Publishes a privacy-safe notification after gmux's existing completion grace period and presence checks. Publishing is **best effort**: gmux makes one asynchronous request with a short timeout. It does not retry, queue, persist, or replay notifications after restart. A network error, daemon shutdown, or busy publisher may lose a notification. Browser notifications continue independently.
+
+ntfy is configured on the daemon that owns the session. An aggregation host does not publish notifications for sessions projected from another host or devcontainer.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Enable ntfy publishing. When enabled, `host.toml` must be readable only by its owner (`0600` or stricter). |
+| `server_url` | `string` | `"https://ntfy.sh"` | ntfy server origin. HTTP(S) only; no credentials, query, fragment, or sub-path. |
+| `topic` | `string` | none | Required when enabled. Use a long random topic; on an open server it acts as a secret. Letters, digits, `_`, and `-`; maximum 64 characters. |
+| `token` | `string` | none | Optional Bearer publish token. Mutually exclusive with Basic auth. HTTPS required. |
+| `username` / `password` | `string` | none | Optional Basic auth pair. Both are required together; HTTPS required. |
+| `priority` | `number` | `3` | ntfy priority from 1 to 5. |
+| `tags` | `string[]` | `[]` | Up to eight ntfy tags. |
+| `click_url` | `string` | none | Optional absolute HTTP(S) dashboard URL opened from the notification. Authentication must not be embedded in it. |
+| `timeout` | duration string | `"5s"` | Total timeout for the single publish attempt; 1–30 seconds. |
+
+The payload identifies only the host, adapter, and opaque session ID. gmux does not send prompts, transcript/output, commands, working directories, project names, or session titles. Credentials, the server URL, topic, payload, and response body are not logged.
+
+Example with a dedicated publish token:
+
+```toml
+[notifications.ntfy]
+enabled = true
+server_url = "https://ntfy.example.net"
+topic = "gmux_Q7f9x2mP4vN8kL3s"
+token = "tk_REPLACE_WITH_A_PUBLISH_ONLY_TOKEN"
+priority = 3
+tags = ["gmux", "white_check_mark"]
+click_url = "https://gmux.example.net/"
+timeout = "5s"
+```
+
+Before restarting gmuxd:
+
+```sh
+chmod 600 ~/.config/gmux/host.toml
+```
+
 ### `[tailscale]`
 
 | Field | Type | Default | Description |
@@ -111,6 +158,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`port` is out of range** (must be 1–65535)
 - **`max_active_subagents` is zero, negative, or above 1024**
 - **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
+- **ntfy settings are unsafe or malformed** — including a missing/invalid topic, unsupported URL, mixed authentication modes, credentials over plaintext HTTP, priority/tag/timeout violations, or an enabled config file with group/other permissions
 - **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid
 
 This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.

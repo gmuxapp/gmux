@@ -12,9 +12,11 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,9 +32,10 @@ type Config struct {
 	// live semantic-agent descendants launched through gmux (default 8).
 	MaxActiveSubagents int `toml:"max_active_subagents"`
 
-	Tailscale TailscaleConfig `toml:"tailscale"`
-	Discovery DiscoveryConfig `toml:"discovery"`
-	Sessions  SessionsConfig  `toml:"sessions"`
+	Tailscale     TailscaleConfig     `toml:"tailscale"`
+	Discovery     DiscoveryConfig     `toml:"discovery"`
+	Sessions      SessionsConfig      `toml:"sessions"`
+	Notifications NotificationsConfig `toml:"notifications"`
 
 	// NOTE: there is no `[[peers]]` array (removed in ADR 0007). Manually
 	// added peers are now runtime state in state.db, managed via the
@@ -90,6 +93,38 @@ type SessionsConfig struct {
 	RetentionDays     int `toml:"retention_days"`
 	RetentionMax      int `toml:"retention_max"`
 	ScrollbackCacheMB int `toml:"scrollback_cache_mb"`
+}
+
+// NotificationsConfig controls external notification sinks.
+type NotificationsConfig struct {
+	Ntfy NtfyConfig `toml:"ntfy"`
+}
+
+// Duration is a TOML string duration such as "5s".
+type Duration time.Duration
+
+// UnmarshalText implements encoding.TextUnmarshaler for TOML strings.
+func (d *Duration) UnmarshalText(text []byte) error {
+	parsed, err := time.ParseDuration(string(text))
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+// NtfyConfig controls best-effort publishing to an ntfy topic.
+type NtfyConfig struct {
+	Enabled   bool     `toml:"enabled"`
+	ServerURL string   `toml:"server_url"`
+	Topic     string   `toml:"topic"`
+	Token     string   `toml:"token"`
+	Username  string   `toml:"username"`
+	Password  string   `toml:"password"`
+	Priority  int      `toml:"priority"`
+	Tags      []string `toml:"tags"`
+	ClickURL  string   `toml:"click_url"`
+	Timeout   Duration `toml:"timeout"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -177,7 +212,11 @@ func Load() (Config, error) {
 // tagNameRe matches valid Tailscale ACL tag names: they must start with
 // a letter and contain only lowercase letters, digits, and hyphens.
 // https://tailscale.com/kb/1068/tags
-var tagNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var (
+	tagNameRe   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	ntfyTopicRe = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
+	ntfyTagRe   = regexp.MustCompile(`^[A-Za-z0-9_+-]{1,64}$`)
+)
 
 func validate(cfg Config) error {
 	// Port range.
@@ -216,7 +255,82 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if err := validateNtfy(cfg.Notifications.Ntfy); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateNtfy(cfg NtfyConfig) error {
+	server, err := parseNtfyURL("notifications.ntfy.server_url", cfg.ServerURL, false)
+	if err != nil {
+		return err
+	}
+	if cfg.Topic != "" && !ntfyTopicRe.MatchString(cfg.Topic) {
+		return fmt.Errorf("notifications.ntfy.topic must contain 1-64 letters, digits, hyphens, or underscores")
+	}
+	if cfg.Enabled && cfg.Topic == "" {
+		return fmt.Errorf("notifications.ntfy.topic is required when enabled")
+	}
+	if cfg.Token != "" && (cfg.Username != "" || cfg.Password != "") {
+		return fmt.Errorf("notifications.ntfy.token cannot be combined with username/password")
+	}
+	if (cfg.Username == "") != (cfg.Password == "") {
+		return fmt.Errorf("notifications.ntfy.username and password must be set together")
+	}
+	if server.Scheme == "http" && (cfg.Token != "" || cfg.Password != "") {
+		return fmt.Errorf("notifications.ntfy credentials require HTTPS")
+	}
+	if cfg.Priority < 1 || cfg.Priority > 5 {
+		return fmt.Errorf("notifications.ntfy.priority must be between 1 and 5")
+	}
+	if len(cfg.Tags) > 8 {
+		return fmt.Errorf("notifications.ntfy.tags must contain at most 8 tags")
+	}
+	for _, tag := range cfg.Tags {
+		if !ntfyTagRe.MatchString(tag) {
+			return fmt.Errorf("notifications.ntfy.tags must contain only 1-64 letters, digits, plus, hyphen, or underscore characters")
+		}
+	}
+	if cfg.ClickURL != "" {
+		if _, err := parseNtfyURL("notifications.ntfy.click_url", cfg.ClickURL, true); err != nil {
+			return err
+		}
+		if len(cfg.ClickURL) > 2048 {
+			return fmt.Errorf("notifications.ntfy.click_url must be at most 2048 bytes")
+		}
+	}
+	timeout := time.Duration(cfg.Timeout)
+	if timeout < time.Second || timeout > 30*time.Second {
+		return fmt.Errorf("notifications.ntfy.timeout must be between 1s and 30s")
+	}
+	if cfg.Enabled && runtime.GOOS != "windows" {
+		info, err := os.Stat(Path())
+		if err != nil {
+			return fmt.Errorf("notifications.ntfy: checking host.toml permissions: %w", err)
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("notifications.ntfy requires host.toml permissions 0600 or stricter")
+		}
+	}
+	return nil
+}
+
+func parseNtfyURL(field, raw string, allowPath bool) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("%s must be an absolute HTTP(S) URL", field)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%s must use HTTP or HTTPS", field)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("%s must not contain userinfo, query, or fragment", field)
+	}
+	if !allowPath && u.Path != "" && u.Path != "/" {
+		return nil, fmt.Errorf("%s must not contain a path", field)
+	}
+	return u, nil
 }
 
 // effectiveIntMax returns the largest value that both fits in an int and does
@@ -292,6 +406,11 @@ func defaults() Config {
 			RetentionMax:      200,
 			ScrollbackCacheMB: 256,
 		},
+		Notifications: NotificationsConfig{Ntfy: NtfyConfig{
+			ServerURL: "https://ntfy.sh",
+			Priority:  3,
+			Timeout:   Duration(5 * time.Second),
+		}},
 	}
 }
 
