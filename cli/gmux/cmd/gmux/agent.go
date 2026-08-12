@@ -417,9 +417,73 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 	return deliverPrompt(sess, mode, noWait, timeoutSecs, prompt)
 }
 
-// agentLaunchSession spawns a detached session and returns its id. A variable
-// so tests can drive `--new`'s output contract without forking a real agent.
-var agentLaunchSession = launchDetachedSession
+// agentLaunchSession spawns a detached session with the daemon-issued launch
+// receipt and returns its id. A variable keeps the real CLI/API path testable
+// without forking a real agent.
+var agentLaunchSession = launchDetachedSessionReserved
+
+var agentReserveActiveSubagent = reserveActiveSubagent
+var agentReleaseActiveSubagent = releaseActiveSubagent
+
+type agentLaunchAdmissionError struct {
+	code, message string
+}
+
+func (e *agentLaunchAdmissionError) Error() string {
+	if e.code != "" && e.message != "" {
+		return e.code + ": " + e.message
+	}
+	if e.message != "" {
+		return e.message
+	}
+	return "active-subagent launch admission failed"
+}
+
+func reserveActiveSubagent(parent string) (string, error) {
+	ensureGmuxd()
+	body, _ := json.Marshal(map[string]any{"parent_session_id": func() any {
+		if parent == "" {
+			return nil
+		}
+		return parent
+	}()})
+	resp, err := gmuxdClient().Post(gmuxdBaseURL()+"/v1/agent-launch-reservations", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		code, message := errorCode(raw), extractMessage(raw)
+		if resp.StatusCode == http.StatusNotFound && code == "" {
+			message = "this gmuxd predates active-subagent launch admission; restart it with 'gmux daemon restart'"
+		}
+		return "", &agentLaunchAdmissionError{code: code, message: message}
+	}
+	var env struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.Data.Token == "" {
+		return "", errors.New("invalid active-subagent reservation response from gmuxd")
+	}
+	return env.Data.Token, nil
+}
+
+func releaseActiveSubagent(token string) {
+	if token == "" {
+		return
+	}
+	req, err := http.NewRequest(http.MethodDelete, gmuxdBaseURL()+"/v1/agent-launch-reservations/"+token, nil)
+	if err != nil {
+		return
+	}
+	resp, err := gmuxdClient().Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+}
 
 // agentLaunchAdapter is the adapter `--new` launches through. The launch is
 // pi-only for now (there is no --adapter flag), exactly like the rest of this
@@ -462,7 +526,13 @@ func cmdAgentPromptNew(model, name string, noWait bool, timeoutSecs int, text *s
 		fmt.Fprintln(os.Stderr, "gmux: start it yourself with 'gmux -d -- <command>' and prompt the id it prints")
 		return waitExitError
 	}
-	id, err := agentLaunchSession(argv)
+	reservation, err := agentReserveActiveSubagent(os.Getenv("GMUX_SESSION_ID"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return waitExitError
+	}
+	defer agentReleaseActiveSubagent(reservation)
+	id, err := agentLaunchSession(argv, reservation)
 	if err != nil {
 		// Nothing was registered, so there is no id to hand back: the caller
 		// paid for nothing and has nothing to clean up.
@@ -872,8 +942,12 @@ intentionally interrupted, and 1 means failure or timeout.
 
 With synchronous --new, the bare session id is printed on stderr the moment the
 session exists and stdout is the report alone. With --new --no-wait, stdout is
-the bare id only. Semantic reads and delivery hide runner residency: an inactive
-conversation is resumed automatically when prompted.
+the bare id only. Before creating a runner, --new reserves one live semantic-
+agent descendant slot against the caller's current behavioral root. The host
+default is max_active_subagents = 8; promoted roots and independent top-level
+launches have independent budgets. 'gmux ls' shows the sessions to inspect when
+the daemon refuses a launch. Semantic reads and delivery hide runner residency:
+an inactive conversation is resumed automatically when prompted.
 `)
 	case "agent cancel":
 		fmt.Fprint(w, `gmux agent cancel — interrupt active agent work

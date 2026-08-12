@@ -270,7 +270,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}}
 
-	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
+	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, MaxActiveSubagents: cfg.MaxActiveSubagents, SemanticAgent: func(name string) bool { return converter.SemanticAgents[name] }, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
 		// The converter builds world.health.launchers but not the top-level
 		// world.launchers/default_launcher that the web UI's "+" menu reads
 		// (parity with the legacy composeWorld). Inject the static launch
@@ -607,6 +607,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		})
+		registerActiveSubagentRoutes(mux, boot.Coordinator)
 		mux.HandleFunc("POST /v1/register", func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 			if err != nil {
@@ -614,8 +615,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				return
 			}
 			var req struct {
-				SessionID  string `json:"session_id"`
-				SocketPath string `json:"socket_path"`
+				SessionID                 string `json:"session_id"`
+				SocketPath                string `json:"socket_path"`
+				ActiveSubagentReservation string `json:"active_subagent_reservation,omitempty"`
 			}
 			if err := json.Unmarshal(body, &req); err != nil {
 				writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
@@ -625,7 +627,17 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				writeError(w, http.StatusBadRequest, "bad_request", "session_id and socket_path required")
 				return
 			}
-			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath, AssertedID: centralstore.SessionID(req.SessionID)}); err != nil {
+			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath, AssertedID: centralstore.SessionID(req.SessionID), ActiveSubagentReservation: req.ActiveSubagentReservation}); err != nil {
+				var limit *sessioncoord.SubagentLimitError
+				if errors.As(err, &limit) {
+					message := fmt.Sprintf("subagent limit reached for root %s: %d of %d active subagents; run 'gmux ls' to inspect this host's sessions", limit.Root, limit.Active, limit.Limit)
+					writeError(w, http.StatusTooManyRequests, codeSubagentLimitReached, message)
+					return
+				}
+				if errors.Is(err, sessioncoord.ErrActiveSubagentReservationInvalid) {
+					writeError(w, http.StatusUnprocessableEntity, codeInvalidSubagentReservation, err.Error())
+					return
+				}
 				if errors.Is(err, sessioncoord.ErrSessionIDExists) {
 					writeError(w, http.StatusConflict, "session_id_exists", err.Error())
 					return
@@ -1057,7 +1069,7 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 			return
 		}
-		result, err := boot.Store.SetPromotion(r.Context(), sid, action == "promote", nil)
+		_, err := boot.Coordinator.SetPromotion(r.Context(), sid, action == "promote", nil)
 		if errors.Is(err, centralstore.ErrSessionNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "session not found")
 			return
@@ -1066,9 +1078,8 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 			return
 		}
-		if result.Changed {
-			boot.Composer.Invalidate(result)
-		}
+		// Coordinator publishes the committed mutation through the ordinary
+		// dirty bridge after updating budget ownership under the same mutex.
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "reparent":
 		if r.Method != http.MethodPost {

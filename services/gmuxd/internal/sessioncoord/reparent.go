@@ -27,6 +27,32 @@ func (c *Coordinator) SetSessionParent(ctx context.Context, id centralstore.Sess
 		return centralstore.MutationResult{}, fmt.Errorf("sessioncoord: durable store does not support session reparenting")
 	}
 	result, err := reparenter.SetSessionParent(ctx, id, parent)
+	if err == nil && c.activeSubagents != nil {
+		c.activeSubagents.setParent(id, parent)
+	}
+	c.mu.Unlock()
+	if err == nil {
+		c.publish(ctx, result)
+	}
+	return result, err
+}
+
+// SetPromotion mutates the presentation-root boundary under the same lifecycle
+// mutex as launch admission and reparenting. The central store remains the
+// sole durable authority; the budget index is only a runtime projection.
+func (c *Coordinator) SetPromotion(ctx context.Context, id centralstore.SessionID, promoted bool, index *int) (centralstore.MutationResult, error) {
+	c.mu.Lock()
+	promoter, ok := c.durable.(interface {
+		SetPromotion(context.Context, centralstore.SessionID, bool, *int) (centralstore.MutationResult, error)
+	})
+	if !ok {
+		c.mu.Unlock()
+		return centralstore.MutationResult{}, fmt.Errorf("sessioncoord: durable store does not support session promotion")
+	}
+	result, err := promoter.SetPromotion(ctx, id, promoted, index)
+	if err == nil && c.activeSubagents != nil {
+		c.activeSubagents.setPromotion(id, promoted)
+	}
 	c.mu.Unlock()
 	if err == nil {
 		c.publish(ctx, result)

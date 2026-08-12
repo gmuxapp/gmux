@@ -321,6 +321,9 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 			switch {
 			case removeErr == nil:
 				verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
+				if c.activeSubagents != nil {
+					c.activeSubagents.remove(cand.ID)
+				}
 				removed = append(removed, cand.ID)
 				removedSeqs = append(removedSeqs, c.outcomes.allocSeq()) // stamp under c.mu
 				outcomes = append(outcomes, result)

@@ -39,7 +39,7 @@ func TestRegistrationRetriesWithinDeadlineAndClassifiesStatuses(t *testing.T) {
 	})}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if got := registerWithClient(ctx, client, "s", "/tmp/s", time.Millisecond); got != registerOK {
+	if got := registerWithClient(ctx, client, "s", "/tmp/s", "", time.Millisecond); got != registerOK {
 		t.Fatalf("outcome %v", got)
 	}
 	if calls != 3 {
@@ -49,7 +49,7 @@ func TestRegistrationRetriesWithinDeadlineAndClassifiesStatuses(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusFound, http.StatusNoContent} {
 		calls = 0
 		client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { calls++; return response(status), nil })
-		if got := registerWithClient(ctx, client, "s", "/tmp/s", time.Millisecond); got != registerFatal {
+		if got := registerWithClient(ctx, client, "s", "/tmp/s", "", time.Millisecond); got != registerFatal {
 			t.Errorf("status %d = %v", status, got)
 		}
 		if calls != 1 {
@@ -68,7 +68,7 @@ func TestRegistrationCancellationReachesRequestAndBackoff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if got := registerWithClient(ctx, client, "s", "/tmp/s", time.Second); got != registerUnavailable {
+	if got := registerWithClient(ctx, client, "s", "/tmp/s", "", time.Second); got != registerUnavailable {
 		t.Fatalf("outcome %v", got)
 	}
 	select {
@@ -84,7 +84,7 @@ func TestRegistrationCancellationReachesRequestAndBackoff(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel2()
 	start = time.Now()
-	registerWithClient(ctx2, client, "s", "/tmp/s", time.Second)
+	registerWithClient(ctx2, client, "s", "/tmp/s", "", time.Second)
 	if time.Since(start) > 250*time.Millisecond {
 		t.Fatal("backoff ignored cancellation")
 	}
@@ -312,7 +312,7 @@ func TestForegroundRegistrationCompletesQuicklyWhenDaemonUnavailable(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), foregroundRegistrationBudget)
 	defer cancel()
 	start := time.Now()
-	got := registerWithGmuxd(ctx, "18gbpniy", "/tmp/fg-budget-test.sock")
+	got := registerWithGmuxd(ctx, "18gbpniy", "/tmp/fg-budget-test.sock", "")
 	elapsed := time.Since(start)
 
 	if got != registerUnavailable {

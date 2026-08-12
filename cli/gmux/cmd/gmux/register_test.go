@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -64,11 +65,29 @@ func TestRegisterWithGmuxdOutcomes(t *testing.T) {
 			startStubGmuxd(t, tc.status)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
-			got := registerWithGmuxd(ctx, "1c54cqk8", "/tmp/whatever.sock")
+			got := registerWithGmuxd(ctx, "1c54cqk8", "/tmp/whatever.sock", "")
 			if got != tc.want {
 				t.Errorf("registerWithGmuxd outcome = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRegisterWithGmuxdCarriesActiveSubagentReceipt(t *testing.T) {
+	d := startStubDaemon(t, nil)
+	d.on(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	if got := registerWithGmuxd(context.Background(), "1c54cqk8", "/tmp/whatever.sock", "receipt-123"); got != registerOK {
+		t.Fatalf("outcome = %v", got)
+	}
+	request := d.lastRequest(t)
+	var body struct {
+		Token string `json:"active_subagent_reservation"`
+	}
+	if err := json.Unmarshal([]byte(request.body), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Token != "receipt-123" {
+		t.Fatalf("receipt = %q", body.Token)
 	}
 }
 

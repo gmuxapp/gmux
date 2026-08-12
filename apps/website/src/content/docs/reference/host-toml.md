@@ -16,6 +16,10 @@ Daemon behavior. gmuxd reads this file once at startup. Create or edit it manual
 # Default: 8790
 port = 8790
 
+# Per behavioral root, cap live semantic-agent descendants launched by gmux.
+# Default: 8
+max_active_subagents = 8
+
 # Optional Tailscale remote access.
 # See the Remote Access guide for setup.
 [tailscale]
@@ -48,6 +52,29 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
 | `port` | `number` | `8790` | 1–65535 | TCP port for the HTTP listener. |
+| `max_active_subagents` | `number` | `8` | 1–1024 | Maximum live semantic-agent descendants per local behavioral root for `gmux agent prompt --new`. |
+
+`max_active_subagents` is a host default read once at daemon startup. A value in
+`host.toml` overrides the built-in default; there is currently no environment,
+CLI, UI, or per-root override. The daemon is the authority only for sessions it
+owns. It does not coordinate a distributed quota with network peers.
+
+The budget follows current family ownership (`parent_session_id` and
+promotion), not immutable launch provenance. Reparenting immediately moves a
+live semantic-agent subtree to its new root's budget. Promoting a session makes
+it a root with an independent budget; demoting it rejoins its containing root.
+The root session itself is never counted. Neither are shell/process children,
+dead retained sessions, or remote projections. Independent top-level `--new`
+launches create independent roots and therefore do not consume another root's
+slots.
+
+A slot is reserved atomically before gmux creates the runner, PTY, or durable
+session row. It becomes a live slot when registration succeeds. A pre-start or
+registration failure releases the reservation; a normal exit or killed runner
+releases the live slot when that generation leaves the daemon's runtime
+registry. "Active" therefore means **live/resident semantic-agent descendant**,
+not merely an agent turn currently producing output. A refusal exits non-zero
+with the stable code `subagent_limit_reached` and suggests `gmux ls`.
 
 The bind address is not configurable here — it is the `GMUXD_LISTEN` environment variable (default `127.0.0.1`). See [Environment variables](/reference/environment/#bind-address).
 
@@ -82,6 +109,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
 - **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
+- **`max_active_subagents` is zero, negative, or above 1024**
 - **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
 - **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid
 

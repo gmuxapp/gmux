@@ -166,6 +166,9 @@ type RunnerEvent struct {
 
 type RegisterRequest struct {
 	Endpoint string
+	// ActiveSubagentReservation is the opaque receipt issued before a
+	// gmux-mediated agent launch. Empty preserves ordinary registration.
+	ActiveSubagentReservation string
 	// AssertedID is caller-supplied identity for ordinary registration. Unlike
 	// ExpectedID it carries no replacement provenance and needs no claim.
 	AssertedID centralstore.SessionID
@@ -243,6 +246,11 @@ type Coordinator struct {
 	// own lock; publishing never runs under the lifecycle mutex.
 	outcomes outcomeBus
 
+	// activeSubagents is the host-local admission projection for gmux-mediated
+	// semantic-agent launches. It is guarded by mu and derives liveness from
+	// installed registry generations, never durable active/status flags.
+	activeSubagents *activeSubagentBudget
+
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}
 	convergeClosed     bool
@@ -267,6 +275,15 @@ func WithRunnerSpawner(rs RunnerSpawner) Option { return func(c *Coordinator) { 
 // is the wall clock in Unix milliseconds.
 func WithClock(now func() centralstore.UnixMillis) Option {
 	return func(c *Coordinator) { c.now = now }
+}
+
+// WithActiveSubagentBudget enables host-local launch admission. initial is a
+// durable ownership snapshot; runtime liveness is populated as surviving
+// runners register during startup convergence.
+func WithActiveSubagentBudget(limit int, semantic func(string) bool, initial []centralstore.Session) Option {
+	return func(c *Coordinator) {
+		c.activeSubagents = newActiveSubagentBudget(limit, semantic, initial)
+	}
 }
 
 func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtySink, errSink ErrorSink, opts ...Option) *Coordinator {
@@ -302,6 +319,37 @@ func (c *Coordinator) Registry() *Registry { return c.registry }
 // request context aborts Subscribe and Meta before install; it has no effect
 // after the entry is installed.
 func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtime, error) {
+	var (
+		launchReservation   activeSubagentLaunch
+		reservationClaimed  bool
+		reservationConsumed bool
+	)
+	if req.ActiveSubagentReservation != "" {
+		c.mu.Lock()
+		if c.activeSubagents == nil {
+			c.mu.Unlock()
+			return Runtime{}, ErrActiveSubagentReservationInvalid
+		}
+		var err error
+		launchReservation, err = c.activeSubagents.claim(req.ActiveSubagentReservation, req.AssertedID)
+		c.mu.Unlock()
+		if err != nil {
+			return Runtime{}, err
+		}
+		reservationClaimed = true
+		defer func() {
+			if reservationConsumed {
+				return
+			}
+			// Phase 2's panic guard releases c.mu before re-panicking, so this
+			// cleanup can block behind ordinary lifecycle traffic without ever
+			// self-deadlocking or silently stranding a claimed receipt.
+			c.mu.Lock()
+			c.activeSubagents.unclaim(req.ActiveSubagentReservation)
+			c.mu.Unlock()
+		}()
+	}
+
 	// ── Phase 1: runner I/O outside the lifecycle mutex ──────────────────
 	//
 	// streamCtx governs the installed stream for its full lifetime. During
@@ -396,6 +444,11 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		// Abort before the mutex/fence/commit: no registration side effects.
 		return Runtime{}, fmt.Errorf("%w: expected %s, runner reported %s", ErrResumeIdentityMismatch, req.ExpectedID, id)
 	}
+	if reservationClaimed {
+		if err := c.activeSubagents.validateParent(launchReservation, meta.Registration.ParentSessionID); err != nil {
+			return Runtime{}, err
+		}
+	}
 
 	// Ordinary discovery has now verified the endpoint's claimed identity.
 	// Reject an already-installed generation before durable reads or lineage
@@ -413,16 +466,22 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 			return Runtime{}, err
 		}
 		old, hadOld := c.registry.current(id)
+		if hadOld && req.AssertedID != "" && old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation {
+			// Discovery may have observed this runner between its bind and
+			// direct registration. Treat the later assertion as an idempotent
+			// acknowledgement only with process-level proof, and consume the
+			// launch receipt so it no longer double-counts the installed child.
+			if reservationClaimed {
+				c.activeSubagents.release(req.ActiveSubagentReservation, true)
+				reservationConsumed = true
+			}
+			c.mu.Unlock()
+			_ = stream.Close()
+			return old.Runtime, nil
+		}
 		c.mu.Unlock()
 		if hadOld {
 			if req.AssertedID != "" {
-				// Discovery may have observed this runner between its bind and
-				// direct registration. Treat the later assertion as an
-				// idempotent acknowledgement only with process-level proof.
-				if old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation {
-					_ = stream.Close()
-					return old.Runtime, nil
-				}
 				return old.Runtime, fmt.Errorf("%w: %s", ErrSessionIDExists, id)
 			}
 			return old.Runtime, ErrGenerationActive
@@ -457,20 +516,39 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	// Runner I/O (Subscribe, Meta) must not run inside this section.
 
 	c.mu.Lock()
+	phase2Locked := true
+	phase2Unlock := func() {
+		phase2Locked = false
+		c.mu.Unlock()
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if phase2Locked {
+				c.mu.Unlock()
+			}
+			panic(recovered)
+		}
+	}()
 
 	if c.closing {
-		c.mu.Unlock()
+		phase2Unlock()
 		return Runtime{}, errors.New("sessioncoord: coordinator closed")
 	}
 	if err := ctx.Err(); err != nil {
-		c.mu.Unlock()
+		phase2Unlock()
 		return Runtime{}, err
 	}
 
 	if req.Replace || req.ExpectedID != "" {
 		if req.Claim == nil || c.ops[id] != req.Claim {
-			c.mu.Unlock()
+			phase2Unlock()
 			return Runtime{}, fmt.Errorf("%w: %s", ErrReplaceWithoutClaim, id)
+		}
+	}
+	if reservationClaimed {
+		if err := c.activeSubagents.validateClaimedBudget(launchReservation); err != nil {
+			phase2Unlock()
+			return Runtime{}, err
 		}
 	}
 
@@ -480,10 +558,10 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	// handling remains the authoritative transaction boundary.
 	if req.AssertedID != "" && !req.Replace && req.ExpectedID == "" && req.Claim == nil {
 		if _, exists, rowErr := c.durable.Session(ctx, id); rowErr != nil {
-			c.mu.Unlock()
+			phase2Unlock()
 			return Runtime{}, rowErr
 		} else if exists {
-			c.mu.Unlock()
+			phase2Unlock()
 			return Runtime{}, fmt.Errorf("%w: %s", ErrSessionIDExists, id)
 		}
 	}
@@ -492,9 +570,14 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	// the pre-I/O absence check, but only one generation may install.
 	old, hadOld := c.registry.current(id)
 	if hadOld && !req.Replace {
-		c.mu.Unlock()
+		idempotent := req.AssertedID != "" && old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation
+		if idempotent && reservationClaimed {
+			c.activeSubagents.release(req.ActiveSubagentReservation, true)
+			reservationConsumed = true
+		}
+		phase2Unlock()
 		if req.AssertedID != "" {
-			if old.Endpoint == req.Endpoint && meta.Incarnation != "" && old.Incarnation == meta.Incarnation {
+			if idempotent {
 				_ = stream.Close()
 				return old.Runtime, nil
 			}
@@ -585,11 +668,11 @@ loop:
 			// confirm absence against the durable row under the mutex.
 			_, exists, rowErr := c.durable.Session(ctx, id)
 			if rowErr != nil {
-				c.mu.Unlock()
+				phase2Unlock()
 				return Runtime{}, rowErr
 			}
 			if !exists {
-				c.mu.Unlock()
+				phase2Unlock()
 				return Runtime{}, fmt.Errorf("%w: %s", ErrConversationOwnedByLive, id)
 			}
 		}
@@ -609,7 +692,7 @@ loop:
 		if hadOld {
 			c.registry.restore(id, old.Generation)
 		}
-		c.mu.Unlock()
+		phase2Unlock()
 		return Runtime{}, err
 	}
 
@@ -689,8 +772,36 @@ loop:
 		}
 	}
 
+	if c.activeSubagents != nil {
+		// Project committed takeover outcomes, not requested candidates:
+		// version-conditional evictions may be skipped. This is O(evictions),
+		// normally zero, and never rebuilds the global graph per launch.
+		for _, candidate := range reg.Evict {
+			row, exists, readErr := c.durable.Session(ctx, candidate.ID)
+			if readErr != nil {
+				// Registration is already committed and installed. Preserve the
+				// pre-commit projection conservatively; a later reconciliation or
+				// restart converges it, and never turn success into a retryable error.
+				c.reportError(ctx, fmt.Errorf("sessioncoord: refresh takeover candidate %s: %w", candidate.ID, readErr))
+				continue
+			}
+			if exists {
+				_, live := c.registry.current(candidate.ID)
+				c.activeSubagents.upsert(row, live)
+			} else {
+				c.activeSubagents.remove(candidate.ID)
+			}
+		}
+		session.ID = id // sparse durable fakes need the identity projected here
+		c.activeSubagents.upsert(session, runtime.Subscribed)
+		if reservationClaimed {
+			c.activeSubagents.release(req.ActiveSubagentReservation, true)
+			reservationConsumed = true
+		}
+	}
+
 	seq := c.outcomes.allocSeq() // stamp commit order before releasing c.mu
-	c.mu.Unlock()
+	phase2Unlock()
 
 	// Silent-loss guard: a conversation-bearing registration in an embedding
 	// that never configured takeover would silently forfeit conversation
@@ -816,10 +927,16 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 	// generation check regardless.
 	exitObserved := false
 	defer func() {
-		// Remove and close this generation's entry if still current. If
-		// apply already removed it (Alive=false event) remove returns false
-		// and closeEntry is not called — no double-cancel.
-		if e, ok := c.registry.remove(id, generation); ok {
+		// Remove and close this generation's entry if still current. Serialize
+		// the registry edge with budget liveness so admission observes either
+		// the occupied slot or the released slot, never a split state.
+		c.mu.Lock()
+		e, ok := c.registry.remove(id, generation)
+		if ok && c.activeSubagents != nil {
+			c.activeSubagents.setLive(id, false)
+		}
+		c.mu.Unlock()
+		if ok {
 			closeEntry(e)
 		}
 	}()
@@ -971,8 +1088,15 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		}
 		// Exit facts committed (advance succeeded) before liveness removed.
 		// Canceling the stream propagates to the bufferEvents goroutine and
-		// the drain context, causing drain to exit its select loop.
-		if removed, yes := c.registry.remove(id, generation); yes {
+		// the drain context, causing drain to exit its select loop. Admission
+		// and slot release share the lifecycle mutex.
+		c.mu.Lock()
+		removed, yes := c.registry.remove(id, generation)
+		if yes && c.activeSubagents != nil {
+			c.activeSubagents.setLive(id, false)
+		}
+		c.mu.Unlock()
+		if yes {
 			closeEntry(removed)
 		}
 	}

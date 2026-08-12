@@ -26,6 +26,10 @@ type Config struct {
 	// Port is the TCP port for the HTTP listener (default 8790).
 	Port int `toml:"port"`
 
+	// MaxActiveSubagents is the host-default per behavioral-root limit for
+	// live semantic-agent descendants launched through gmux (default 8).
+	MaxActiveSubagents int `toml:"max_active_subagents"`
+
 	Tailscale TailscaleConfig `toml:"tailscale"`
 	Discovery DiscoveryConfig `toml:"discovery"`
 	Sessions  SessionsConfig  `toml:"sessions"`
@@ -180,6 +184,9 @@ func validate(cfg Config) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
+	if cfg.MaxActiveSubagents < 1 || cfg.MaxActiveSubagents > 1024 {
+		return fmt.Errorf("max_active_subagents must be between 1 and 1024")
+	}
 
 	maxRetentionDays := effectiveIntMax(math.MaxInt64 / int64(24*time.Hour))
 	if cfg.Sessions.RetentionDays < 0 || int64(cfg.Sessions.RetentionDays) > maxRetentionDays {
@@ -275,7 +282,8 @@ func isPrivateOrCGNAT(ip net.IP) bool {
 
 func defaults() Config {
 	return Config{
-		Port: 8790,
+		Port:               8790,
+		MaxActiveSubagents: 8,
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
 		},

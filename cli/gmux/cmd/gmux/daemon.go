@@ -344,12 +344,12 @@ func (o registerOutcome) ok() bool { return o == registerOK }
 // without burning the retry budget. Callers that care about the
 // outcome (the detached (-d) handshake, the orphan-reap path) branch
 // on the returned registerOutcome.
-func registerWithGmuxd(ctx context.Context, sessionID, socketPath string) registerOutcome {
-	return registerWithClient(ctx, gmuxdClient(), sessionID, socketPath, 500*time.Millisecond)
+func registerWithGmuxd(ctx context.Context, sessionID, socketPath, activeSubagentReservation string) registerOutcome {
+	return registerWithClient(ctx, gmuxdClient(), sessionID, socketPath, activeSubagentReservation, 500*time.Millisecond)
 }
 
-func registerWithClient(ctx context.Context, client *http.Client, sessionID, socketPath string, backoff time.Duration) registerOutcome {
-	payload, _ := json.Marshal(map[string]string{"session_id": sessionID, "socket_path": socketPath})
+func registerWithClient(ctx context.Context, client *http.Client, sessionID, socketPath, activeSubagentReservation string, backoff time.Duration) registerOutcome {
+	payload, _ := json.Marshal(map[string]string{"session_id": sessionID, "socket_path": socketPath, "active_subagent_reservation": activeSubagentReservation})
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, gmuxdBaseURL()+"/v1/register", bytes.NewReader(payload))
 		if err != nil {
