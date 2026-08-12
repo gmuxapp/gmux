@@ -103,7 +103,7 @@ No live daemon was installed or restarted.
 ## PR, revisions, review, and merge
 
 - Branch: `feat/active-subagent-budget`
-- Final implementation SHA: `234891de51f80f028e0a24e63ce79542c4596e67`
+- Final implementation SHA: `1d9016c6b18f575e11c5a24c9f98834e175f5421`
 - PR: [#481](https://github.com/gmuxapp/gmux/pull/481), **feat(daemon): cap local gmux-mediated active semantic-agent descendants per root**
 - Three independent read-only reviews used exact pushed SHAs and distinct angles: concurrency/state machine; ownership/config/API; adversarial integration/test quality.
 - Demonstrated findings remediated by the lead:
@@ -116,7 +116,7 @@ No live daemon was installed or restarted.
 - The reported ordinary `gmux -d -- pi` bypass was withdrawn because settled scope and docs explicitly target all `gmux agent prompt --new` launches, not every generic gmux command launch.
 - Delta reviewers reran their reproductions. Final verdicts were integrate; concurrency probes measured zero stranded receipts after the blocking-cleanup fix.
 - CI for final SHA: all 11 checks green, including lint/build/test, hot-package race, production container E2E, Playwright E2E, generated/cross-build, PR binaries, pi-latest compatibility, release scripts, and policy checks.
-- Merge SHA: pending merge.
+- Merge SHA: `dc2f5855bd42e836eb0787a07cb3fda58365407f`.
 
 ## Deferred follow-ups
 
