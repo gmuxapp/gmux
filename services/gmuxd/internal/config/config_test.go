@@ -99,6 +99,110 @@ func TestLoadValidatesMaxActiveSubagents(t *testing.T) {
 	}
 }
 
+func TestLoadNtfy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[notifications.ntfy]
+enabled = true
+server_url = "https://ntfy.example.net"
+topic = "gmux_Q7f9x2mP4vN8kL3s"
+token = "secret-token"
+priority = 4
+tags = ["gmux", "white_check_mark"]
+click_url = "https://gmux.example.net/"
+timeout = "7s"
+`)
+	if err := os.Chmod(Path(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Notifications.Ntfy
+	if !got.Enabled || got.ServerURL != "https://ntfy.example.net" || got.Topic != "gmux_Q7f9x2mP4vN8kL3s" || got.Token != "secret-token" {
+		t.Fatalf("ntfy identity/auth not loaded: %+v", got)
+	}
+	if got.Priority != 4 || time.Duration(got.Timeout) != 7*time.Second || strings.Join(got.Tags, ",") != "gmux,white_check_mark" || got.ClickURL != "https://gmux.example.net/" {
+		t.Fatalf("ntfy options not loaded: %+v", got)
+	}
+}
+
+func TestLoadNtfyDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Notifications.Ntfy
+	if got.Enabled || got.ServerURL != "https://ntfy.sh" || got.Priority != 3 || time.Duration(got.Timeout) != 5*time.Second {
+		t.Fatalf("ntfy defaults = %+v", got)
+	}
+}
+
+func TestLoadNtfyValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"missing topic", `enabled = true`, "topic is required"},
+		{"bad topic", `topic = "spaces are bad"`, "topic must contain"},
+		{"server path", `server_url = "https://example.net/ntfy"`, "must not contain a path"},
+		{"server userinfo", `server_url = "https://user:pass@example.net"`, "must not contain userinfo"},
+		{"bad scheme", `server_url = "ftp://example.net"`, "must use HTTP or HTTPS"},
+		{"mixed auth", "token = \"tok\"\nusername = \"user\"\npassword = \"pass\"", "cannot be combined"},
+		{"half basic auth", `username = "user"`, "must be set together"},
+		{"plaintext bearer", "server_url = \"http://example.net\"\ntoken = \"tok\"", "credentials require HTTPS"},
+		{"bad priority", `priority = 6`, "priority must be between"},
+		{"bad tag", `tags = ["has,comma"]`, "tags must contain only"},
+		{"bad timeout", `timeout = "500ms"`, "timeout must be between"},
+		{"bad click", `click_url = "javascript:alert(1)"`, "absolute HTTP(S)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, "[notifications.ntfy]\n"+tt.body+"\n")
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadNtfyEnabledRequiresPrivateConfig(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Unix permission semantics")
+	}
+	for _, mode := range []os.FileMode{0o640, 0o604, 0o644} {
+		t.Run(mode.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, "[notifications.ntfy]\nenabled = true\ntopic = \"secret_topic\"\n")
+			if err := os.Chmod(Path(), mode); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "permissions 0600") {
+				t.Fatalf("Load() error = %v, want private-permissions error", err)
+			}
+		})
+	}
+}
+
+func TestLoadNtfyDisabledDoesNotRequirePrivateConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, "[notifications.ntfy]\nenabled = false\ntopic = \"secret_topic\"\n")
+	if _, err := Load(); err != nil {
+		t.Fatalf("disabled ntfy config should not require mode 0600: %v", err)
+	}
+}
 func TestLoadSessions(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

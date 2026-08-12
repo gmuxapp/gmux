@@ -1,10 +1,10 @@
 ---
-title: Mobile Notifications
-description: Push notifications for mobile — current landscape and planned approach.
+title: Native Mobile Notifications
+description: Native gmux push notifications for mobile — current landscape and planned approach.
 ---
 
-:::note[Not implemented]
-This is a design sketch; nothing here has shipped.
+:::note[ntfy is available]
+gmux can send best-effort completion notifications to an existing [ntfy](https://ntfy.sh/) server and mobile app. See the [`[notifications.ntfy]` host configuration](/reference/host-toml/#notificationsntfy). The native gmux app described below has not shipped.
 :::
 
 ## The problem with Web Push on iOS

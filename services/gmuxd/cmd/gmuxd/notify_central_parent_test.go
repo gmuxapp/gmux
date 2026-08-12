@@ -300,7 +300,7 @@ func TestCentralReadRouteWaitsForCommitToInstallFenceBeforeCancellation(t *testi
 	<-fencedStore.committed // durable commit landed; live owner is not installed
 
 	router := newParentNotifyTestRouter(t)
-	router.scheduleNotification(string(id), "unread", "Child", "New output")
+	router.scheduleNotification(string(id), "unread", "Child", "New output", "")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+string(id)+"/read?token="+token, nil)
 	originalOwnerResolution := acknowledgementRuntime
@@ -360,7 +360,7 @@ func TestCentralReadRouteCancelsFocusedInteractionAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newParentNotifyTestRouter(t)
-	r.scheduleNotification(string(row.ID), "unread", "Child", "New output")
+	r.scheduleNotification(string(row.ID), "unread", "Child", "New output", "")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/child/read?token=", nil)
 	handleCentralSessionAction(rec, req, boot, newSSEFanout(), nil, nil, nil, "", r)
@@ -384,7 +384,7 @@ func TestCentralReadRouteRejectsDelayedAcknowledgementForNewerCompletion(t *test
 		t.Fatal(err)
 	}
 	router := newParentNotifyTestRouter(t)
-	router.scheduleNotification(string(row.ID), "unread", "Child", "New output")
+	router.scheduleNotification(string(row.ID), "unread", "Child", "New output", "")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/child/read?token=turn-1", nil)
 	handleCentralSessionAction(rec, req, boot, newSSEFanout(), nil, nil, nil, "", router)
@@ -419,7 +419,7 @@ func TestCentralNotifyUnreadConsumptionCancelsPending(t *testing.T) {
 func TestCentralNotifyCancellationLinearizesWithPendingDelivery(t *testing.T) {
 	r := newParentNotifyTestRouter(t)
 	r.presence.Add(&presence.Client{ID: "viewer", NotificationPermission: "granted"})
-	r.scheduleNotification("child", "finished", "Child", "Task finished")
+	r.scheduleNotification("child", "finished", "Child", "Task finished", "")
 
 	dequeued := make(chan struct{})
 	releaseDelivery := make(chan struct{})

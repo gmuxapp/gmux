@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/ntfy"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"nhooyr.io/websocket"
@@ -43,6 +44,7 @@ type notifySessionSnapshot struct {
 	UnreadToken string
 	Alive       bool
 	Title       string
+	Adapter     string
 	Start       string
 	ParentID    string
 }
@@ -52,6 +54,7 @@ type pendingCentralNotif struct {
 	notifType string
 	title     string
 	body      string
+	adapter   string
 	timer     *time.Timer
 	notifID   string
 }
@@ -61,9 +64,14 @@ type activeCentralNotif struct {
 	clientID  string
 }
 
+type externalNotifier interface {
+	Notify(ntfy.Message) bool
+}
+
 type centralNotifyRouter struct {
 	presence *presence.Table
 	config   notifyConfig
+	external externalNotifier
 
 	// deliveryMu linearizes a timer's complete pending→active→send transition
 	// with cancellation. Without it, cancellation can observe the gap after a
@@ -121,6 +129,7 @@ func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 		snap.Unread = o.Session.Unread
 		snap.UnreadToken = o.Session.UnreadToken
 		snap.Title = o.Session.Title
+		snap.Adapter = o.Session.Adapter
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
 		if o.Session.LaunchedFromSessionID != nil {
 			snap.ParentID = string(*o.Session.LaunchedFromSessionID)
@@ -184,10 +193,10 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	// An intentional stop is not a completion (ADR 0027): no "finished"
 	// notification for a turn the user themselves ended.
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
-		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start))
+		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start), cur.Adapter)
 	}
 	if cur.Unread && (!prev.Unread || prev.UnreadToken != cur.UnreadToken) {
-		r.scheduleNotification(id, "unread", cur.Title, "New output")
+		r.scheduleNotification(id, "unread", cur.Title, "New output", cur.Adapter)
 	}
 }
 
@@ -219,7 +228,7 @@ func (r *centralNotifyRouter) genID() string {
 	return fmt.Sprintf("notif-%d", r.nextID)
 }
 
-func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, body string) {
+func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, body, adapter string) {
 	if r.presence.AnyViewing(sessionID) {
 		return
 	}
@@ -230,11 +239,12 @@ func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, 
 			existing.notifType = notifType
 			existing.title = title
 			existing.body = body
+			existing.adapter = adapter
 		}
 		return
 	}
 	notifID := r.genID()
-	p := &pendingCentralNotif{sessionID: sessionID, notifType: notifType, title: title, body: body, notifID: notifID}
+	p := &pendingCentralNotif{sessionID: sessionID, notifType: notifType, title: title, body: body, adapter: adapter, notifID: notifID}
 	p.timer = time.AfterFunc(r.config.GracePeriod, func() { r.firePending(sessionID) })
 	r.pending[sessionID] = p
 }
@@ -268,6 +278,13 @@ func (r *centralNotifyRouter) firePending(sessionID string) {
 	if r.presence.AnyViewing(sessionID) {
 		return
 	}
+	if r.external != nil {
+		kind := ntfy.KindUnread
+		if p.notifType == "finished" {
+			kind = ntfy.KindFinished
+		}
+		r.external.Notify(ntfy.Message{Kind: kind, SessionID: sessionID, Adapter: p.adapter})
+	}
 	target := r.presence.BestNotifyTarget(r.config.IdleThreshold)
 	if target == nil {
 		log.Printf("notify: no target for session %s", sessionID)
@@ -286,6 +303,9 @@ func (r *centralNotifyRouter) firePending(sessionID string) {
 }
 
 func (r *centralNotifyRouter) fireCoalesced(count int) {
+	if r.external != nil {
+		r.external.Notify(ntfy.Message{Kind: ntfy.KindCoalesced, Count: count})
+	}
 	target := r.presence.BestNotifyTarget(r.config.IdleThreshold)
 	if target == nil {
 		log.Printf("notify: no target for coalesced notification (%d sessions)", count)
