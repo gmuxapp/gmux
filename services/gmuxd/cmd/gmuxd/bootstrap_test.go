@@ -86,6 +86,40 @@ func (r *bootstrapCountingResolver) DescribeConversation(context.Context, string
 // The takeover-I/O assertions are the original point of this test and still
 // hold: a rejected registration must not read the session list or resolve
 // conversations.
+func TestBootstrapReconstructsActiveSubagentBudgetAfterConvergence(t *testing.T) {
+	ctx := context.Background()
+	store, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	root := centralstore.SessionID("root0000")
+	child := centralstore.SessionID("child000")
+	if _, _, err := store.InsertSession(ctx, centralstore.NewSession{ID: root, Adapter: "shell", CWD: "/", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.InsertSession(ctx, centralstore.NewSession{ID: child, Adapter: "pi", CWD: "/", CreatedAt: 2, ParentSessionID: &root}); err != nil {
+		t.Fatal(err)
+	}
+	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{ID: child, Adapter: "pi", Alive: true, CreatedAt: 2, ObservedAt: 3, ParentSessionID: &root}, Incarnation: "restart-child"}
+	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{"child.sock": meta}, blocked: map[string]bool{}}
+	boot, err := newBootstrap(BootstrapConfig{
+		Store: store, Runners: runners, Converter: &wire.Converter{},
+		Endpoints:          EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"child.sock"}, nil }),
+		MaxActiveSubagents: 1, SemanticAgent: func(adapter string) bool { return adapter == "pi" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer boot.Close()
+	if _, err := boot.Converge(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boot.Coordinator.ReserveActiveSubagent(ctx, &root); !errors.Is(err, sessioncoord.ErrSubagentLimitReached) {
+		t.Fatalf("post-convergence admission = %v, want limit", err)
+	}
+}
+
 func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	ctx := context.Background()
 	store, err := centralstore.Open(ctx, t.TempDir())

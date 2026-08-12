@@ -35,6 +35,12 @@ import (
 // consume the same clock.
 const detachedStartupBudget = 30 * time.Second
 
+// activeSubagentReservationEnv is private launch provenance carried only from
+// the parent CLI to its runner registration. runSession removes it before the
+// agent process environment is built, so the opaque receipt never reaches the
+// launched model/tool process.
+const activeSubagentReservationEnv = "_GMXINTERNAL_ACTIVE_SUBAGENT_RESERVATION"
+
 // foregroundRegistrationBudget is the best-effort registration window for
 // foreground and nested-gmux launches. These runners are not gate-blocked:
 // the user's command is already running and the local terminal is attached.
@@ -188,8 +194,15 @@ func inheritLaunchParent(dir runDirectives, getenv func(string) string) runDirec
 	return dir
 }
 
+func takeActiveSubagentReservation(getenv func(string) string, unsetenv func(string) error) string {
+	token := getenv(activeSubagentReservationEnv)
+	_ = unsetenv(activeSubagentReservationEnv)
+	return token
+}
+
 func runSession(args []string, attach bool, dir runDirectives) {
 	dir = inheritLaunchParent(dir, os.Getenv)
+	activeSubagentReservation := takeActiveSubagentReservation(os.Getenv, os.Unsetenv)
 
 	// Resolve the adapter up front so we can short-circuit one-shot, non-session
 	// invocations (e.g. `pi update`, `pi list`) before any session machinery.
@@ -580,7 +593,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	regDone := make(chan struct{})
 	go func() {
 		defer close(regDone)
-		outcome := registerWithGmuxd(registrationCtx, sessionID, sockPath)
+		outcome := registerWithGmuxd(registrationCtx, sessionID, sockPath, activeSubagentReservation)
 		_ = os.Remove(pendingPath)
 		if outcome == registerIDConflict && !handshakeOwned {
 			log.Printf("gmux: registration refused for %s: session id already exists; child continues unregistered", sessionID)
@@ -932,7 +945,15 @@ func detachedCommand(args []string) (*exec.Cmd, *os.File, error) {
 // never printed and never fatal: callers other than `gmux -d` — notably
 // `gmux agent prompt --new` — need to report it in their own voice.
 func launchDetachedSession(args []string) (string, error) {
-	cmd, devNull, err := detachedCommand(args)
+	return launchDetachedSessionReserved(args, "")
+}
+
+// detachedLaunchCommand is the process-construction seam for the handshake
+// integration test. Production always points at detachedCommand.
+var detachedLaunchCommand = detachedCommand
+
+func launchDetachedSessionReserved(args []string, activeSubagentReservation string) (string, error) {
+	cmd, devNull, err := detachedLaunchCommand(args)
 	if err != nil {
 		return "", err
 	}
@@ -959,6 +980,9 @@ func launchDetachedSession(args []string) (string, error) {
 		handshakeHoldFDEnv+"=5",
 		handshakeDeadlineEnv+"="+fmt.Sprint(deadline.UnixNano()),
 	)
+	if activeSubagentReservation != "" {
+		cmd.Env = append(cmd.Env, activeSubagentReservationEnv+"="+activeSubagentReservation)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("failed to start background session: %v", err)

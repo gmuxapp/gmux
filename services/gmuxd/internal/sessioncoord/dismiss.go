@@ -72,7 +72,9 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 			}
 		}
 	}
+	memberSet := make(map[centralstore.SessionID]bool, len(members))
 	for _, id := range members {
+		memberSet[id] = true
 		if op, busy := c.ops[id]; busy {
 			c.mu.Unlock()
 			return nil, fmt.Errorf("%w: %s (%s)", ErrSubtreeBusy, id, op)
@@ -85,6 +87,10 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 			c.mu.Unlock()
 			return nil, fmt.Errorf("%w: subtree member %s", ErrConvergencePending, id)
 		}
+	}
+	if c.activeSubagents != nil && c.activeSubagents.hasLaunchFrom(memberSet) {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%w: active-subagent launch reservation in subtree", ErrSubtreeBusy)
 	}
 
 	dismissed, result, err := c.durable.DismissSessionTree(ctx, root, c.now())
@@ -136,6 +142,9 @@ func (c *Coordinator) Remove(ctx context.Context, id centralstore.SessionID, obs
 	result, err := c.durable.RemoveSessionAtVersion(ctx, id, observed)
 	if err == nil {
 		c.invalidateVerdict(id) // the row is gone; its reconciliation verdict with it
+		if c.activeSubagents != nil {
+			c.activeSubagents.remove(id)
+		}
 	}
 	seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 	c.mu.Unlock()
