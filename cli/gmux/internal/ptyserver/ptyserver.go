@@ -347,9 +347,7 @@ func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan 
 	}
 	e := vt.NewEmulator(cols, rows)
 	e.SetScrollbackSize(maxScrollback)
-	e.SetCallbacks(vt.Callbacks{
-		CursorVisibility: cursorCb,
-	})
+	e.SetCallbacks(vt.Callbacks{CursorVisibility: cursorCb})
 	// The emulator writes responses (e.g. DSR cursor position reports)
 	// to an internal pipe. If nothing reads them, Write blocks. We don't
 	// need the responses, so drain them in the background. The goroutine
@@ -394,13 +392,20 @@ func stopScreenDrain(e *vt.Emulator, drainDone chan struct{}) {
 // buffer can grow beyond the declared height. Rows are joined with \r\n
 // since bare \n wouldn't return the cursor to column 0.
 func renderScreen(e *vt.Emulator) string {
+	return renderScreenMode(e, true)
+}
+
+func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 	var sb strings.Builder
 
-	// Scrollback: lines that scrolled off the top of the screen.
-	if scrollback := e.Scrollback(); scrollback != nil {
-		for _, line := range scrollback.Lines() {
-			sb.WriteString(line.Render())
-			sb.WriteString("\r\n")
+	// Scrollback belongs to the normal buffer. Do not push it through a
+	// browser's alternate-buffer checkpoint, where it would be discarded.
+	if includeScrollback {
+		if scrollback := e.Scrollback(); scrollback != nil {
+			for _, line := range scrollback.Lines() {
+				sb.WriteString(line.Render())
+				sb.WriteString("\r\n")
+			}
 		}
 	}
 
@@ -419,6 +424,29 @@ func renderScreen(e *vt.Emulator) string {
 		sb.WriteString(line.Render())
 	}
 	return sb.String()
+}
+
+// snapshotFrame is the shared raw attach checkpoint. It must remain valid for
+// both the browser and `gmux attach`; it therefore contains no browser-only
+// buffer-selection or reset semantics. The browser owns its reconnect
+// isolation boundary and the emulator remains authoritative for rendered
+// cells, cursor position, and ordering.
+func snapshotFrame(screen *vt.Emulator, cursorHidden bool) []byte {
+	return snapshotFrameWithScreen(screen, cursorHidden, true)
+}
+
+func snapshotFrameWithScreen(screen *vt.Emulator, cursorHidden, includeScrollback bool) []byte {
+	snapshot := renderScreenMode(screen, includeScrollback)
+	cursorSeq := "\x1b[?25h" // show cursor (default)
+	if cursorHidden {
+		cursorSeq = "\x1b[?25l" // hide cursor
+	}
+	pos := screen.CursorPosition()
+	cursorPos := fmt.Sprintf("\x1b[%d;%dH", pos.Y+1, pos.X+1)
+	bsu := "\x1b[?2026h"                     // Begin Synchronized Update
+	resetSeq := "\x1b[r\x1b[H\x1b[2J\x1b[3J" // Reset scroll region + cursor home + erase display + erase scrollback
+	esu := "\x1b[?2026l"                     // End Synchronized Update
+	return []byte(bsu + resetSeq + snapshot + cursorPos + cursorSeq + esu)
 }
 
 // ResizeMsg is the JSON message clients send to resize the terminal.
@@ -1560,29 +1588,35 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// All steps happen under s.mu so readPTY cannot send live data to
 	// this client before the snapshot frame.
 	//
-	// Ordering guarantee: snapshot is always the first message the client
-	// receives, followed by any live data from subsequent readPTY cycles.
+	// Ordering guarantee: browser metadata (when requested) and the binary
+	// snapshot are the first messages, followed by live data from later
+	// readPTY cycles.
 	//
 	// The screen state comes from a virtual terminal (charmbracelet/x/vt)
 	// that processes every byte of PTY output. renderScreen serializes
 	// the scrollback history followed by the visible screen as ANSI
 	// sequences with style diffing.
 	//
-	// Sequence: BSU → reset → scrollback + screen → cursor → ESU
+	// Raw sequence: BSU → reset → scrollback + screen → cursor → ESU.
+	// Browser buffer selection is separate metadata so `gmux attach` never
+	// receives browser-specific 1049 bytes.
+	browserClient := r.URL.Query().Get("client") == "browser"
 	s.mu.Lock()
 	s.drainScreenLocked()
-	snapshot := renderScreen(s.screen)
-	cursorSeq := "\x1b[?25h" // show cursor (default)
-	if s.cursorHidden {
-		cursorSeq = "\x1b[?25l" // hide cursor
+	frame := snapshotFrameWithScreen(s.screen, s.cursorHidden, !browserClient || !s.screen.IsAltScreen())
+	if browserClient {
+		activeBuffer := "normal"
+		if s.screen.IsAltScreen() {
+			activeBuffer = "alternate"
+		}
+		meta, _ := json.Marshal(map[string]string{"type": "terminal_checkpoint", "active_buffer": activeBuffer})
+		if err := client.write(websocket.MessageText, meta); err != nil {
+			s.mu.Unlock()
+			conn.Close(websocket.StatusNormalClosure, "")
+			cancel()
+			return
+		}
 	}
-	// Position cursor at the emulator's current location.
-	pos := s.screen.CursorPosition()
-	cursorPos := fmt.Sprintf("\x1b[%d;%dH", pos.Y+1, pos.X+1)
-	bsu := "\x1b[?2026h"                     // Begin Synchronized Update
-	resetSeq := "\x1b[r\x1b[H\x1b[2J\x1b[3J" // Reset scroll region + cursor home + erase display + erase scrollback
-	esu := "\x1b[?2026l"                     // End Synchronized Update
-	frame := []byte(bsu + resetSeq + snapshot + cursorPos + cursorSeq + esu)
 	if err := client.write(websocket.MessageBinary, frame); err != nil {
 		s.mu.Unlock()
 		conn.Close(websocket.StatusNormalClosure, "")

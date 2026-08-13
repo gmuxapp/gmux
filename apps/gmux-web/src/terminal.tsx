@@ -11,21 +11,64 @@ import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, default
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { isTouchDevice } from './touch'
-import { createReplayBuffer } from './replay'
+import { BSU, createReplayBuffer, startsWith } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
-import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
+import { type LinkInfo, linkAtPoint, openLinkAtPoint } from './terminal-link'
 import { createLongPressRecognizer } from './long-press'
 import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
-import { wsStateOnClose, wsStateOnOutput, type WsState } from './ws-state'
+import { type WsState, wsStateOnClose, wsStateOnOutput } from './ws-state'
 import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
 import { TerminalFindBar } from './terminal-find'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 
 // ── Config ──
+
+const encoder = new TextEncoder()
+const CHECKPOINT_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J')
+const CHECKPOINT_SGR_RESET = encoder.encode('\x1b[0m')
+
+/**
+ * Add browser-only buffer authority at the complete checkpoint boundary.
+ * The binary frame itself is also consumed by `gmux attach`, so putting
+ * ?1049h/l in it would change an operator's terminal. Reordering the known
+ * reset prefix means a session switch selects the target buffer before
+ * clearing/rendering it, while a reconnect in alternate mode leaves the
+ * saved normal buffer intact. Older runners still get the narrow SGR reset.
+ */
+function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: boolean | null): Uint8Array[] {
+  if (chunks.length === 0) return chunks
+  const first = chunks[0]
+  if (!startsWith(first, BSU)) {
+    const prepared = new Uint8Array(CHECKPOINT_SGR_RESET.length + first.length)
+    prepared.set(CHECKPOINT_SGR_RESET)
+    prepared.set(first, CHECKPOINT_SGR_RESET.length)
+    return [prepared, ...chunks.slice(1)]
+  }
+
+  const hasReset = first.length >= BSU.length + CHECKPOINT_RESET.length
+    && startsWith(first.slice(BSU.length), CHECKPOINT_RESET)
+  if (!hasReset || activeAlternate === null) {
+    const prepared = new Uint8Array(CHECKPOINT_SGR_RESET.length + first.length)
+    prepared.set(CHECKPOINT_SGR_RESET)
+    prepared.set(first, CHECKPOINT_SGR_RESET.length)
+    return [prepared, ...chunks.slice(1)]
+  }
+
+  const buffer = encoder.encode(activeAlternate ? '\x1b[?1049h' : '\x1b[?1049l')
+  const body = first.slice(BSU.length + CHECKPOINT_RESET.length)
+  const prepared = new Uint8Array(BSU.length + buffer.length + CHECKPOINT_RESET.length + CHECKPOINT_SGR_RESET.length + body.length)
+  let offset = 0
+  prepared.set(BSU, offset); offset += BSU.length
+  prepared.set(buffer, offset); offset += buffer.length
+  prepared.set(CHECKPOINT_RESET, offset); offset += CHECKPOINT_RESET.length
+  prepared.set(CHECKPOINT_SGR_RESET, offset); offset += CHECKPOINT_SGR_RESET.length
+  prepared.set(body, offset)
+  return [prepared, ...chunks.slice(1)]
+}
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
 
@@ -847,13 +890,6 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
-    // Full RIS on the xterm instance so SGR colors, modes, cursor state, and
-    // scroll regions from the previous session don't bleed into the next one.
-    // Without this, switching away from a colorful TUI (btop, htop) leaves
-    // its trailing bg/fg attributes active until the new session emits an SGR
-    // of its own, painting plain-text output in btop's last color.
-    termRef.current.reset()
-
     // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).
     resetResizeEchoGate()
@@ -879,15 +915,21 @@ export function TerminalView({
       // regardless of the stale scroll state.
       termIoRef.current?.forceNextScrollToBottom()
 
+      // The runner's binary frame is shared with `gmux attach`, so browser
+      // buffer selection is delivered as metadata rather than ANSI bytes in
+      // that stream. Apply it only once the complete BSU/ESU checkpoint is
+      // staged; the existing screen remains visible during failed attempts.
+      let checkpointAlt: boolean | null = null
       const replay = createReplayBuffer((chunks) => {
-        queueMany(chunks, () => {
+        const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt)
+        queueMany(prepared, () => {
           termRef.current?.scrollToBottom()
           setTermLoading(false)
         })
       })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}`)
+      const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}?client=browser`)
       ws.binaryType = 'arraybuffer'
       wsRef.current = ws
 
@@ -932,6 +974,11 @@ export function TerminalView({
             const msg = JSON.parse(ev.data)
             // Legacy: old proxy sends resize_state on connect with cols/rows.
             // Use it to initialize ptySize if we don't have one yet.
+            if (msg.type === 'terminal_checkpoint') {
+              checkpointAlt = msg.active_buffer === 'alternate'
+              return
+            }
+
             if (msg.type === 'resize_state') {
               const cols = msg.cols as number | undefined
               const rows = msg.rows as number | undefined

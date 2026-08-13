@@ -91,7 +91,11 @@ func (p *Proxy) Handler() http.HandlerFunc {
 
 		// Connect to gmux-run's Unix socket.
 		ctx := r.Context()
-		backendConn, _, err := websocket.Dial(ctx, "ws://localhost/ws", &websocket.DialOptions{
+		backendURL := "ws://localhost/ws"
+		if r.URL.RawQuery != "" {
+			backendURL += "?" + r.URL.RawQuery
+		}
+		backendConn, _, err := websocket.Dial(ctx, backendURL, &websocket.DialOptions{
 			HTTPClient: &http.Client{
 				Transport: &http.Transport{
 					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

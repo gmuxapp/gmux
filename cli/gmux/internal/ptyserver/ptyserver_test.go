@@ -925,6 +925,29 @@ func TestShutdownDrainNoRace(t *testing.T) {
 	}
 }
 
+func TestSnapshotFrameIsSharedAttachStream(t *testing.T) {
+	screen, screenDrain := newScreen(20, 4, func(bool) {})
+	defer stopScreenDrain(screen, screenDrain)
+
+	// This is the raw frame consumed by `gmux attach`. Even when the PTY is
+	// currently in an alternate screen, it must not change the caller's own
+	// terminal buffer; only the PTY's bytes are forwarded.
+	screen.Write([]byte("\x1b[?1049h\x1b[2J\x1b[H\x1b[44mALT\x1b[0m"))
+	frame := string(snapshotFrame(screen, false))
+	for _, want := range []string{"\x1b[?2026h", "\x1b[r\x1b[H\x1b[2J\x1b[3J", "ALT", "\x1b[?25h", "\x1b[?2026l"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("snapshot missing %q in %q", want, frame)
+		}
+	}
+	if strings.Contains(frame, "\x1b[?1049") {
+		t.Fatalf("raw attach frame changes caller buffer: %q", frame)
+	}
+	if strings.Index(frame, "\x1b[?2026h") > strings.Index(frame, "ALT") ||
+		strings.Index(frame, "\x1b[?2026l") < strings.Index(frame, "ALT") {
+		t.Fatalf("snapshot is not atomically framed: %q", frame)
+	}
+}
+
 // TestRenderScreenIncludesScrollback verifies that renderScreen includes
 // lines that scrolled off the top of the screen, not just the visible rows.
 func TestRenderScreenIncludesScrollback(t *testing.T) {

@@ -271,7 +271,10 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     reset(epoch: number) {
       currentEpoch = epoch
       queue = []
-      writeInFlight = false
+      // Keep writeInFlight true until the old xterm callback arrives. A
+      // reset can invalidate queued work, but it cannot cancel xterm's
+      // parser callback; clearing this flag here would let a new resize or
+      // write overlap the still-running old parse.
       pendingResize = null
       savedScroll = null
       bufferReset = false
