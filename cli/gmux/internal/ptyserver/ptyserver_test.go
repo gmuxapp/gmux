@@ -925,6 +925,44 @@ func TestShutdownDrainNoRace(t *testing.T) {
 	}
 }
 
+func TestTerminalCheckpointMetadataCarriesMargins(t *testing.T) {
+	data, err := json.Marshal(terminalCheckpointMetadata{
+		Type: "terminal_checkpoint", ActiveBuffer: "alternate", ScrollTop: 2, ScrollBottom: 4, Rows: 44,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"terminal_checkpoint","active_buffer":"alternate","scroll_top":2,"scroll_bottom":4,"rows":44}`
+	if string(data) != want {
+		t.Fatalf("metadata = %s, want %s", data, want)
+	}
+}
+
+func TestMarginsFollowVTPerBufferAndResetSemantics(t *testing.T) {
+	margins := newMarginTracker(6)
+	screen, screenDrain := newScreenWithMargins(20, 6, func(bool) {}, margins)
+	defer stopScreenDrain(screen, screenDrain)
+
+	screen.Write([]byte("\x1b[2;5r"))
+	if got := margins.active(false); got != (verticalMargins{top: 2, bottom: 5}) {
+		t.Fatalf("normal margins = %+v, want 2..5", got)
+	}
+	screen.Write([]byte("\x1b[?1049h\x1b[3;6r"))
+	if got := margins.active(true); got != (verticalMargins{top: 3, bottom: 6}) {
+		t.Fatalf("alternate margins = %+v, want 3..6", got)
+	}
+	if got := margins.active(false); got != (verticalMargins{top: 2, bottom: 5}) {
+		t.Fatalf("normal margins changed across 1049 = %+v", got)
+	}
+	screen.Write([]byte("\x1bc"))
+	if got := margins.active(false); got != (verticalMargins{top: 1, bottom: 6}) {
+		t.Fatalf("normal margins after RIS = %+v, want full screen", got)
+	}
+	if got := margins.active(true); got != (verticalMargins{top: 1, bottom: 6}) {
+		t.Fatalf("alternate margins after RIS = %+v, want full screen", got)
+	}
+}
+
 func TestSnapshotFrameIsSharedAttachStream(t *testing.T) {
 	screen, screenDrain := newScreen(20, 4, func(bool) {})
 	defer stopScreenDrain(screen, screenDrain)

@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test'
 import { gotoSession, openApp } from '../helpers'
 
-const A_COMMAND = 'printf "\\033[44mA-BLUE\\033[0m\\r\\n"; for i in $(seq 1 40); do printf "A-SCROLL-%02d\\r\\n" "$i"; done; sleep 5; printf "\\033[?1h\\033[?1000h\\033[?1006h\\033[?2004h\\033[?1004h\\033[2;4r\\033[3;6H"; while true; do read -r line || exit; eval "$line"; done'
+const A_COMMAND = 'stty -echo; printf "\\033[44mA-BLUE\\033[0m\\r\\n"; for i in $(seq 1 40); do printf "A-SCROLL-%02d\\r\\n" "$i"; done; sleep 5; printf "\\033[?1h\\033[?1000h\\033[?1006h\\033[?2004h\\033[?1004h\\033[2;4r\\033[3;6H"; while true; do read -r line || exit; eval "$line"; done'
 const B_COMMAND = 'printf "B-NORMAL\\r\\n"; while true; do read -r line || exit; eval "$line"; done'
+const C_COMMAND = 'stty -echo; printf "C-NORMAL\\r\\n"; while true; do read -r line || exit; if [ "$line" = go ]; then printf "\\033[2;4r\\033[3;6H"; for i in $(seq 1 40); do printf "C-SCROLL-%02d\\r\\n" "$i"; done; printf "\\033[9;20H"; elif [ "$line" = marker ]; then printf "C-PARK-MARK"; elif [ "$line" = after ]; then printf "\\033[3;6H"; for i in $(seq 1 10); do printf "C-AFTER-%02d\\r\\n" "$i"; done; fi; done'
 
 test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
   test.setTimeout(90_000)
@@ -52,7 +53,7 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
       })
       if (!response.ok) throw new Error(`launch failed: ${response.status}`)
     }, { command, cwd })
-    const marker = command.includes('A-BLUE') ? 'A-BLUE' : 'B-NORMAL'
+    const marker = command.includes('A-BLUE') ? 'A-BLUE' : command.includes('C-NORMAL') ? 'C-NORMAL' : 'B-NORMAL'
     const link = page.locator('a').filter({ hasText: marker }).first()
     await link.waitFor({ state: 'visible', timeout: 10_000 })
     const href = await link.getAttribute('href')
@@ -61,6 +62,7 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
 
   const aId = await launch(A_COMMAND)
   const bId = await launch(B_COMMAND)
+  const cId = await launch(C_COMMAND)
   // Let the production SSE snapshot publish the newly launched sessions
   // before routing through the same navigation hook used by the suite.
   await page.waitForTimeout(1500)
@@ -136,9 +138,10 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
       return {
         active: active.type,
         activeText: active.getLine(0)?.translateToString(true),
-        normalText: term.buffer.normal.getLine(0)?.translateToString(true),
+        normalText: Array.from({ length: term.buffer.normal.baseY + term.rows }, (_, y) => term.buffer.normal.getLine(y)?.translateToString(true) ?? '').join('\n'),
       }
-    }), { timeout: 10_000 }).toMatchObject({ active: 'alternate', activeText: expect.stringContaining('B-ALT'), normalText: expect.stringContaining('B-NORMAL') })
+    }), { timeout: 10_000 }).toMatchObject({ active: 'alternate', activeText: expect.stringContaining('B-ALT') })
+    expect(await page.evaluate(() => (window as any).__gmuxTerm.buffer.normal.getLine(0)?.translateToString(true))).not.toContain('A-BLUE')
     mark('B reconnect')
 
     // Same-session reconnect with legacy metadata absence is non-destructive:
@@ -159,6 +162,10 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
     await page.keyboard.type("printf '\\033[?1049l'")
     await page.keyboard.press('Enter')
     await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'normal')
+    expect(await page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      return Array.from({ length: term.buffer.normal.baseY + term.rows }, (_, y) => term.buffer.normal.getLine(y)?.translateToString(true) ?? '').join('\n')
+    })).not.toContain('A-BLUE')
     await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[H\\033[44mB-ALT-SWITCH\\033[0m'")
     await page.keyboard.press('Enter')
     await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'alternate'
@@ -211,17 +218,25 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
 
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-after-reconnect.png' })
 
-    // CSI r is intentionally absent from browser checkpoint preparation: a
-    // same-session reconnect must retain the live DECSTBM region rather than
-    // silently restoring default margins.
-    await page.evaluate(() => {
-      const raw = btoa('\x1b[2;4r')
-      ;(window as any).__gmuxInject(raw)
+    // A real-daemon regression: C fills 40 distinguishable lines, then sets
+    // a non-full region after its initial geometry has settled.
+    mark('C attach')
+    await gotoLocalSession(cId)
+    mark('C connected')
+    await page.locator('.xterm-helper-textarea').focus()
+    await page.keyboard.type('go')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const text = Array.from({ length: term.buffer.active.baseY + term.rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return text.includes('C-SCROLL-40')
     })
+    mark('C margins')
     await expect.poll(() => page.evaluate(() => {
       const buffer = (window as any).__gmuxTerm._core?.buffers?.active
       return { top: buffer?.scrollTop, bottom: buffer?.scrollBottom }
-    })).toMatchObject({ top: 1, bottom: 3 })
+    }), { timeout: 10_000 }).toMatchObject({ top: 1, bottom: 3 })
+    mark('C reconnect start')
     await page.evaluate(() => {
       for (const ws of (window as any).__allWs as WebSocket[]) {
         if (ws.readyState === WebSocket.OPEN && ws.url.includes('/ws/')) ws.close()
@@ -229,10 +244,60 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
     })
     await expect(page.locator('.terminal-disconnected-pill')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('.terminal-disconnected-pill')).not.toBeVisible({ timeout: 10_000 })
+    mark('C reconnect socket')
     await expect.poll(() => page.evaluate(() => {
-      const buffer = (window as any).__gmuxTerm._core?.buffers?.active
-      return { top: buffer?.scrollTop, bottom: buffer?.scrollBottom }
-    })).toMatchObject({ top: 1, bottom: 3 })
+      const term = (window as any).__gmuxTerm
+      const active = term.buffer.active
+      const buffer = term._core?.buffers?.active
+      const text = Array.from({ length: active.baseY + term.rows }, (_, y) => active.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return { top: buffer?.scrollTop, bottom: buffer?.scrollBottom, cursorX: active.cursorX, cursorY: active.cursorY, text }
+    }), { timeout: 10_000 }).toMatchObject({ top: 1, bottom: 3, cursorX: 19, cursorY: 8 })
+    mark('C reconnect margins and cursor restored')
+    await expect.poll(() => page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      const text = Array.from({ length: term.buffer.active.baseY + term.rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return Array.from({ length: 40 }, (_, i) => `C-SCROLL-${String(i + 1).padStart(2, '0')}`).filter(line => !text.includes(line))
+    })).toEqual([])
+    mark('C content restored')
+    const beforeMarker = await page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm.buffer.active
+      return { row0: buffer.getLine(buffer.baseY)?.translateToString(true) ?? '' }
+    })
+    await page.locator('.xterm-helper-textarea').focus()
+    await page.keyboard.type('marker')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm.buffer.active
+      const parkedRow = buffer.getLine(buffer.baseY + 8)?.translateToString(true) ?? ''
+      return {
+        row0: buffer.getLine(buffer.baseY)?.translateToString(true) ?? '',
+        markerAtParkedColumn: parkedRow.slice(19).startsWith('C-PARK-MARK'),
+      }
+    })).toEqual({ row0: beforeMarker.row0, markerAtParkedColumn: true })
+    mark('C marker landed at parked cursor')
+    await page.keyboard.type('after')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const text = Array.from({ length: term.buffer.active.baseY + term.rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return text.includes('C-AFTER-10')
+    })
+    mark('C after output')
+    const afterRegion = await page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      const buffer = term.buffer.active
+      return { top: buffer.getLine(buffer.baseY)?.translateToString(true), bottom: buffer.getLine(buffer.baseY + 4)?.translateToString(true), scrollTop: term._core?.buffers?.active.scrollTop, scrollBottom: term._core?.buffers?.active.scrollBottom }
+    })
+    expect(afterRegion).toMatchObject({ scrollTop: 1, scrollBottom: 3 })
+    mark('C region verified')
+
+    // Return to A before the failed-handshake check.
+    await gotoLocalSession(aId)
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const text = Array.from({ length: term.buffer.active.baseY + term.rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return text.includes('A-BLUE')
+    })
 
     // Failed replacement handshakes preserve the last committed screen.
     await page.evaluate(() => {
@@ -259,12 +324,12 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
       return { buffer: buffer.type, baseY: buffer.baseY, viewportY: buffer.viewportY, cursorX: buffer.cursorX, cursorY: buffer.cursorY, cols: term.cols, rows: term.rows, text: line.translateToString(true), bg: line.getCell(0).bg }
     })
     expect(state).toMatchObject({ buffer: 'normal', text: expect.stringContaining('A-BLUE') })
-    expect(state.cursorX).toBeGreaterThanOrEqual(0)
-    expect(state.cursorY).toBeGreaterThanOrEqual(0)
+    expect(state.cursorX).toBe(5)
+    expect(state.cursorY).toBe(2)
     expect(state.viewportY).toBe(state.baseY)
     expect(state.bg).not.toBe(0)
   } finally {
-    for (const id of [aId, bId]) {
+    for (const id of [aId, bId, cId]) {
       await page.evaluate(async id => { await fetch(`/v1/sessions/${id}/kill`, { method: 'POST' }) }, id)
     }
   }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/agentext"
@@ -336,7 +337,50 @@ const probeTimeout = 250 * time.Millisecond
 // newScreen builds the replay emulator and starts the DSR drain goroutine. It
 // returns the emulator and a channel that is closed when the drain goroutine
 // exits, so shutdown can join it (see stopScreenDrain).
-func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan struct{}) {
+type verticalMargins struct {
+	top    int // 1-based, inclusive
+	bottom int // 1-based, inclusive
+}
+
+type marginTracker struct {
+	normal, alternate verticalMargins
+}
+
+func newMarginTracker(rows int) *marginTracker {
+	m := &marginTracker{}
+	m.reset(rows)
+	return m
+}
+
+func (m *marginTracker) reset(rows int) {
+	if rows <= 0 {
+		rows = 24
+	}
+	m.normal = verticalMargins{top: 1, bottom: rows}
+	m.alternate = m.normal
+}
+
+func (m *marginTracker) active(alt bool) verticalMargins {
+	if alt {
+		return m.alternate
+	}
+	return m.normal
+}
+
+func (m *marginTracker) set(alt bool, margins verticalMargins) {
+	if alt {
+		m.alternate = margins
+	} else {
+		m.normal = margins
+	}
+}
+
+// newScreenWithMargins observes DECSTBM at the same point the vt emulator
+// applies it. Registering a handler that returns false lets vt's built-in
+// handler run after we mirror its validated 1-based semantics. Keeping one
+// pair per buffer matters: vt retains the normal screen's region when 1049
+// switches to the separately initialised alternate screen.
+func newScreenWithMargins(cols, rows int, cursorCb func(visible bool), margins *marginTracker) (*vt.Emulator, chan struct{}) {
 	// Default to 80x24 when launched non-interactively (no terminal).
 	// The first resize from a connecting client will set the real size.
 	if cols <= 0 {
@@ -348,6 +392,27 @@ func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan 
 	e := vt.NewEmulator(cols, rows)
 	e.SetScrollbackSize(maxScrollback)
 	e.SetCallbacks(vt.Callbacks{CursorVisibility: cursorCb})
+	if margins != nil {
+		e.RegisterCsiHandler('r', func(params ansi.Params) bool {
+			top, _, _ := params.Param(0, 1)
+			if top < 1 {
+				top = 1
+			}
+			bottom, _, _ := params.Param(1, e.Height())
+			if bottom < 1 {
+				bottom = e.Height()
+			}
+			if top < bottom {
+				margins.set(e.IsAltScreen(), verticalMargins{top: top, bottom: bottom})
+			}
+			return false // run vt's authoritative built-in DECSTBM handler
+		})
+		e.RegisterEscHandler('c', func() bool {
+			margins.reset(e.Height())
+			return false // let vt perform RIS after resetting both screens
+		})
+	}
+
 	// The emulator writes responses (e.g. DSR cursor position reports)
 	// to an internal pipe. If nothing reads them, Write blocks. We don't
 	// need the responses, so drain them in the background. The goroutine
@@ -359,6 +424,10 @@ func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan 
 		_, _ = io.Copy(io.Discard, e)
 	}()
 	return e, drainDone
+}
+
+func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan struct{}) {
+	return newScreenWithMargins(cols, rows, cursorCb, nil)
 }
 
 // stopScreenDrain unblocks and joins the DSR drain goroutine, then closes the
@@ -426,6 +495,14 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 	return sb.String()
 }
 
+type terminalCheckpointMetadata struct {
+	Type         string `json:"type"`
+	ActiveBuffer string `json:"active_buffer"`
+	ScrollTop    int    `json:"scroll_top"`
+	ScrollBottom int    `json:"scroll_bottom"`
+	Rows         int    `json:"rows"`
+}
+
 // snapshotFrame is the shared raw attach checkpoint. It must remain valid for
 // both the browser and `gmux attach`; it therefore contains no browser-only
 // buffer-selection or reset semantics. The browser owns its reconnect
@@ -470,8 +547,9 @@ type Server struct {
 	// nil when a test injected a bare listener; such a server owns no
 	// pathname and must never unlink one.
 	bound           *BoundSocket
-	screen          *vt.Emulator  // virtual terminal for replay snapshots (guarded by mu)
-	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
+	screen          *vt.Emulator   // virtual terminal for replay snapshots (guarded by mu)
+	screenDrainDone chan struct{}  // closed when the DSR drain goroutine exits
+	margins         *marginTracker // DECSTBM margins mirrored per emulator buffer (guarded by mu)
 	state           *session.State
 	// promptMarks derives Status from OSC 133 prompt marks for every
 	// session whose adapter is not hook-driven (adapter.HookDriven — the
@@ -711,9 +789,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
-	s.screen, s.screenDrainDone = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
+	s.margins = newMarginTracker(int(cfg.Rows))
+	s.screen, s.screenDrainDone = newScreenWithMargins(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
-	})
+	}, s.margins)
 
 	// Non-hook-driven sessions get their busy/idle Status derived from
 	// OSC 133 prompt marks in the output stream: Active=true when a
@@ -1609,8 +1688,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if s.screen.IsAltScreen() {
 			activeBuffer = "alternate"
 		}
-		meta, _ := json.Marshal(map[string]string{"type": "terminal_checkpoint", "active_buffer": activeBuffer})
-		if err := client.write(websocket.MessageText, meta); err != nil {
+		margins := verticalMargins{top: 1, bottom: int(s.ptyRows)}
+		if s.margins != nil {
+			margins = s.margins.active(s.screen.IsAltScreen())
+		}
+		// Margins are 1-based and inclusive, matching DECSTBM. The emulator
+		// tracker validates top < bottom and resets both buffers on geometry
+		// changes, so full-screen/default state is represented explicitly.
+		meta := terminalCheckpointMetadata{
+			Type: "terminal_checkpoint", ActiveBuffer: activeBuffer,
+			ScrollTop: margins.top, ScrollBottom: margins.bottom, Rows: int(s.ptyRows),
+		}
+		metaBytes, _ := json.Marshal(meta)
+		if err := client.write(websocket.MessageText, metaBytes); err != nil {
 			s.mu.Unlock()
 			conn.Close(websocket.StatusNormalClosure, "")
 			cancel()
@@ -1712,6 +1802,9 @@ func (s *Server) shrinkForReconnect() {
 	rows := s.ptyRows
 	s.drainScreenLocked()
 	s.screen.Resize(int(cols), int(rows))
+	if s.margins != nil {
+		s.margins.reset(int(rows))
+	}
 	s.mu.Unlock()
 
 	s.setPtySize(&pty.Winsize{Cols: cols, Rows: rows})
@@ -1734,6 +1827,9 @@ func (s *Server) resize(msg ResizeMsg) {
 	if sizeChanged {
 		s.ptyCols = msg.Cols
 		s.ptyRows = msg.Rows
+		if s.margins != nil {
+			s.margins.reset(int(msg.Rows))
+		}
 		// Drain pending data first so the emulator processes it at the
 		// old size before switching to the new dimensions.
 		s.drainScreenLocked()
