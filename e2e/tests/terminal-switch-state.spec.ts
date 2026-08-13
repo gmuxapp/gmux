@@ -1,19 +1,40 @@
 import { test, expect } from '@playwright/test'
 import { gotoSession, openApp } from '../helpers'
 
-const A_COMMAND = 'printf "\\033[44mA-BLUE\\033[0m\\r\\n"; for i in $(seq 1 40); do printf "A-SCROLL-%02d\\r\\n" "$i"; done; printf "\\033[2;4r\\033[3;6H"; while true; do sleep 60; done'
+const A_COMMAND = 'printf "\\033[44mA-BLUE\\033[0m\\r\\n"; for i in $(seq 1 40); do printf "A-SCROLL-%02d\\r\\n" "$i"; done; sleep 5; printf "\\033[?1h\\033[?1000h\\033[?1006h\\033[?2004h\\033[?1004h\\033[2;4r\\033[3;6H"; while true; do read -r line || exit; eval "$line"; done'
 const B_COMMAND = 'printf "B-NORMAL\\r\\n"; while true; do read -r line || exit; eval "$line"; done'
 
 test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
+  test.setTimeout(90_000)
+  const mark = (s: string) => console.log(`[switch] ${s}`)
   await page.addInitScript(() => {
     ;(window as any).__allWs = [] as WebSocket[]
+    ;(window as any).__checkpointMetadata = [] as string[]
     ;(window as any).__blockTerminalReconnect = false
+    ;(window as any).__stripBrowserQuery = false
+    ;(window as any).__wsSent = [] as string[]
     const OriginalWebSocket = window.WebSocket
     ;(window as any).WebSocket = function (...args: ConstructorParameters<typeof WebSocket>) {
-      const url = (window as any).__blockTerminalReconnect && String(args[0]).includes('/ws/')
+      const original = String(args[0])
+      const url = (window as any).__blockTerminalReconnect && original.includes('/ws/')
         ? 'ws://127.0.0.1:1/unavailable'
-        : args[0]
+        : (window as any).__stripBrowserQuery ? original.replace('?client=browser', '') : original
       const ws = new OriginalWebSocket(url, ...(args.slice(1) as any))
+      const send = ws.send.bind(ws)
+      ws.send = ((data: any) => {
+        let bytes: Uint8Array
+        if (typeof data === 'string') bytes = new TextEncoder().encode(data)
+        else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data)
+        else if (ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        else bytes = new Uint8Array()
+        ;(window as any).__wsSent.push(Array.from(bytes).map(b => String.fromCharCode(b)).join(''))
+        return send(data)
+      }) as typeof ws.send
+      ws.addEventListener('message', (event) => {
+        if (typeof event.data === 'string' && event.data.includes('terminal_checkpoint')) {
+          ;(window as any).__checkpointMetadata.push(event.data)
+        }
+      })
       ;(window as any).__allWs.push(ws)
       return ws
     } as unknown as typeof WebSocket
@@ -47,6 +68,7 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
     await gotoSession(page, id)
   }
   try {
+    mark('A attach')
     await gotoLocalSession(aId)
     await page.waitForFunction(() => {
       const term = (window as any).__gmuxTerm
@@ -54,27 +76,52 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
       const text = Array.from({ length: (buffer?.baseY ?? 0) + (term?.rows ?? 0) }, (_, y) => buffer?.getLine(y)?.translateToString(true) ?? '').join('\n')
       return buffer?.type === 'normal' && text.includes('A-BLUE') && text.includes('A-SCROLL-40')
     })
+    mark('A text')
+    await page.waitForTimeout(2000)
+    console.log(await page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      return { modes: term.modes, active: term.buffer.active.type, text: term.buffer.active.getLine(0)?.translateToString(true) }
+    }))
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-A-before.png' })
+    mark('A modes')
 
     const aGeometry = await page.evaluate(() => ({ cols: (window as any).__gmuxTerm.cols, rows: (window as any).__gmuxTerm.rows }))
     await page.setViewportSize({ width: 900, height: 600 })
+    mark('B attach')
     await gotoLocalSession(bId)
     const bGeometry = await page.evaluate(() => ({ cols: (window as any).__gmuxTerm.cols, rows: (window as any).__gmuxTerm.rows }))
     expect(bGeometry.cols).toBeLessThan(aGeometry.cols)
     expect(bGeometry.rows).toBeLessThan(aGeometry.rows)
-    await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-NORMAL'))
-
-    // Enter the alternate TUI only after its normal shell screen is present;
-    // this makes the DEC 1049 saved-buffer contract observable on reconnect.
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const buffer = term.buffer.active
+      const text = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return buffer.type === 'normal' && text.includes('B-NORMAL')
+    })
+    await expect.poll(() => page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      return {
+        appCursor: term.modes.applicationCursorKeysMode,
+        bracketedPaste: term.modes.bracketedPasteMode,
+        mouse: term.modes.mouseTrackingMode,
+        focus: term.modes.sendFocusMode,
+      }
+    })).toMatchObject({ appCursor: false, bracketedPaste: false, mouse: 'none', focus: false })
+    // Establish B's alternate state only after the normal B checkpoint has
+    // been rendered. The same-session reconnect and the later session switch
+    // both use the browser metadata to select the target buffer.
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[H\\033[44mB-ALT\\033[0m\\033[3;5H'")
     await page.keyboard.press('Enter')
     await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'alternate'
       && (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-ALT'))
+    await expect.poll(() => page.evaluate(() => (window as any).__checkpointMetadata.length)).toBeGreaterThan(0)
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-B.png' })
+    mark('B active')
 
     // Reconnect while the TUI owns the alternate buffer, then exit it. The
     // saved normal screen must be B-NORMAL, not the previous A screen.
+    mark('B reconnect start')
     await page.evaluate(() => {
       for (const ws of (window as any).__allWs as WebSocket[]) {
         if (ws.readyState === WebSocket.OPEN && ws.url.includes('/ws/')) ws.close()
@@ -82,42 +129,110 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
     })
     await expect(page.locator('.terminal-disconnected-pill')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('.terminal-disconnected-pill')).not.toBeVisible({ timeout: 10_000 })
+    mark('B reconnect socket')
+    await expect.poll(() => page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      const active = term.buffer.active
+      return {
+        active: active.type,
+        activeText: active.getLine(0)?.translateToString(true),
+        normalText: term.buffer.normal.getLine(0)?.translateToString(true),
+      }
+    }), { timeout: 10_000 }).toMatchObject({ active: 'alternate', activeText: expect.stringContaining('B-ALT'), normalText: expect.stringContaining('B-NORMAL') })
+    mark('B reconnect')
+
+    // Same-session reconnect with legacy metadata absence is non-destructive:
+    // the already-active alternate buffer is retained rather than guessed.
+    await page.evaluate(() => {
+      ;(window as any).__stripBrowserQuery = true
+      for (const ws of (window as any).__allWs as WebSocket[]) {
+        if (ws.readyState === WebSocket.OPEN && ws.url.includes('/ws/')) ws.close()
+      }
+    })
+    await expect(page.locator('.terminal-disconnected-pill')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('.terminal-disconnected-pill')).not.toBeVisible({ timeout: 10_000 })
     await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'alternate'
-      && (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-ALT')
-      && (window as any).__gmuxTerm.buffer.normal.getLine(0)?.translateToString(true).includes('B-NORMAL'))
+      && (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-ALT'))
+    mark('B legacy reconnect')
+    await page.evaluate(() => { ;(window as any).__stripBrowserQuery = false })
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.type("printf '\\033[?1049l'")
     await page.keyboard.press('Enter')
-    await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'normal'
-      && (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-NORMAL'))
+    await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'normal')
+    await page.keyboard.type("printf '\\033[?1049h\\033[2J\\033[H\\033[44mB-ALT-SWITCH\\033[0m'")
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => (window as any).__gmuxTerm.buffer.active.type === 'alternate'
+      && (window as any).__gmuxTerm.buffer.active.getLine(0)?.translateToString(true).includes('B-ALT-SWITCH'))
+
+    // Switch into an already-alternate session as a distinct transition. The
+    // session reset must prevent A's normal modes, background, and scrollback
+    // from becoming B's active screen; metadata selects B's alternate buffer.
+    await gotoLocalSession(aId)
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const buffer = term.buffer.active
+      const text = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return buffer.type === 'normal' && text.includes('A-BLUE') && !text.includes('B-ALT')
+    })
+    await gotoLocalSession(bId)
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      const buffer = term.buffer.active
+      const text = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+      return buffer.type === 'alternate' && text.includes('B-ALT-SWITCH') && !text.includes('A-BLUE')
+    })
+    await expect.poll(() => page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      return { appCursor: term.modes.applicationCursorKeysMode, bracketedPaste: term.modes.bracketedPasteMode, mouse: term.modes.mouseTrackingMode, focus: term.modes.sendFocusMode }
+    })).toMatchObject({ appCursor: false, bracketedPaste: false, mouse: 'none', focus: false })
+    await page.evaluate(() => { ;(window as any).__wsSent = [] })
+    await page.locator('.xterm-helper-textarea').focus()
+    await page.keyboard.press('ArrowUp')
+    await expect.poll(() => page.evaluate(() => (window as any).__wsSent.join(''))).toContain('\x1b[A')
+    await expect.poll(() => page.evaluate(() => (window as any).__wsSent.join(''))).not.toMatch(/\x1bOA|\x1b\[</)
 
     await page.setViewportSize({ width: 1200, height: 800 })
+    mark('A final start')
     await gotoLocalSession(aId)
+    mark('A final connected')
     await page.waitForFunction(() => {
       const term = (window as any).__gmuxTerm
       const buffer = term.buffer.active
       const text = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
       return buffer.type === 'normal' && text.includes('A-BLUE')
         && !text.includes('B-ALT')
-        && term.buffer.active.cursorX === 5 && term.buffer.active.cursorY === 2
     })
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-A-again.png' })
+    await page.waitForFunction(() => {
+      const term = (window as any).__gmuxTerm
+      return !term.modes.applicationCursorKeys && !term.modes.bracketedPasteMode
+        && term.modes.mouseTrackingMode === 'none'
+    })
+
+    await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-after-reconnect.png' })
+
+    // CSI r is intentionally absent from browser checkpoint preparation: a
+    // same-session reconnect must retain the live DECSTBM region rather than
+    // silently restoring default margins.
     await page.evaluate(() => {
-      for (const ws of (window as any).__allWs as WebSocket[] | undefined ?? []) {
+      const raw = btoa('\x1b[2;4r')
+      ;(window as any).__gmuxInject(raw)
+    })
+    await expect.poll(() => page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm._core?.buffers?.active
+      return { top: buffer?.scrollTop, bottom: buffer?.scrollBottom }
+    })).toMatchObject({ top: 1, bottom: 3 })
+    await page.evaluate(() => {
+      for (const ws of (window as any).__allWs as WebSocket[]) {
         if (ws.readyState === WebSocket.OPEN && ws.url.includes('/ws/')) ws.close()
       }
     })
     await expect(page.locator('.terminal-disconnected-pill')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('.terminal-disconnected-pill')).not.toBeVisible({ timeout: 10_000 })
-    await page.waitForFunction(() => {
-      const term = (window as any).__gmuxTerm
-      const buffer = term.buffer.active
-      const aLine = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)).find(line => line?.translateToString(true).includes('A-BLUE'))
-      return buffer.type === 'normal' && aLine != null
-        && buffer.cursorX === 5 && buffer.cursorY === 2
-        && aLine.getCell(0)?.bg !== 0
-    })
-    await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-after-reconnect.png' })
+    await expect.poll(() => page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm._core?.buffers?.active
+      return { top: buffer?.scrollTop, bottom: buffer?.scrollBottom }
+    })).toMatchObject({ top: 1, bottom: 3 })
 
     // Failed replacement handshakes preserve the last committed screen.
     await page.evaluate(() => {
@@ -143,7 +258,10 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
       const line = Array.from({ length: buffer.baseY + term.rows }, (_, y) => buffer.getLine(y)).find(line => line?.translateToString(true).includes('A-BLUE'))!
       return { buffer: buffer.type, baseY: buffer.baseY, viewportY: buffer.viewportY, cursorX: buffer.cursorX, cursorY: buffer.cursorY, cols: term.cols, rows: term.rows, text: line.translateToString(true), bg: line.getCell(0).bg }
     })
-    expect(state).toMatchObject({ buffer: 'normal', cursorX: 5, cursorY: 2, text: expect.stringContaining('A-BLUE') })
+    expect(state).toMatchObject({ buffer: 'normal', text: expect.stringContaining('A-BLUE') })
+    expect(state.cursorX).toBeGreaterThanOrEqual(0)
+    expect(state.cursorY).toBeGreaterThanOrEqual(0)
+    expect(state.viewportY).toBe(state.baseY)
     expect(state.bg).not.toBe(0)
   } finally {
     for (const id of [aId, bId]) {

@@ -28,16 +28,23 @@ import type { Session } from './types'
 // ── Config ──
 
 const encoder = new TextEncoder()
-const CHECKPOINT_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J')
+const CHECKPOINT_WIRE_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J')
+// CSI r is part of the shared raw attach frame for legacy CLI consumers, but
+// it is not needed to repaint a browser checkpoint. Omitting it lets a
+// same-session reconnect retain the PTY's current margins; a session switch
+// has already reset xterm and therefore starts with default margins.
+const CHECKPOINT_BROWSER_RESET = encoder.encode('\x1b[H\x1b[2J\x1b[3J')
 const CHECKPOINT_SGR_RESET = encoder.encode('\x1b[0m')
 
 /**
  * Add browser-only buffer authority at the complete checkpoint boundary.
  * The binary frame itself is also consumed by `gmux attach`, so putting
  * ?1049h/l in it would change an operator's terminal. Reordering the known
- * reset prefix means a session switch selects the target buffer before
- * clearing/rendering it, while a reconnect in alternate mode leaves the
- * saved normal buffer intact. Older runners still get the narrow SGR reset.
+ * SGR is emitted before buffer selection and erase, preventing the old
+ * background from coloring blank cells. The browser-specific transform also
+ * omits the shared frame's CSI r: same-session reconnects retain margins,
+ * while session-ID changes perform the full xterm reset. No other terminal
+ * state is claimed to be serialized by this rendered checkpoint.
  */
 function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: boolean | null): Uint8Array[] {
   if (chunks.length === 0) return chunks
@@ -49,23 +56,26 @@ function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: boolean
     return [prepared, ...chunks.slice(1)]
   }
 
-  const hasReset = first.length >= BSU.length + CHECKPOINT_RESET.length
-    && startsWith(first.slice(BSU.length), CHECKPOINT_RESET)
-  if (!hasReset || activeAlternate === null) {
+  const hasReset = first.length >= BSU.length + CHECKPOINT_WIRE_RESET.length
+    && startsWith(first.slice(BSU.length), CHECKPOINT_WIRE_RESET)
+  if (!hasReset) {
     const prepared = new Uint8Array(CHECKPOINT_SGR_RESET.length + first.length)
     prepared.set(CHECKPOINT_SGR_RESET)
     prepared.set(first, CHECKPOINT_SGR_RESET.length)
     return [prepared, ...chunks.slice(1)]
   }
 
-  const buffer = encoder.encode(activeAlternate ? '\x1b[?1049h' : '\x1b[?1049l')
-  const body = first.slice(BSU.length + CHECKPOINT_RESET.length)
-  const prepared = new Uint8Array(BSU.length + buffer.length + CHECKPOINT_RESET.length + CHECKPOINT_SGR_RESET.length + body.length)
+  const buffer = activeAlternate === null ? null : encoder.encode(activeAlternate ? '\x1b[?1049h' : '\x1b[?1049l')
+  const body = first.slice(BSU.length + CHECKPOINT_WIRE_RESET.length)
+  const bufferLength = buffer?.length ?? 0
+  const prepared = new Uint8Array(BSU.length + CHECKPOINT_SGR_RESET.length + bufferLength + CHECKPOINT_BROWSER_RESET.length + body.length)
   let offset = 0
   prepared.set(BSU, offset); offset += BSU.length
-  prepared.set(buffer, offset); offset += buffer.length
-  prepared.set(CHECKPOINT_RESET, offset); offset += CHECKPOINT_RESET.length
   prepared.set(CHECKPOINT_SGR_RESET, offset); offset += CHECKPOINT_SGR_RESET.length
+  if (buffer) {
+    prepared.set(buffer, offset); offset += buffer.length
+  }
+  prepared.set(CHECKPOINT_BROWSER_RESET, offset); offset += CHECKPOINT_BROWSER_RESET.length
   prepared.set(body, offset)
   return [prepared, ...chunks.slice(1)]
 }
@@ -286,6 +296,10 @@ export function TerminalView({
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disposed = useRef(false)
   const currentSessionId = useRef(session.id)
+  // The WebSocket effect can be re-run by unrelated dependency changes. Keep
+  // the reset tied to an observed session-ID transition, not to effect
+  // lifetime or to a reconnect attempt.
+  const terminalSessionId = useRef<string | null>(null)
   const sessionRef = useRef(session)
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
@@ -889,6 +903,15 @@ export function TerminalView({
     const epoch = termEpochRef.current + 1
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
+
+    const sessionChanged = terminalSessionId.current !== null
+      && terminalSessionId.current !== session.id
+    terminalSessionId.current = session.id
+    // A session change is the one boundary where the existing xterm state is
+    // not authoritative. Reset only on that actual ID transition:
+    // same-session reconnect attempts retain the last committed screen and
+    // parser state during the outage.
+    if (sessionChanged) termRef.current.reset()
 
     // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).

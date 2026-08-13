@@ -24,6 +24,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -317,7 +318,7 @@ func (c *Client) proxyHTTP(w http.ResponseWriter, r *http.Request, path string) 
 // DialWS opens a WebSocket connection to the spoke's /ws/{sessionID}
 // endpoint, injecting bearer auth and honoring the client's transport.
 // The caller owns the returned connection and must close it.
-func (c *Client) DialWS(ctx context.Context, sessionID string) (*websocket.Conn, error) {
+func (c *Client) DialWS(ctx context.Context, sessionID string, browser ...bool) (*websocket.Conn, error) {
 	base := strings.TrimRight(c.baseURL, "/")
 	switch {
 	case strings.HasPrefix(base, "https://"):
@@ -326,6 +327,9 @@ func (c *Client) DialWS(ctx context.Context, sessionID string) (*websocket.Conn,
 		base = "ws://" + base[len("http://"):]
 	}
 	spokeURL := fmt.Sprintf("%s/ws/%s", base, sessionID)
+	if len(browser) > 0 && browser[0] {
+		spokeURL += "?client=browser"
+	}
 
 	dialOpts := &websocket.DialOptions{}
 	if c.token != "" {
@@ -378,7 +382,11 @@ func (c *Client) ProxyWS(w http.ResponseWriter, r *http.Request, sessionID strin
 		return
 	}
 
-	spokeConn, err := c.DialWS(r.Context(), sessionID)
+	// Only propagate the one browser capability understood by the spoke.
+	// Never forward arbitrary hub query parameters across the authenticated
+	// peer boundary.
+	browserAttach := browserAttachQuery(r.URL.Query())
+	spokeConn, err := c.DialWS(r.Context(), sessionID, browserAttach)
 	if err != nil {
 		log.Printf("apiclient ProxyWS: dial %s: %v", sessionID, err)
 		clientConn.Close(websocket.StatusInternalError, "peer unavailable")
@@ -391,6 +399,14 @@ func (c *Client) ProxyWS(w http.ResponseWriter, r *http.Request, sessionID strin
 	spokeConn.SetReadLimit(wsSpokeReadLimit)
 
 	c.pipeWS(r.Context(), clientConn, spokeConn, sessionID)
+}
+
+// browserAttachQuery is deliberately strict: client=browser is a capability
+// marker, not a general query proxy. Reject duplicate values and every other
+// key so routing/auth parameters cannot cross the authenticated peer hop.
+func browserAttachQuery(q url.Values) bool {
+	values, ok := q["client"]
+	return ok && len(q) == 1 && len(values) == 1 && values[0] == "browser"
 }
 
 // pipeWS runs the bidirectional copy loop between an already-accepted

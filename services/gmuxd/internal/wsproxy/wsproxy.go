@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wskeepalive"
@@ -92,8 +93,11 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		// Connect to gmux-run's Unix socket.
 		ctx := r.Context()
 		backendURL := "ws://localhost/ws"
-		if r.URL.RawQuery != "" {
-			backendURL += "?" + r.URL.RawQuery
+		// The runner only needs this explicit browser capability. Do not
+		// forward arbitrary client query parameters into the Unix-socket
+		// protocol, where they could become future routing/auth inputs.
+		if browserAttachQuery(r.URL.Query()) {
+			backendURL += "?client=browser"
 		}
 		backendConn, _, err := websocket.Dial(ctx, backendURL, &websocket.DialOptions{
 			HTTPClient: &http.Client{
@@ -157,6 +161,14 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		p.removeConn(sessionID, clientConn)
 		log.Printf("wsproxy: session %s disconnected", sessionID)
 	}
+}
+
+// browserAttachQuery is deliberately strict: client=browser is a capability
+// marker, not a general query proxy. Reject duplicate values and every other
+// key so routing/auth parameters cannot cross into the runner protocol.
+func browserAttachQuery(q url.Values) bool {
+	values, ok := q["client"]
+	return ok && len(q) == 1 && len(values) == 1 && values[0] == "browser"
 }
 
 // proxyClientToBackend forwards all client messages to the backend.
