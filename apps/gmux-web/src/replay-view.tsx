@@ -38,8 +38,7 @@ type ReplayState =
  * sessions, so muscle memory finds it there too. Promoting it out of
  * an implicit sidebar click means clicking a dead session navigates to
  * its scrollback first, and any state-changing action is a deliberate
- * second click. Exit status is header chrome (MainHeader's "Exited"
- * chip), not repeated here.
+ * second click.
  *
  * On touch the bar also carries the sidebar ☰: dead sessions render no
  * mobile key bar (a full set of dead keys just to carry ☰ reads as

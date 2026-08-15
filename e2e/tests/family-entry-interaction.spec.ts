@@ -267,4 +267,22 @@ test.describe('the family line and the panel tally', () => {
     // under `error`, precedence keeps it out of this verb's reach.
     expect(reads.every(url => url.includes('fam1kid'))).toBe(true)
   })
+
+  test('ancestors survive a long title, and quiet crumbs carry no dot hole', async ({ page }) => {
+    // fam4kid: three ancestors (shown as root › … › parent) and a title
+    // long enough to want every pixel the crumbs have.
+    await page.setViewportSize({ width: 800, height: 700 })
+    await openMockSidebar(page, '/my-project/claude/~fam4kid')
+    const crumbs = page.locator('.header-crumb')
+    await expect(crumbs).toHaveCount(2)
+    // Survival means being readable, not merely attached: each crumb
+    // title keeps real width even while the long title is ellipsizing.
+    for (const width of await crumbs.locator('.header-crumb-title')
+      .evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().width))) {
+      expect(width).toBeGreaterThan(20)
+    }
+    // A quiet ancestor gets no dot at all — the sidebar's invisible
+    // `none` placeholder would be a permanent hole in a crumb.
+    expect(await page.locator('.header-crumb .session-dot-indicator.none').count()).toBe(0)
+  })
 })

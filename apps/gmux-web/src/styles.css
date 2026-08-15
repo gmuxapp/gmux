@@ -2258,7 +2258,6 @@ body {
 
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
-.main-header-status.ended   { color: var(--text-muted); }
 
 /* Family trigger: a ghost icon button in the header's one control
  * language (borderless, bg-hover, sized to match .session-menu-trigger).
@@ -2301,11 +2300,23 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
-  /* Ancestors yield space before the current session's title does, and
-   * when even their minimums overflow the clip falls on the root end
-   * (justify-content: flex-end) so the immediate parent stays readable. */
-  flex-shrink: 2;
+  /* Explicit `min-content`, not `auto`: with `overflow: hidden` the
+   * flexbox automatic minimum computes to zero, so the strip — 4ch
+   * crumb floors and all — collapsed to nothing under a long title.
+   * min-content is bounded here because the crumbs cap at three (root ›
+   * … › parent), so the strip refuses to shrink past ~120px and the
+   * title, whose min-width is 0, yields instead. */
+  min-width: min-content;
+  /* Shrink no faster than the title: where the selected session is is
+   * at least as important as what it's called, and a shrink factor of 2
+   * here let any long title erase the ancestors entirely. The per-crumb
+   * title floor below is what actually guarantees their survival — flex
+   * weighting alone cannot, because a long title's flex basis dwarfs
+   * the crumbs' and takes nearly everything regardless of factors. When
+   * even the floors overflow, the clip falls on the root end
+   * (justify-content: flex-end) so the immediate parent stays readable
+   * until the mobile layout gives the crumbs their own row. */
+  flex-shrink: 1;
   justify-content: flex-end;
   overflow: hidden;
   /* Match the 26px control row so crumb text shares the title's center. */
@@ -2328,10 +2339,12 @@ body {
 .header-crumb:hover { background: var(--bg-hover); color: var(--text); }
 .header-crumb-title {
   max-width: 18ch;
-  /* No min-width: a floor here makes the crumb strip's min-content exceed
-   * its box on medium widths, and the overflow clips crumbs mid-glyph.
-   * Ellipsis-to-nothing degrades; hard clipping just looks broken. */
-  min-width: 0;
+  /* A small floor, so a crumb degrades to `ter…` and stops, instead of
+   * ellipsizing to nothing and leaving a bare dot — or less. Kept just
+   * big enough to be legible: every ch of floor here widens the band of
+   * medium widths where the strip's min-content exceeds its box and the
+   * root end clips mid-glyph. */
+  min-width: 4ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }

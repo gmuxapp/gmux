@@ -272,19 +272,26 @@ function HeaderCrumbs({ session }: { session: Session }) {
   const am = activityMap.value
   return (
     <nav class="header-crumbs" aria-label="Ancestor agents">
-      {shown.map((ancestor) => (
-        <Fragment key={ancestor?.id ?? 'gap'}>
-          {ancestor
-            ? (
-              <a class="header-crumb" href={sessionHref(ancestor)}>
-                <span class={`session-dot-indicator ${sessionDotState(ancestor, am)}`} aria-hidden="true" />
-                <span class="header-crumb-title">{ancestor.title}</span>
-              </a>
-            )
-            : <span class="header-crumb-gap" title="More ancestors in the family panel">…</span>}
-          <span class="header-crumb-sep" aria-hidden="true">›</span>
-        </Fragment>
-      ))}
+      {shown.map((ancestor) => {
+        const dot = ancestor ? sessionDotState(ancestor, am) : 'none'
+        return (
+          <Fragment key={ancestor?.id ?? 'gap'}>
+            {ancestor
+              ? (
+                <a class="header-crumb" href={sessionHref(ancestor)}>
+                  {/* The sidebar's `none` dot is an invisible placeholder
+                    * that holds a column; a crumb has no column, so a
+                    * quiet ancestor would just wear a permanent hole
+                    * where its dot should be. */}
+                  {dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
+                  <span class="header-crumb-title">{ancestor.title}</span>
+                </a>
+              )
+              : <span class="header-crumb-gap" title="More ancestors in the family panel">…</span>}
+            <span class="header-crumb-sep" aria-hidden="true">›</span>
+          </Fragment>
+        )
+      })}
     </nav>
   )
 }
@@ -294,10 +301,12 @@ function sessionHref(session: Session): string | undefined {
   return path ? tabHref(path) : undefined
 }
 
-/** Session status in the header, one chip slot for both states: alive shows
- * Working…/Error, dead shows Exited (N). While a resume is in flight the
- * dead chip flips to the busy label — the menu closes on click, so this
- * chip is the visible feedback until the session comes alive. */
+/** Session status in the header — only states that need the header to
+ * say something the view doesn't already: Error, and the resume-in-
+ * flight busy label (the menu closes on click, so this chip is the
+ * visible feedback until the session comes alive). A dead session gets
+ * no chip: a replay view is unmistakably an ended session, and the chip
+ * only restated it. */
 function HeaderStatusChip({ session, resuming }: {
   session: Session
   resuming?: boolean
@@ -311,11 +320,7 @@ function HeaderStatusChip({ session, resuming }: {
         </div>
       )
     }
-    return (
-      <div class="main-header-status ended">
-        {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
-      </div>
-    )
+    return null
   }
   // A live "Working…" chip is redundant with the session's own dot
   // indicator, so only the error state earns a header chip here.
