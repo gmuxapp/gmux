@@ -285,4 +285,30 @@ test.describe('the family line and the panel tally', () => {
     // `none` placeholder would be a permanent hole in a crumb.
     expect(await page.locator('.header-crumb .session-dot-indicator.none').count()).toBe(0)
   })
+
+  test('the header trigger previews the tally it opens onto', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    const trigger = page.locator('.family-trigger')
+    // Segments, not the old icon-and-badge: dot + count per state, in
+    // the same order the panel's tally will list them.
+    const segs = await trigger.locator('.family-trigger-seg').evaluateAll(nodes => nodes.map(n => ({
+      count: n.textContent?.trim(),
+      dot: n.querySelector('.session-dot-indicator')?.className ?? n.querySelector('.family-trigger-proc')?.textContent,
+    })))
+    expect(segs.length).toBeGreaterThan(1)
+    await trigger.click()
+    const tally = await page.locator('.family-count').allTextContents()
+    // Same derivation on both sides of the click, minus yourself: the
+    // header names fam2kid and fam2kid is active, so the button reports
+    // one active fewer than the panel — your own state is the view, not
+    // news arriving from the family. Every other count matches exactly.
+    const tallyCount = (label: string) =>
+      Number(tally.find(t => t.includes(label))?.match(/\d+/)?.[0] ?? 0)
+    const segCount = (dot: string) =>
+      Number(segs.find(s => s.dot?.includes(dot))?.count?.replace(/\D/g, '') ?? 0)
+    expect(segCount('working')).toBe(tallyCount('active') - 1)
+    expect(segCount('error')).toBe(tallyCount('error'))
+    expect(segCount('unread')).toBe(tallyCount('waiting'))
+    expect(segCount('$')).toBe(tallyCount('running'))
+  })
 })

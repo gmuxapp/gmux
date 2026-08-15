@@ -14,7 +14,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyRoot, hasFamily } from './family'
+import { familyAncestors, familyCounts, familyStateOf, hasFamily, projectFamily } from './family'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -31,7 +31,7 @@ import {
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
-  sessionStaleness, sessionDotState, activityMap, familyDotById, tabHref,
+  sessionStaleness, sessionDotState, activityMap, tabHref,
 } from './store'
 import { viewToPath } from './routing'
 
@@ -224,18 +224,38 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   )
 }
 
-/** The family panel's trigger: a ghost icon button (3-node tree) with a
- * corner badge showing the family's aggregated dot state — same roll-up
- * the sidebar row shows, so background family activity is visible without
- * opening the panel. */
+/** The family panel's trigger: a pill speaking the same segment
+ * vocabulary as the sidebar's activity line and the panel's tally —
+ * dot + count per state, in dot precedence order — so it previews the
+ * tally it opens onto and the three can never disagree (they share
+ * `familyCounts`). A family with nothing to report shows the tree
+ * icon instead — several nodes, one structure — which stays readable
+ * at header size where dot-built substitutes turned to specks. No
+ * count with it: the segments' numbers are news, a quiet family has
+ * none, and its size waits one click away behind this very button. */
 function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   session: Session
   open: boolean
   triggerRef: { current: HTMLButtonElement | null }
   onToggle: () => void
 }) {
-  const rootId = familyRoot(session, sessions.value).id
-  const dot = familyDotById.value.get(rootId) ?? 'none'
+  const counts = familyCounts([projectFamily(session, sessions.value).tree])
+  // The rest of the family, not the whole of it: the header already
+  // names this session, and its state is the view itself — same rule as
+  // the sidebar's activity line, which counts only the members its
+  // entry hasn't named. Without this, your own error knocks on the
+  // door of the room you are standing in.
+  switch (familyStateOf(session)) {
+    case 'error': counts.error--; break
+    case 'active': counts.workingAgents--; break
+    case 'running': counts.workingProcesses--; break
+    case 'waiting': counts.unread--; break
+  }
+  const segments: { key: string; dot?: string; proc?: boolean; count: number }[] = []
+  if (counts.error > 0) segments.push({ key: 'error', dot: 'error', count: counts.error })
+  if (counts.workingAgents > 0) segments.push({ key: 'active', dot: 'working', count: counts.workingAgents })
+  if (counts.workingProcesses > 0) segments.push({ key: 'running', proc: true, count: counts.workingProcesses })
+  if (counts.unread > 0) segments.push({ key: 'waiting', dot: 'unread', count: counts.unread })
   return (
     <button
       ref={triggerRef}
@@ -247,13 +267,22 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
       aria-controls="agent-family-drawer"
       onClick={onToggle}
     >
-      <svg class="family-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 5.5v2M8 7.5c0 1.5-3.5 1-3.5 3M8 7.5c0 1.5 3.5 1 3.5 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        <circle cx="8" cy="3.75" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-        <circle cx="4.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-        <circle cx="11.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-      </svg>
-      {dot !== 'none' && <span class={`family-trigger-badge session-dot-indicator ${dot}`} aria-hidden="true" />}
+      {segments.length > 0
+        ? segments.map(segment => (
+          <span key={segment.key} class="family-trigger-seg">
+            {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
+            {segment.proc && <span class="family-trigger-proc" aria-hidden="true">$</span>}
+            {segment.count}
+          </span>
+        ))
+        : (
+          <svg class="family-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 5.5v2M8 7.5c0 1.5-3.5 1-3.5 3M8 7.5c0 1.5 3.5 1 3.5 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            <circle cx="8" cy="3.75" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <circle cx="4.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <circle cx="11.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
+          </svg>
+        )}
     </button>
   )
 }

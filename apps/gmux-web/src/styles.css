@@ -741,19 +741,22 @@ body {
 
 .session-dot-indicator.working {
   background: transparent;
-  border: 1.5px solid var(--accent);
+  /* A hair thicker than the 1.5px it grew up with: hollow rings read
+     thinner than the filled dots they sit beside, and at 7px the ring
+     was dropping below legibility on low-DPI screens. */
+  border: 1.75px solid var(--accent);
   animation: subtle-pulse 2.5s ease-in-out infinite;
 }
 
 .session-dot-indicator.active {
   background: transparent;
-  border: 1.5px solid var(--active);
+  border: 1.75px solid var(--active);
   animation: subtle-pulse 3s ease-in-out infinite;
 }
 
 .session-dot-indicator.fading {
   background: transparent;
-  border: 1.5px solid var(--active);
+  border: 1.75px solid var(--active);
   animation: dot-fade-out 800ms ease-out forwards;
 }
 
@@ -2171,7 +2174,7 @@ body {
 
 .session-dot.working {
   background: transparent;
-  border: 1.5px solid var(--accent);
+  border: 1.75px solid var(--accent);
 }
 .session-dot.error   { background: var(--status-error); }
 .session-dot.idle    { background: var(--text-muted); }
@@ -2263,34 +2266,45 @@ body {
  * language (borderless, bg-hover, sized to match .session-menu-trigger).
  * The corner badge repeats the family's aggregated dot state so
  * background family activity is visible without opening the panel. */
+/* A pill, bordered like the panel's tally buttons so it reads as one
+ * coherent button rather than a strip of dots that happens to be
+ * clickable. Never shrinks: it is the densest thing in the row, and
+ * the title yields instead. */
 .family-trigger {
-  position: relative;
-  width: 26px;
   height: 26px;
   flex-shrink: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: background 0.1s, color 0.1s;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 12px/1 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-trigger:hover,
-.family-trigger[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
+.family-trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.family-trigger-seg {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+/* The sidebar's own glyphs at the sidebar's own size, so the button
+ * reads as the same sentence relocated, not a new dialect. */
+/* The quiet family wears the tree icon: several nodes, one structure. */
 .family-trigger-icon { width: 16px; height: 16px; display: block; }
-/* 7px like every other status dot in the app — a one-off 6px dot reads as
- * a rendering artifact next to the sidebar's dots. */
-.family-trigger-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 7px;
-  height: 7px;
-  pointer-events: none;
+
+.family-trigger-proc {
+  font: 600 11px/1 'Source Sans 3', sans-serif;
+  color: var(--active);
 }
 
 /* Ancestor breadcrumbs in the title row: quiet path prefix, each crumb a
