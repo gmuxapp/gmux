@@ -458,6 +458,100 @@ func TestDialWS_Success(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 }
 
+func TestDialWS_BrowserCapabilityIsAllowlisted(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	conn, err := c.DialWS(ctx, "sess", true)
+	if err != nil {
+		t.Fatalf("DialWS: %v", err)
+	}
+	conn.Close(websocket.StatusNormalClosure, "")
+	if gotQuery != "client=browser" {
+		t.Fatalf("query = %q, want client=browser", gotQuery)
+	}
+}
+
+func TestProxyWS_ForwardsBrowserCapability(t *testing.T) {
+	gotQuery := make(chan string, 1)
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery <- r.URL.RawQuery
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		<-r.Context().Done()
+	}))
+	defer spoke.Close()
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		New(spoke.URL).ProxyWS(w, r, "sess")
+	}))
+	defer hub.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(hub.URL, "http") + "/?client=browser"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("browser dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	select {
+	case query := <-gotQuery:
+		if query != "client=browser" {
+			t.Fatalf("query = %q, want client=browser", query)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestProxyWS_DoesNotForwardArbitraryQuery(t *testing.T) {
+	gotQuery := make(chan string, 1)
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery <- r.URL.RawQuery
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		<-r.Context().Done()
+	}))
+	defer spoke.Close()
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		New(spoke.URL).ProxyWS(w, r, "sess")
+	}))
+	defer hub.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(hub.URL, "http") + "/?client=browser&evil=1"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("browser dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	select {
+	case query := <-gotQuery:
+		if query != "" {
+			t.Fatalf("query = %q, want empty", query)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
 func TestDialWS_BearerInjected(t *testing.T) {
 	ts := wsEchoServer(t, nil, "ws-tok")
 	defer ts.Close()

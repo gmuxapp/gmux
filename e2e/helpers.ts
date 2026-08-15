@@ -93,10 +93,7 @@ export async function isPillVisible(page: Page): Promise<boolean> {
  * installed by main.tsx. The session ID is set by global-setup and
  * exposed via GMUX_TEST_SESSION_ID.
  */
-export async function gotoTestSession(page: Page): Promise<void> {
-  const sessionId = process.env.GMUX_TEST_SESSION_ID
-  if (!sessionId) throw new Error('GMUX_TEST_SESSION_ID not set; global-setup did not run')
-
+export async function gotoSession(page: Page, sessionId: string): Promise<void> {
   // Drive navigation via the test hook. It returns true only once
   // the session and its project are both in the store and the URL
   // change has been dispatched, so by the time this resolves the
@@ -110,6 +107,12 @@ export async function gotoTestSession(page: Page): Promise<void> {
   await page.locator('.xterm').waitFor({ state: 'visible', timeout: 5_000 })
   // Give the WS connection time to establish and replay scrollback.
   await page.waitForTimeout(1500)
+}
+
+export async function gotoTestSession(page: Page): Promise<void> {
+  const sessionId = process.env.GMUX_TEST_SESSION_ID
+  if (!sessionId) throw new Error('GMUX_TEST_SESSION_ID not set; global-setup did not run')
+  await gotoSession(page, sessionId)
 }
 
 /** Click the resize pill. */

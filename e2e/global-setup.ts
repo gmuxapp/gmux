@@ -230,6 +230,7 @@ export default async function globalSetup(_config: FullConfig) {
   // runs the tests.
   process.env.GMUXD_TEST_PORT = String(port)
   process.env.GMUX_TEST_SESSION_ID = sessionId
+  process.env.GMUX_TEST_WORKSPACE = workspaceDir
   process.env.GMUX_TEST_TOKEN = testToken
   // Tests that write into adapter session roots (conversation
   // discovery, etc.) need to know where the daemon is looking for

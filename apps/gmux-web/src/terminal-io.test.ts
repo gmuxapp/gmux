@@ -278,12 +278,31 @@ describe('createTerminalIO', () => {
     h.io.reset(2)
     h.io.enqueue(enc('fresh'), 2)
 
-    expect(h.writes).toEqual(['stale', 'fresh'])
+    // The stale write was already handed to xterm. The new epoch must wait
+    // for its callback instead of overlapping the parser or resize path.
+    expect(h.writes).toEqual(['stale'])
     h.flushOne()
 
     expect(onWritten).not.toHaveBeenCalled()
     expect(h.writes).toEqual(['stale', 'fresh'])
     expect(h.resizes).toEqual([])
+  })
+
+  it('does not let an old completion advance a new epoch past a resize fence', () => {
+    const h = makeHarness()
+    h.io.reset(1)
+    h.io.enqueue(enc('old'), 1)
+    h.io.reset(2)
+    h.io.enqueue(enc('new'), 2)
+    h.io.requestResize({ cols: 80, rows: 24 }, 2)
+
+    expect(h.writes).toEqual(['old'])
+    expect(h.resizes).toEqual([])
+    h.flushOne()
+    expect(h.writes).toEqual(['old', 'new'])
+    expect(h.resizes).toEqual([])
+    h.flushOne()
+    expect(h.resizes).toEqual([{ cols: 80, rows: 24 }])
   })
 
   it('runs completion callback after the final chunk in enqueueMany', () => {
