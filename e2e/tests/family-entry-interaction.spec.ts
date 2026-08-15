@@ -241,11 +241,11 @@ test.describe('the family line and the panel tally', () => {
     // looking at the complete list of what it will touch.
     await expect(action).toHaveCount(0)
 
-    const expected: [string, string][] = [
-      ['waiting', 'Mark all read'],
-      ['error', 'Mark all read'],
-      ['running', 'Stop all'],
-      ['active', 'Interrupt all'],
+    const expected: [string, RegExp][] = [
+      ['waiting', /^Mark all read$/],
+      ['error', /^Mark all read$/],
+      ['running', /^Stop all \d+$/],
+      ['active', /^Interrupt all \d+$/],
     ]
     for (const [state, verb] of expected) {
       await tally(state).click()
@@ -254,18 +254,54 @@ test.describe('the family line and the panel tally', () => {
       await expect(action).toHaveCount(0)
     }
 
-    // The waiting action still acts — and only on the waiting members.
-    const reads: string[] = []
-    await page.route('**/v1/sessions/**/read*', route => {
-      reads.push(route.request().url())
-      route.fulfill({ status: 200, body: '{}' })
-    })
+    // Each verb hits its own endpoint, with its own state's members.
+    const hits: Record<string, string[]> = { read: [], kill: [], cancel: [] }
+    for (const verb of ['read', 'kill', 'cancel']) {
+      await page.route(`**/v1/sessions/**/${verb}*`, route => {
+        hits[verb].push(new URL(route.request().url()).pathname)
+        route.fulfill({ status: 200, body: '{}' })
+      })
+    }
+
     await tally('waiting').click()
     await action.click()
-    await expect.poll(() => reads.length).toBeGreaterThan(0)
-    // Only fam1kid is `waiting` in this family: the errored member is
-    // under `error`, precedence keeps it out of this verb's reach.
-    expect(reads.every(url => url.includes('fam1kid'))).toBe(true)
+    await expect.poll(() => hits.read.length).toBeGreaterThan(0)
+    // Only fam1kid is `waiting` here: the errored member is under
+    // `error`, precedence keeps it out of this verb's reach.
+    expect(hits.read.every(path => path.includes('fam1kid'))).toBe(true)
+
+    // Stop all → /kill, and only the running process.
+    await tally('all').click()
+    await tally('running').click()
+    await expect(action).toHaveText(/^Stop all \d+$/)
+    await action.click()
+    await expect.poll(() => hits.kill.length).toBe(1)
+    expect(hits.kill[0]).toContain('fam0proc')
+    expect(hits.cancel).toHaveLength(0)
+
+    // Interrupt all → /cancel, on the active agents and nothing else.
+    await tally('all').click()
+    await tally('active').click()
+    await expect(action).toHaveText(/^Interrupt all \d+$/)
+    await action.click()
+    await expect.poll(() => hits.cancel.length).toBeGreaterThan(0)
+    expect(hits.cancel.some(path => path.includes('fam0root'))).toBe(true)
+    expect(hits.cancel.every(path => !path.includes('fam0proc'))).toBe(true)
+    expect(hits.kill).toHaveLength(1)
+  })
+
+  test('a bulk verb names its blast radius, including folded members', async ({ page }) => {
+    // The panel's budget folds a big family, but the verb acts on the
+    // filter, not the viewport — so the count in the label is the only
+    // honest statement of what the click will touch.
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    const counts = page.locator('.family-counts')
+    await counts.waitFor()
+    const tally = (label: string) => counts.locator('.family-count').filter({ hasText: label })
+    await tally('active').click()
+    const tallied = Number((await tally('active').textContent())?.match(/\d+/)?.[0])
+    await expect(page.locator('.family-mark-read')).toHaveText(`Interrupt all ${tallied}`)
   })
 
   test('ancestors survive a long title, and quiet crumbs carry no dot hole', async ({ page }) => {

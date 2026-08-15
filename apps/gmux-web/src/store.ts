@@ -1779,7 +1779,7 @@ async function errorMessageFromResponse(resp: Response): Promise<string> {
  * on failure. A network reject counts as "not succeeded" for rollback,
  * even though it's silent toast-wise.
  */
-async function postAction(endpoint: string, label = 'Action', body?: Record<string, unknown>): Promise<boolean> {
+async function postAction(endpoint: string, label = 'Action', body?: Record<string, unknown>, quiet = false): Promise<boolean> {
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
@@ -1789,7 +1789,10 @@ async function postAction(endpoint: string, label = 'Action', body?: Record<stri
       } : {}),
     })
     if (!resp.ok) {
-      pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
+      // `quiet` is for bulk callers: one toast per failed member turns a
+      // daemon hiccup during "Stop all" into two hundred toasts, so they
+      // take the boolean and report once.
+      if (!quiet) pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
       return false
     }
     return true
@@ -1804,8 +1807,8 @@ async function postAction(endpoint: string, label = 'Action', body?: Record<stri
 // toast fires, instead of waiting out a timeout. Note these promises never
 // reject — postAction converts all failures into `false` — so `.catch()`
 // on them is dead code; branch on the boolean instead.
-export function killSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill')
+export function killSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill', undefined, opts?.quiet)
 }
 
 /** Interrupt an agent's current turn (POST /cancel — the daemon's word;
@@ -1816,11 +1819,11 @@ export function killSession(sessionId: string): Promise<boolean> {
  * means the agent finished between your click and the wire. For the
  * bulk caller iterating a family that race is routine, and the outcome
  * is the one the click asked for — the agent is no longer mid-turn. */
-export async function cancelSession(sessionId: string): Promise<boolean> {
+export async function cancelSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
   try {
     const resp = await fetch(`/v1/sessions/${sessionId}/cancel`, { method: 'POST' })
     if (resp.ok || resp.status === 409) return true
-    pushError(`Interrupt failed: ${await errorMessageFromResponse(resp)}`)
+    if (!opts?.quiet) pushError(`Interrupt failed: ${await errorMessageFromResponse(resp)}`)
     return false
   } catch {
     console.debug(`/v1/sessions/${sessionId}/cancel: network error (suppressed toast)`)

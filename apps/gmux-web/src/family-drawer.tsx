@@ -10,6 +10,7 @@ import {
   activityMap, cancelSession, killSession, markSessionRead,
   projects, sessions, sessionDotState, tabHref,
 } from './store'
+import { pushError } from './toasts'
 import type { Session } from './types'
 
 function hrefFor(session: Session): string | undefined {
@@ -134,20 +135,55 @@ function membersInState(tree: FamilyNode, state: FamilyState): Session[] {
 }
 
 /** The one bulk action each filter's members admit. There is no ambient
- * action: a verb only appears once its filter is on, so you are looking
- * at the complete list of what it will touch before the button exists —
- * that, not a confirm dialog, is the safety for the destructive ones.
+ * action: a verb only appears once its filter is on, so the panel is
+ * already showing that state and nothing else before the button exists.
+ *
+ * The destructive verbs carry their target count, because the rows on
+ * screen are NOT the whole story: the line budget still folds a big
+ * family, so "Stop all" under a filter matching 200 processes reaches
+ * every one of them, including those behind `+N more`. Acting on the
+ * filter rather than the viewport is the right behaviour — a fold is
+ * the panel's economy, not a selection — but then the blast radius has
+ * to be in the label you are about to click.
  *
  * `error` shares the waiting verb because acknowledging is all you can
  * do in bulk to an error — `markSessionRead` clears the error flag — and
  * error's precedence means an errored member never surfaces under
  * `waiting`. There is no action for `all`: no single verb answers
  * everything. */
-const FAMILY_ACTIONS: Partial<Record<FamilyState, { label: string; run: (id: string) => unknown }>> = {
-  waiting: { label: 'Mark all read', run: markSessionRead },
-  error: { label: 'Mark all read', run: markSessionRead },
-  running: { label: 'Stop all', run: killSession },
-  active: { label: 'Interrupt all', run: cancelSession },
+type FamilyAction = {
+  label: (n: number) => string
+  run: (id: string) => unknown
+  /** Verbs that can fail per member and report once at the end. */
+  aggregate?: boolean
+}
+const FAMILY_ACTIONS: Partial<Record<FamilyState, FamilyAction>> = {
+  waiting: { label: () => 'Mark all read', run: markSessionRead },
+  error: { label: () => 'Mark all read', run: markSessionRead },
+  running: { label: n => `Stop all ${n}`, run: id => killSession(id, { quiet: true }), aggregate: true },
+  active: { label: n => `Interrupt all ${n}`, run: id => cancelSession(id, { quiet: true }), aggregate: true },
+}
+
+/** Run a bulk verb over a family's worth of members.
+ *
+ * Bounded concurrency: a family runs to several hundred, and firing
+ * that many fetches at once buys nothing (the browser queues them per
+ * host anyway) while making the failure report arrive in one lump at
+ * the end regardless. Failures are counted, not toasted individually —
+ * see `quiet` in the store — so a daemon that is simply down produces
+ * one line instead of two hundred. */
+async function runBulk(action: FamilyAction, targets: readonly Session[]): Promise<void> {
+  const queue = [...targets]
+  let failed = 0
+  const worker = async () => {
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      if ((await action.run(next.id)) === false) failed++
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker))
+  if (action.aggregate && failed > 0) {
+    pushError(`${failed} of ${targets.length} did not respond`)
+  }
 }
 
 /** The header's tally, in the turn model's own words (ADR 0023: a
@@ -241,6 +277,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Per-open, like the expansion state beside it: a filter is a way of
   // looking at the family right now, not a preference about it.
   const [filter, setFilter] = useState<FamilyState | null>(null)
+  const [busy, setBusy] = useState(false)
   const toggle = (key: string) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -313,13 +350,16 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
           <button
             type="button"
             class="family-mark-read"
-            // Iterating is the whole implementation: mark-read is
-            // optimistic and token-bound, kill and cancel are one POST
-            // each, and every call is idempotent-or-tolerant, so a
-            // member that changes state mid-flight loses nothing.
-            onClick={() => { for (const session of targets) action.run(session.id) }}
+            // Disabled while in flight: the verbs are individually
+            // idempotent-or-tolerant, but a second click would re-run
+            // the whole family and double any toast it earns.
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              runBulk(action, targets).finally(() => { setBusy(false) })
+            }}
           >
-            {action.label}
+            {action.label(targets.length)}
           </button>
         )}
       </div>
