@@ -8,6 +8,7 @@
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { needsReveal } from './sidebar-reveal'
 import { hasSessionSlugCollision, sessionPath, viewToPath } from './routing'
+import { FamilyIcon } from './family-icon'
 import { selectorLabel, folderMatchesFilter, type Selector } from './tab-filter'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -234,17 +235,15 @@ function SessionItem({
  *  running process — each segment dropped at zero. It's a count, not a
  *  destination, so it has no target of its own; like the rest of the
  *  entry's slack it belongs to the group, which selects the root. */
-function FamilyActivityLine({ activity, nested }: { activity: FamilyActivity; nested: boolean }) {
+function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
   const label = familyActivityLabel(activity)
   return (
-    <div class={`family-sub family-activity${nested ? ' nested' : ''}`} title={label}>
-      {/* `+`: these are the members the entry hasn't named. When a
-        * member row sits above, the line steps in by one glyph column
-        * so the `+` lands under that member's title — the row reads as
-        * "and these as well", added to the one named above rather than
-        * hanging off the root beside it. With no member row there is
-        * nothing to add to, so it stays in the glyph column. */}
-      <span class="family-glyph family-plus" aria-hidden="true">+</span>
+    <div class="family-sub family-activity" title={label}>
+      {/* The family mark, same as the header's trigger: this line is
+        * the standard family numbers — everyone beneath the root — not
+        * "the others", so it anchors to the root's glyph column rather
+        * than indenting under whichever member row happens to be shown. */}
+      <span class="family-glyph" aria-hidden="true"><FamilyIcon class="family-activity-icon" /></span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
         {activity.error > 0 && (
@@ -382,7 +381,7 @@ function FamilyEntry({
           <span class="family-slot-title">{member.title}</span>
         </a>
       )}
-      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} nested={member !== undefined} />}
+      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} />}
     </div>
   )
 }

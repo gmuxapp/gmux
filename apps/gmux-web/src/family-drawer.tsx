@@ -122,15 +122,18 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, view, now, on
 }
 
 /** Every member the given filter matches — the same `familyStateOf`
- * rule the tally counts by and the tree filters by, so the action the
- * header offers acts on exactly the rows the panel is showing. */
+ * rule the tally counts by, over the same population it counts: the
+ * root's descendants, never the root. The tally, the verb's label, and
+ * the verb's targets must quote one number, and the root is not the
+ * family's to act on — you act on the root by visiting it, which is
+ * usually where you are standing. */
 function membersInState(tree: FamilyNode, state: FamilyState): Session[] {
   const out: Session[] = []
   const visit = (node: FamilyNode) => {
     if (familyStateOf(node.session) === state) out.push(node.session)
     for (const child of node.children) visit(child)
   }
-  visit(tree)
+  for (const child of tree.children) visit(child)
   return out
 }
 
@@ -201,13 +204,19 @@ async function runBulk(action: FamilyAction, targets: readonly Session[]): Promi
  * or count: it isn't a state, it's the absence of the question — and it
  * goes first because it's the position the panel opens in. The family's
  * size was the one fact the old `total` carried, and members mostly
- * accumulate; the folds' `+N more` already says how much lies below. */
+ * accumulate; the folds' `+N more` already says how much lies below.
+ *
+ * Counted over the root's descendants, root excluded — the standard
+ * family numbers, shared with the header pill and the sidebar line.
+ * The root's own dot is on its pinned row directly beneath: it speaks
+ * for itself, and counting it here would make this tally the one place
+ * quoting a different number for the same dots. */
 function CountsLine({ tree, filter, onFilter }: {
   tree: FamilyNode
   filter: FamilyState | null
   onFilter: (state: FamilyState | null) => void
 }) {
-  const counts = familyCounts([tree])
+  const counts = familyCounts(tree.children)
   const segments: {
     key: FamilyState | 'all'
     dot?: string

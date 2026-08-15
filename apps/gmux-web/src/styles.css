@@ -1077,11 +1077,18 @@ body {
   font-size: 10px;
   line-height: 1;
 }
-/* The activity line's own glyph: everyone the entry didn't name. */
-.family-plus {
+/* The activity line's own glyph: the family mark, same as the header's
+   trigger. Slightly larger than the 7px glyph column and centered on
+   it — a 7px tree is a smudge — but the column's own width is what
+   keeps the numbers aligned with member glyphs above. */
+.family-activity-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+  /* Centered on the 7px glyph column: auto margins can't go negative,
+     so split the 5px overflow explicitly. */
+  margin: 0 -2.5px;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1;
 }
 
 /* Member row: the family member you're viewing, or the last one you
@@ -1124,11 +1131,11 @@ body {
   min-width: 0;
 }
 
-/* Activity line: everyone the entry doesn't name by row, one segment
-   per state, each dropped at zero. No target of its own — it's part of
-   the group's area, so it takes the group's hover and selects the
-   root. Numbers sit a touch under the title size; the glyphs keep
-   their standard sizes. */
+/* Activity line: the standard family numbers — everyone beneath the
+   root — one segment per state, each dropped at zero. No target of its
+   own: it's part of the group's area, so it takes the group's hover
+   and selects the root. Numbers sit a touch under the title size; the
+   glyphs keep their standard sizes. */
 .family-activity {
   padding-top: 1px;
   padding-bottom: 4px;
@@ -1136,12 +1143,6 @@ body {
   font-size: 12.5px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
-}
-/* Stepped in by one glyph column (7px glyph + 6px gap) when a member
-   row sits above, so the `+` starts under that member's title: these
-   are members in addition to the one named, not siblings of it. */
-.family-activity.nested {
-  padding-left: 42px;
 }
 .family-activity-glyphs {
   display: flex;

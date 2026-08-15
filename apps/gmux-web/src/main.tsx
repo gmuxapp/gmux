@@ -14,7 +14,8 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyCounts, familyStateOf, hasFamily, projectFamily } from './family'
+import { familyAncestors, familyCounts, hasFamily, projectFamily } from './family'
+import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -224,33 +225,23 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   )
 }
 
-/** The family panel's trigger: a pill speaking the same segment
- * vocabulary as the sidebar's activity line and the panel's tally —
- * dot + count per state, in dot precedence order — so it previews the
- * tally it opens onto and the three can never disagree (they share
- * `familyCounts`). A family with nothing to report shows the tree
- * icon instead — several nodes, one structure — which stays readable
- * at header size where dot-built substitutes turned to specks. No
- * count with it: the segments' numbers are news, a quiet family has
- * none, and its size waits one click away behind this very button. */
+/** The family panel's trigger: a pill speaking the standard family
+ * numbers — every descendant of the root, the root excluded — as dot +
+ * count segments in dot precedence order. The sidebar's activity line
+ * and the panel's tally quote the same rule, so the same dots never
+ * wear different numbers, and nothing here depends on which session
+ * you happen to be viewing: the count is a fact about the family, not
+ * the viewport. The root is never orphaned by its exclusion — it
+ * speaks for itself wherever it appears in person. A family with
+ * nothing to report shows the tree icon instead; no count with it,
+ * because the segments' numbers are news and a quiet family has none. */
 function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   session: Session
   open: boolean
   triggerRef: { current: HTMLButtonElement | null }
   onToggle: () => void
 }) {
-  const counts = familyCounts([projectFamily(session, sessions.value).tree])
-  // The rest of the family, not the whole of it: the header already
-  // names this session, and its state is the view itself — same rule as
-  // the sidebar's activity line, which counts only the members its
-  // entry hasn't named. Without this, your own error knocks on the
-  // door of the room you are standing in.
-  switch (familyStateOf(session)) {
-    case 'error': counts.error--; break
-    case 'active': counts.workingAgents--; break
-    case 'running': counts.workingProcesses--; break
-    case 'waiting': counts.unread--; break
-  }
+  const counts = familyCounts(projectFamily(session, sessions.value).tree.children)
   const segments: { key: string; dot?: string; proc?: boolean; count: number }[] = []
   if (counts.error > 0) segments.push({ key: 'error', dot: 'error', count: counts.error })
   if (counts.workingAgents > 0) segments.push({ key: 'active', dot: 'working', count: counts.workingAgents })
@@ -275,14 +266,7 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
             {segment.count}
           </span>
         ))
-        : (
-          <svg class="family-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 5.5v2M8 7.5c0 1.5-3.5 1-3.5 3M8 7.5c0 1.5 3.5 1 3.5 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-            <circle cx="8" cy="3.75" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-            <circle cx="4.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-            <circle cx="11.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-          </svg>
-        )}
+        : <FamilyIcon class="family-trigger-icon" />}
     </button>
   )
 }

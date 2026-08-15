@@ -108,40 +108,39 @@ test.describe('sidebar family entry', () => {
 })
 
 test.describe('the family line and the panel tally', () => {
-  test('the plus lines up with what it adds to', async ({ page }) => {
+  test('the family mark anchors to the glyph column, member row or not', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
     const geometry = await page.evaluate(() => {
       const read = (entry: Element) => {
         const slot = entry.querySelector('.family-slot')
-        const plus = entry.querySelector('.family-activity .family-plus')
-        if (!plus) return null
+        const mark = entry.querySelector('.family-activity .family-activity-icon')
+        if (!mark) return null
         return {
-          plusText: plus.textContent,
-          plusX: Math.round(plus.getBoundingClientRect().x),
-          memberGlyphX: slot
-            ? Math.round(slot.querySelector('.family-glyph')!.getBoundingClientRect().x)
-            : null,
-          memberTitleX: slot
-            ? Math.round(slot.querySelector('.family-slot-title')!.getBoundingClientRect().x)
+          markCX: Math.round(mark.getBoundingClientRect().x + mark.getBoundingClientRect().width / 2),
+          memberGlyphCX: slot
+            ? Math.round(
+              slot.querySelector('.family-glyph')!.getBoundingClientRect().x
+                + slot.querySelector('.family-glyph')!.getBoundingClientRect().width / 2,
+            )
             : null,
         }
       }
       return [...document.querySelectorAll('.session-family')].map(read).filter(Boolean)
     })
 
-    const withMember = geometry.filter(g => g!.memberTitleX !== null)
-    const withoutMember = geometry.filter(g => g!.memberTitleX === null)
+    const withMember = geometry.filter(g => g!.memberGlyphCX !== null)
+    const withoutMember = geometry.filter(g => g!.memberGlyphCX === null)
     expect(withMember.length, 'a family with a member row on screen').toBeGreaterThan(0)
     expect(withoutMember.length, 'a family without one').toBeGreaterThan(0)
 
-    for (const g of geometry) expect(g!.plusText).toBe('+')
-    // Under the member's title: these are members in addition to the one
-    // named above, so the line starts where that name starts.
-    for (const g of withMember) expect(g!.plusX).toBe(g!.memberTitleX)
-    // With nothing above to add to, it stays in the glyph column, level
-    // with where a member's status would be.
-    const glyphColumn = withMember[0]!.memberGlyphX
-    for (const g of withoutMember) expect(g!.plusX).toBe(glyphColumn)
+    // The line is the standard family numbers — everyone beneath the
+    // root — not "the others", so it anchors to the root's glyph column
+    // and stays put whatever member row happens to be shown above it.
+    // (The old `+` indented under the member's title, because it meant
+    // "in addition to the one named"; that meaning is gone.)
+    const columns = new Set(geometry.map(g => g!.markCX))
+    expect(columns.size, 'one column for every family, slot row or not').toBe(1)
+    for (const g of withMember) expect(g!.markCX).toBe(g!.memberGlyphCX)
   })
 
   test("the panel's tally names states in the turn model's words", async ({ page }) => {
@@ -285,7 +284,11 @@ test.describe('the family line and the panel tally', () => {
     await expect(action).toHaveText(/^Interrupt all \d+$/)
     await action.click()
     await expect.poll(() => hits.cancel.length).toBeGreaterThan(0)
-    expect(hits.cancel.some(path => path.includes('fam0root'))).toBe(true)
+    // Never the root: the tally counts descendants only, the label
+    // quotes the tally, and the verb touches what the label counted.
+    // You act on the root by visiting it.
+    expect(hits.cancel.every(path => !path.includes('fam0root'))).toBe(true)
+    expect(hits.cancel.some(path => path.includes('fam2kid'))).toBe(true)
     expect(hits.cancel.every(path => !path.includes('fam0proc'))).toBe(true)
     expect(hits.kill).toHaveLength(1)
   })
@@ -334,17 +337,18 @@ test.describe('the family line and the panel tally', () => {
     expect(segs.length).toBeGreaterThan(1)
     await trigger.click()
     const tally = await page.locator('.family-count').allTextContents()
-    // Same derivation on both sides of the click, minus yourself: the
-    // header names fam2kid and fam2kid is active, so the button reports
-    // one active fewer than the panel — your own state is the view, not
-    // news arriving from the family. Every other count matches exactly.
+    // The standard family numbers on both sides of the click: every
+    // descendant of the root, the root excluded, whoever is viewing.
+    // Exactly equal — the button is the tally's preview, and the same
+    // dots must never wear different numbers.
     const tallyCount = (label: string) =>
       Number(tally.find(t => t.includes(label))?.match(/\d+/)?.[0] ?? 0)
     const segCount = (dot: string) =>
       Number(segs.find(s => s.dot?.includes(dot))?.count?.replace(/\D/g, '') ?? 0)
-    expect(segCount('working')).toBe(tallyCount('active') - 1)
+    expect(segCount('working')).toBe(tallyCount('active'))
     expect(segCount('error')).toBe(tallyCount('error'))
     expect(segCount('unread')).toBe(tallyCount('waiting'))
     expect(segCount('$')).toBe(tallyCount('running'))
+    expect(tallyCount('active')).toBeGreaterThan(0)
   })
 })

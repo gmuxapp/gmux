@@ -1350,17 +1350,18 @@ describe('sidebar family entry derivations', () => {
       expect(familyActivityById.value.get('kid')).toBeUndefined()
     })
 
-    it('ignores members the alive-only filter is hiding', () => {
+    it('counts the same with the alive-only filter on or off', () => {
       _rawSessions.value = [
         agent('root'),
         agent('live', { parent_session_id: 'root', unread: true }),
         agent('dead', { parent_session_id: 'root', unread: true, alive: false, resumable: true }),
       ]
       expect(familyActivityById.value.get('root')?.unread).toBe(2)
-      // The line counts what the list shows: a filtered-out member's
-      // unread would point at a row that isn't there.
+      // The standard family numbers are a fact about the family, not
+      // the viewport: the toggle hides rows, and the panel one click
+      // away shows the hidden member regardless, so the count stands.
       setAliveOnly(true)
-      expect(familyActivityById.value.get('root')?.unread).toBe(1)
+      expect(familyActivityById.value.get('root')?.unread).toBe(2)
       setAliveOnly(false)
     })
 
@@ -1389,49 +1390,35 @@ describe('sidebar family entry derivations', () => {
 
     beforeEach(() => { recentFamilyChildren.value = [] })
 
-    it('never counts the member the slot row already names', () => {
+    it('holds the same numbers whichever member the slot row names', () => {
       _rawSessions.value = [
         agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
         agent('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
       ]
       expect(familyActivityById.value.get('root')?.unread).toBe(2)
-      // Viewing 'a' gives it the slot row, so only the sibling is left
-      // for the `+` line: one member, one representation.
+      // Viewing 'a' names it on the slot row; the count does not budge.
+      // A summary may include what is separately visible — the panel's
+      // tally counts the rows below it too — and subtracting the slot
+      // made this number wobble with which member you last visited.
       urlPath.value = '/proj/pi/aa'
-      expect(familyActivityById.value.get('root')?.unread).toBe(1)
-      // Working members are no different — the slot row carries their
-      // dot, so counting them too would double them up.
+      expect(familyActivityById.value.get('root')?.unread).toBe(2)
       _rawSessions.value = _rawSessions.value.map(s =>
         s.id === 'a' ? { ...s, unread: false, status: { active: true } } : s)
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
+        error: 0, unread: 1, workingAgents: 1, workingProcesses: 0,
       })
     })
 
-    it('stops counting a member you merely visited, not just the selected one', () => {
+    it('keeps the line when the only activity is the named member', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
-        agent('a', { slug: 'aa', parent_session_id: 'root', status: { active: true } }),
-      ]
-      urlPath.value = '/proj/pi/aa'
-      rememberFamilyChild('a') // what the recorder effect does on a visit
-      expect(familyActivityById.value.has('root')).toBe(false)
-      // Back on the root, 'a' keeps the slot row as the way back — and
-      // stays out of the count, because it is still named.
-      urlPath.value = '/proj/pi/rooty'
-      expect(familySlotById.value.get('root')?.session.id).toBe('a')
-      expect(familyActivityById.value.has('root')).toBe(false)
-    })
-
-    it('drops the whole line when the only activity is the named member', () => {
-      _rawSessions.value = [
-        agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
       ]
-      expect(familyActivityById.value.has('root')).toBe(true)
       urlPath.value = '/proj/pi/aa'
-      expect(familyActivityById.value.has('root')).toBe(false)
+      rememberFamilyChild('a')
+      expect(familySlotById.value.get('root')?.session.id).toBe('a')
+      expect(familyActivityById.value.get('root')?.unread).toBe(1)
     })
 
     it('gives a promoted descendant its own counts, not its old family\u2019s', () => {

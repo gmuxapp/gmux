@@ -20,7 +20,7 @@ import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
 import {
-  familyAncestors, familyIndex, familyRootId, isFamilyChild, isProcessSession,
+  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild,
   type FamilyActivity,
 } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
@@ -1064,42 +1064,37 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
   return map
 })
 
-/** What the *rest* of each family is doing, keyed by presentation-root id.
+/** What each family is doing, keyed by presentation-root id: the
+ * standard family numbers — every descendant of the root, the root
+ * excluded, bucketed once each by `familyStateOf` — the same rule and
+ * the same population as the header pill and the panel tally, so the
+ * same dots never wear different numbers anywhere.
  *
- * The sidebar entry names two members: the root, on its own row with
- * its own dot, and the slot member below it. This is everyone else —
- * hence the `+` the row leads with. One invariant holds the entry
- * together: every family member is represented exactly once, either by
- * name or by a number, so a subagent you're watching can't show up as
- * both a row and a count.
+ * Deliberately a fact about the family, not the viewport: the line
+ * does not subtract the slot member named beneath it (a summary may
+ * include what is separately visible — the panel's tally counts the
+ * rows below it too) and does not subtract members the alive-only
+ * toggle hides (the panel one click away shows them regardless). Both
+ * subtractions used to make this number wobble with unrelated view
+ * state, which read as the count being wrong.
  *
- * Members are tallied once each under dot precedence (error > working
- * > unread). Idle members are not counted and roots with nothing else
- * happening are absent from the map: no line, nothing to say. */
+ * Idle members are not counted and quiet families are absent from the
+ * map: no line, nothing to say. */
 export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
   const index = familyIndex(sessions.value)
-  const named = familySlotById.value
-  const onlyAlive = aliveOnly.value
   const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
   for (const s of sessions.value) {
     if (!index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (!rootId || rootId === s.id) continue
-    // The line counts what the list would show you. With alive-only on,
-    // a dead member is filtered out of the sidebar, so reporting its
-    // unread here would point at a row that isn't there.
-    if (onlyAlive && !s.alive) continue
-    // Already named by the slot row above: counting it too would show
-    // one member twice, and claim attention its own dot already carries.
-    if (named.get(rootId)?.session.id === s.id) continue
     let bucket: keyof FamilyActivity
-    if (s.alive && s.status?.error) {
-      bucket = 'error'
-    } else if (s.alive && s.status?.active) {
-      bucket = isProcessSession(s) ? 'workingProcesses' : 'workingAgents'
-    } else if (s.unread) {
-      bucket = 'unread'
-    } else continue
+    switch (familyStateOf(s)) {
+      case 'error': bucket = 'error'; break
+      case 'active': bucket = 'workingAgents'; break
+      case 'running': bucket = 'workingProcesses'; break
+      case 'waiting': bucket = 'unread'; break
+      default: continue
+    }
     const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
     entry[bucket]++
     map.set(rootId, entry)

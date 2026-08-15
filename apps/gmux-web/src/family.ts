@@ -218,19 +218,20 @@ export function hasFamilyActivity(activity: FamilyActivity): boolean {
     || activity.workingAgents > 0 || activity.workingProcesses > 0
 }
 
-/** Spoken form of the `+` line, which is otherwise pure glyphs. It
- * counts the members the entry does *not* name, so it reads as an
- * addition to the rows above it. */
+/** Spoken form of the activity line, which is otherwise pure glyphs.
+ * The standard family numbers: everyone beneath the root, in the turn
+ * model's words — waiting on you, active — matching the panel tally's
+ * vocabulary rather than the wire's field names. */
 export function familyActivityLabel(activity: FamilyActivity): string {
   const parts: string[] = []
   // 'process' takes -es; everything else here takes -s.
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? '' : word.endsWith('s') ? 'es' : 's'}`
   if (activity.error > 0) parts.push(`${plural(activity.error, 'member')} with an error`)
-  if (activity.unread > 0) parts.push(plural(activity.unread, 'unread member'))
-  if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'working subagent'))
+  if (activity.unread > 0) parts.push(`${plural(activity.unread, 'member')} waiting on you`)
+  if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'active subagent'))
   if (activity.workingProcesses > 0) parts.push(plural(activity.workingProcesses, 'running process'))
-  return `Also in this family: ${parts.join(', ')}`
+  return `In this family: ${parts.join(', ')}`
 }
 
 /** Hover title for the sidebar's selected-child row: the path from the

@@ -246,12 +246,12 @@ describe('family activity line', () => {
 
   it('spells the glyph row out for screen readers, attention first', () => {
     expect(familyActivityLabel(activity({ error: 1, unread: 2, workingAgents: 1, workingProcesses: 3 })))
-      .toBe('Also in this family: 1 member with an error, 2 unread members, 1 working subagent, 3 running processes')
+      .toBe('In this family: 1 member with an error, 2 members waiting on you, 1 active subagent, 3 running processes')
   })
 
   it('omits zero states from the label', () => {
     expect(familyActivityLabel(activity({ unread: 1 })))
-      .toBe('Also in this family: 1 unread member')
+      .toBe('In this family: 1 member waiting on you')
   })
 })
 
