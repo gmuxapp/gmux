@@ -2354,7 +2354,12 @@ body {
   left: 16px;
   z-index: 100;
   width: max-content;
-  min-width: 320px;
+  /* Wide enough that filtering doesn't reflow the panel underneath the
+     buttons you're pressing: a filter narrows the content (fewer, often
+     shorter rows), and with `max-content` the panel used to lurch with
+     it. One min-width absorbs most of that, and gives the head room so
+     the action button isn't shoulder-to-shoulder with the tally. */
+  min-width: 440px;
   /* Wider than it was: the panel now shows the whole family from the
      root, so deep rows pay for their indentation out of this budget. */
   max-width: min(560px, calc(100vw - 24px));
@@ -2371,7 +2376,7 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 18px;
   padding: 10px 14px 8px;
   border-bottom: 1px solid var(--border);
 }
