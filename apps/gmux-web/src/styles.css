@@ -741,19 +741,22 @@ body {
 
 .session-dot-indicator.working {
   background: transparent;
-  border: 1.5px solid var(--accent);
+  /* A hair thicker than the 1.5px it grew up with: hollow rings read
+     thinner than the filled dots they sit beside, and at 7px the ring
+     was dropping below legibility on low-DPI screens. */
+  border: 1.75px solid var(--accent);
   animation: subtle-pulse 2.5s ease-in-out infinite;
 }
 
 .session-dot-indicator.active {
   background: transparent;
-  border: 1.5px solid var(--active);
+  border: 1.75px solid var(--active);
   animation: subtle-pulse 3s ease-in-out infinite;
 }
 
 .session-dot-indicator.fading {
   background: transparent;
-  border: 1.5px solid var(--active);
+  border: 1.75px solid var(--active);
   animation: dot-fade-out 800ms ease-out forwards;
 }
 
@@ -1074,6 +1077,19 @@ body {
   font-size: 10px;
   line-height: 1;
 }
+/* The activity line's own glyph: the family mark, same as the header's
+   trigger. Slightly larger than the 7px glyph column and centered on
+   it — a 7px tree is a smudge — but the column's own width is what
+   keeps the numbers aligned with member glyphs above. */
+.family-activity-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+  /* Centered on the 7px glyph column: auto margins can't go negative,
+     so split the 5px overflow explicitly. */
+  margin: 0 -2.5px;
+  color: var(--text-muted);
+}
 
 /* Member row: the family member you're viewing, or the last one you
    did. Title-sized and title-coloured in every state — a peer of the
@@ -1115,11 +1131,11 @@ body {
   min-width: 0;
 }
 
-/* Activity line: everyone the entry doesn't name by row, one segment
-   per state, each dropped at zero. No target of its own — it's part of
-   the group's area, so it takes the group's hover and selects the
-   root. Numbers sit a touch under the title size; the glyphs keep
-   their standard sizes. */
+/* Activity line: the standard family numbers — everyone beneath the
+   root — one segment per state, each dropped at zero. No target of its
+   own: it's part of the group's area, so it takes the group's hover
+   and selects the root. Numbers sit a touch under the title size; the
+   glyphs keep their standard sizes. */
 .family-activity {
   padding-top: 1px;
   padding-bottom: 4px;
@@ -1146,16 +1162,31 @@ body {
   gap: 5px;
   flex: 0 0 auto;
 }
-.family-child-proc {
+/* The `$`: a process where an agent shows a status dot. Shape (not
+   just colour) distinguishes them, so the cue survives tiny sizes and
+   colour blindness — and it carries the same state vocabulary the dots
+   do, in the glyph's own colour, wherever it appears.
+
+   Vocabulary only: no box. The sidebar pairs it with `.family-glyph`,
+   which owns the fixed column there, and repeating those properties
+   here would silently outrank that class by source order — the exact
+   drift this merge existed to end. */
+.family-proc {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1;
   color: var(--text-muted);
 }
-.family-child-proc.working { color: var(--accent); }
-/* The rest of the dot vocabulary, in the `$`'s colour. */
-.family-child-proc.unread { color: var(--unread); }
-.family-child-proc.error { color: var(--status-error); }
+/* The panel has no glyph-column class of its own, so it gives the `$`
+   the same box its status dots occupy. */
+.family-row .family-proc {
+  flex: 0 0 auto;
+  width: 7px; /* match .session-dot-indicator for title alignment */
+  text-align: center;
+}
+.family-proc.working { color: var(--accent); }
+.family-proc.unread { color: var(--unread); }
+.family-proc.error { color: var(--status-error); }
 
 /* States that belong to the root row are the whole entry's states —
    it's one entry, so it dims, drags and takes a drop line as a unit. */
@@ -2159,7 +2190,7 @@ body {
 
 .session-dot.working {
   background: transparent;
-  border: 1.5px solid var(--accent);
+  border: 1.75px solid var(--accent);
 }
 .session-dot.error   { background: var(--status-error); }
 .session-dot.idle    { background: var(--text-muted); }
@@ -2246,40 +2277,50 @@ body {
 
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
-.main-header-status.ended   { color: var(--text-muted); }
 
 /* Family trigger: a ghost icon button in the header's one control
  * language (borderless, bg-hover, sized to match .session-menu-trigger).
  * The corner badge repeats the family's aggregated dot state so
  * background family activity is visible without opening the panel. */
+/* A pill, bordered like the panel's tally buttons so it reads as one
+ * coherent button rather than a strip of dots that happens to be
+ * clickable. Never shrinks: it is the densest thing in the row, and
+ * the title yields instead. */
 .family-trigger {
-  position: relative;
-  width: 26px;
   height: 26px;
   flex-shrink: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: background 0.1s, color 0.1s;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 12px/1 'Source Sans 3', sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-trigger:hover,
-.family-trigger[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
+.family-trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.family-trigger-seg {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+/* The sidebar's own glyphs at the sidebar's own size, so the button
+ * reads as the same sentence relocated, not a new dialect. */
+/* The quiet family wears the tree icon: several nodes, one structure. */
 .family-trigger-icon { width: 16px; height: 16px; display: block; }
-/* 7px like every other status dot in the app — a one-off 6px dot reads as
- * a rendering artifact next to the sidebar's dots. */
-.family-trigger-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 7px;
-  height: 7px;
-  pointer-events: none;
+
+.family-trigger-proc {
+  font: 600 11px/1 'Source Sans 3', sans-serif;
+  color: var(--active);
 }
 
 /* Ancestor breadcrumbs in the title row: quiet path prefix, each crumb a
@@ -2289,11 +2330,23 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
-  /* Ancestors yield space before the current session's title does, and
-   * when even their minimums overflow the clip falls on the root end
-   * (justify-content: flex-end) so the immediate parent stays readable. */
-  flex-shrink: 2;
+  /* Explicit `min-content`, not `auto`: with `overflow: hidden` the
+   * flexbox automatic minimum computes to zero, so the strip — 4ch
+   * crumb floors and all — collapsed to nothing under a long title.
+   * min-content is bounded here because the crumbs cap at three (root ›
+   * … › parent), so the strip refuses to shrink past ~120px and the
+   * title, whose min-width is 0, yields instead. */
+  min-width: min-content;
+  /* Shrink no faster than the title: where the selected session is is
+   * at least as important as what it's called, and a shrink factor of 2
+   * here let any long title erase the ancestors entirely. The per-crumb
+   * title floor below is what actually guarantees their survival — flex
+   * weighting alone cannot, because a long title's flex basis dwarfs
+   * the crumbs' and takes nearly everything regardless of factors. When
+   * even the floors overflow, the clip falls on the root end
+   * (justify-content: flex-end) so the immediate parent stays readable
+   * until the mobile layout gives the crumbs their own row. */
+  flex-shrink: 1;
   justify-content: flex-end;
   overflow: hidden;
   /* Match the 26px control row so crumb text shares the title's center. */
@@ -2316,10 +2369,12 @@ body {
 .header-crumb:hover { background: var(--bg-hover); color: var(--text); }
 .header-crumb-title {
   max-width: 18ch;
-  /* No min-width: a floor here makes the crumb strip's min-content exceed
-   * its box on medium widths, and the overflow clips crumbs mid-glyph.
-   * Ellipsis-to-nothing degrades; hard clipping just looks broken. */
-  min-width: 0;
+  /* A small floor, so a crumb degrades to `ter…` and stops, instead of
+   * ellipsizing to nothing and leaving a bare dot — or less. Kept just
+   * big enough to be legible: every ch of floor here widens the band of
+   * medium widths where the strip's min-content exceeds its box and the
+   * root end clips mid-glyph. */
+  min-width: 4ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2342,7 +2397,12 @@ body {
   left: 16px;
   z-index: 100;
   width: max-content;
-  min-width: 320px;
+  /* Wide enough that filtering doesn't reflow the panel underneath the
+     buttons you're pressing: a filter narrows the content (fewer, often
+     shorter rows), and with `max-content` the panel used to lurch with
+     it. One min-width absorbs most of that, and gives the head room so
+     the action button isn't shoulder-to-shoulder with the tally. */
+  min-width: 440px;
   /* Wider than it was: the panel now shows the whole family from the
      root, so deep rows pay for their indentation out of this budget. */
   max-width: min(560px, calc(100vw - 24px));
@@ -2355,30 +2415,70 @@ body {
   box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
 }
 /* The counts line stays put; only the tree scrolls. */
-.family-drawer-head { flex: 0 0 auto; padding: 10px 14px 8px; border-bottom: 1px solid var(--border); }
+.family-drawer-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.family-drawer-head .family-counts { flex: 1 1 auto; }
+/* Quiet until wanted: it sits beside a counts line that is itself the
+   reason to press it, so it needs to be findable, not loud. */
+.family-mark-read {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 400 11px/1.4 'Source Sans 3', sans-serif;
+  cursor: pointer;
+}
+.family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
 .family-drawer-scroll { flex: 1 1 auto; overflow: auto; padding: 6px 8px 8px; }
+/* One segment per state, each carrying the dot the rows use for it, so
+   the header reads as a key to the tree below rather than a separate
+   vocabulary. Spacing does the separating that a `·` used to. */
 .family-counts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
   font: 400 12px/1.4 'Source Sans 3', sans-serif;
   color: var(--text-muted);
 }
+/* Each tally is also the filter for its own state, so it looks like
+   something you can press without shouting: no chrome until you point
+   at it, a filled pill once it's on. */
+.family-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  margin: -2px 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.family-count:hover { border-color: var(--border); }
+.family-count.active {
+  background: var(--bg-selected);
+  border-color: var(--border);
+  color: var(--text);
+}
+.family-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .family-count-attention { color: var(--unread); font-weight: 600; }
 .family-tree,
 .family-tree ul { list-style: none; margin: 0; padding: 0; }
 .family-row { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 5px; color: var(--text-secondary); text-decoration: none; }
 .family-row:hover { background: var(--bg-hover); color: var(--text); }
 .family-row.selected { background: var(--bg-selected); color: var(--text); }
-/* Processes: a mono $ glyph where agents show a status dot, muted title.
- * Shape (not just color) distinguishes them from agents, so the cue
- * survives tiny sizes and color blindness. */
-.family-row-proc {
-  flex: 0 0 auto;
-  width: 7px; /* match .session-dot-indicator for title alignment */
-  font-family: 'Fira Code', monospace;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-muted);
-}
-.family-row-proc.working { color: var(--accent); }
 .family-row.process .family-row-title { color: var(--text-muted); }
 .family-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Age: the key every level is sorted by, so it stays on screen. Tabular

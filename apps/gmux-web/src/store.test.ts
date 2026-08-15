@@ -1344,23 +1344,24 @@ describe('sidebar family entry derivations', () => {
         proc('p2', 'grandkid', { status: { active: true }, unread: true }),
       ]
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 1, unread: 1, workingAgents: 2, workingProcesses: 2,
+        error: 1, waiting: 1, active: 2, running: 2,
       })
       // The root's own working state is never in its family's counts.
       expect(familyActivityById.value.get('kid')).toBeUndefined()
     })
 
-    it('ignores members the alive-only filter is hiding', () => {
+    it('counts the same with the alive-only filter on or off', () => {
       _rawSessions.value = [
         agent('root'),
         agent('live', { parent_session_id: 'root', unread: true }),
         agent('dead', { parent_session_id: 'root', unread: true, alive: false, resumable: true }),
       ]
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
-      // The line counts what the list shows: a filtered-out member's
-      // unread would point at a row that isn't there.
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
+      // The standard family numbers are a fact about the family, not
+      // the viewport: the toggle hides rows, and the panel one click
+      // away shows the hidden member regardless, so the count stands.
       setAliveOnly(true)
-      expect(familyActivityById.value.get('root')?.unread).toBe(1)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       setAliveOnly(false)
     })
 
@@ -1383,55 +1384,41 @@ describe('sidebar family entry derivations', () => {
         agent('unseen', { parent_session_id: 'root', alive: false, unread: true }),
       ]
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
+        error: 0, waiting: 1, active: 0, running: 0,
       })
     })
 
     beforeEach(() => { recentFamilyChildren.value = [] })
 
-    it('never counts the member the slot row already names', () => {
+    it('holds the same numbers whichever member the slot row names', () => {
       _rawSessions.value = [
         agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
         agent('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
       ]
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
-      // Viewing 'a' gives it the slot row, so only the sibling is left
-      // for the `+` line: one member, one representation.
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
+      // Viewing 'a' names it on the slot row; the count does not budge.
+      // A summary may include what is separately visible — the panel's
+      // tally counts the rows below it too — and subtracting the slot
+      // made this number wobble with which member you last visited.
       urlPath.value = '/proj/pi/aa'
-      expect(familyActivityById.value.get('root')?.unread).toBe(1)
-      // Working members are no different — the slot row carries their
-      // dot, so counting them too would double them up.
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       _rawSessions.value = _rawSessions.value.map(s =>
         s.id === 'a' ? { ...s, unread: false, status: { active: true } } : s)
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
+        error: 0, waiting: 1, active: 1, running: 0,
       })
     })
 
-    it('stops counting a member you merely visited, not just the selected one', () => {
+    it('keeps the line when the only activity is the named member', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
-        agent('a', { slug: 'aa', parent_session_id: 'root', status: { active: true } }),
-      ]
-      urlPath.value = '/proj/pi/aa'
-      rememberFamilyChild('a') // what the recorder effect does on a visit
-      expect(familyActivityById.value.has('root')).toBe(false)
-      // Back on the root, 'a' keeps the slot row as the way back — and
-      // stays out of the count, because it is still named.
-      urlPath.value = '/proj/pi/rooty'
-      expect(familySlotById.value.get('root')?.session.id).toBe('a')
-      expect(familyActivityById.value.has('root')).toBe(false)
-    })
-
-    it('drops the whole line when the only activity is the named member', () => {
-      _rawSessions.value = [
-        agent('root'),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
       ]
-      expect(familyActivityById.value.has('root')).toBe(true)
       urlPath.value = '/proj/pi/aa'
-      expect(familyActivityById.value.has('root')).toBe(false)
+      rememberFamilyChild('a')
+      expect(familySlotById.value.get('root')?.session.id).toBe('a')
+      expect(familyActivityById.value.get('root')?.waiting).toBe(1)
     })
 
     it('gives a promoted descendant its own counts, not its old family\u2019s', () => {
@@ -1441,7 +1428,7 @@ describe('sidebar family entry derivations', () => {
         proc('p', 'kid', { status: { active: true } }),
       ]
       expect(familyActivityById.value.has('root')).toBe(false)
-      expect(familyActivityById.value.get('kid')?.workingProcesses).toBe(1)
+      expect(familyActivityById.value.get('kid')?.running).toBe(1)
     })
   })
 
@@ -1985,6 +1972,42 @@ describe('pending mutations overlay', () => {
       expect(out[0].status?.error).toBe(false)
       // Untouched session keeps its flags.
       expect(out[1].unread).toBe(true)
+    })
+
+    it('applies a mark-read per session in one pass, whatever the pile', () => {
+      // "Mark all read" stacks one mutation per family member, and this
+      // overlay is replayed on every recompute in the app until the
+      // server echoes them back. A pass per mutation made that cost
+      // mutations x sessions.
+      const sess = Array.from({ length: 200 }, (_, i) =>
+        makeSession({ id: `s${i}`, unread: true, unread_token: `t${i}` }))
+      const pending: PendingMutation[] = sess.map(s => (
+        { kind: 'mark-read', id: s.id, token: s.unread_token ?? '', at: 0 }))
+      const out = applyPending(sess, pending)
+      expect(out.every(s => !s.unread)).toBe(true)
+      expect(out).toHaveLength(200)
+    })
+
+    it('honours each token separately when several are in flight for one session', () => {
+      // The token binds a mark to the state it was issued against, so a
+      // session that spoke again escapes the older mark rather than
+      // being silenced by it.
+      const sess = [makeSession({ id: 'a', unread: true, unread_token: 'new' })]
+      const out = applyPending(sess, [
+        { kind: 'mark-read', id: 'a', token: 'stale', at: 0 },
+        { kind: 'mark-read', id: 'a', token: 'new', at: 0 },
+      ])
+      expect(out[0].unread).toBe(false)
+      const stillUnread = applyPending(sess, [{ kind: 'mark-read', id: 'a', token: 'stale', at: 0 }])
+      expect(stillUnread[0].unread).toBe(true)
+    })
+
+    it('dismissal wins over a mark-read for the same session, either order', () => {
+      const sess = [makeSession({ id: 'a', unread: true, unread_token: '' })]
+      const read: PendingMutation = { kind: 'mark-read', id: 'a', token: '', at: 0 }
+      const gone: PendingMutation = { kind: 'dismiss', id: 'a', at: 0 }
+      expect(applyPending(sess, [read, gone])).toEqual([])
+      expect(applyPending(sess, [gone, read])).toEqual([])
     })
 
     it('dismiss removes the targeted session', () => {

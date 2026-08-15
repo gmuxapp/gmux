@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  descendantTree, familyAncestors, familyCounts, familyIndex,
-  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, hasFamilyActivity,
-  familyMemberGlyph, isFamilyChild, NO_FAMILY_ACTIVITY, projectFamily,
+  descendantTree, familyAncestors, familyIndex, familySegments,
+  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
+  familyMemberGlyph, isFamilyChild, projectFamily,
 } from './family'
 import { makeSession } from './test-helpers'
 
@@ -155,39 +155,6 @@ describe('flat panel projection', () => {
       .toEqual(['newest-dead', 'mid-idle', 'created-only', 'old-working'])
   })
 
-  it('tallies the counts line by dot precedence over all panel members', () => {
-    const root = agent('root')
-    const sessions = [
-      root,
-      member('working', { status: { active: true } }),
-      member('working-unread', { status: { active: true }, unread: true }),
-      member('errored', { status: { active: true, error: true } }),
-      member('dead-unread', { alive: false, unread: true }),
-      member('grandchild-unread', { parent_session_id: 'working', unread: true }),
-      member('proc-working', { semantic_agent: undefined, adapter: 'shell', status: { active: true } }),
-      member('dead-viewed', { alive: false }),
-    ]
-    const tree = projectFamily(root, sessions).tree
-    // Each member counted once under its highest-precedence state: the
-    // working-unread agent is working (dot precedence), the dead unread
-    // one is unread (not alive-gated), processes count like anyone else,
-    // and the root + quiet members only land in the total.
-    expect(familyCounts([tree])).toEqual({ error: 1, working: 3, unread: 2, total: 8 })
-  })
-
-  it('counts the same family from anywhere inside it', () => {
-    const root = agent('root')
-    const parent = member('parent')
-    const selected = member('selected', { parent_session_id: 'parent' })
-    const sibling = member('sibling', { parent_session_id: 'parent', alive: false })
-    const snapshot = [root, parent, selected, sibling]
-    const fromRoot = familyCounts([projectFamily(root, snapshot).tree])
-    const fromDeep = familyCounts([projectFamily(selected, snapshot).tree])
-    // One scope, so the line reads the same on every row you visit —
-    // and the root is one of the members it counts.
-    expect(fromDeep).toEqual(fromRoot)
-    expect(fromRoot).toEqual({ error: 0, working: 0, unread: 0, total: 4 })
-  })
 })
 
 describe('member row glyph', () => {
@@ -227,27 +194,44 @@ describe('member row glyph', () => {
 })
 
 describe('family activity line', () => {
-  const activity = (over = {}) => ({ ...NO_FAMILY_ACTIVITY, ...over })
+  const activity = (over: Partial<FamilyActivity> = {}): FamilyActivity =>
+    ({ error: 0, waiting: 0, active: 0, running: 0, ...over })
 
-  it('shows nothing for an idle family', () => {
-    expect(hasFamilyActivity(NO_FAMILY_ACTIVITY)).toBe(false)
+  it('has no segments for an idle family, or for one with no entry at all', () => {
+    expect(familySegments(activity())).toEqual([])
+    // A quiet family is absent from the activity map entirely, and that
+    // absence is the same fact as "nothing to report".
+    expect(familySegments(undefined)).toEqual([])
   })
 
-  it('shows for any single non-zero state', () => {
-    expect(hasFamilyActivity(activity({ error: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ unread: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ workingAgents: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ workingProcesses: 1 }))).toBe(true)
+  it('gives every state a segment', () => {
+    for (const state of ['error', 'waiting', 'active', 'running'] as const) {
+      expect(familySegments(activity({ [state]: 1 })).map(s => s.state)).toEqual([state])
+    }
+  })
+
+  it('orders segments attention-first, and drops the zeros', () => {
+    // One display order for every surface: the members that need you
+    // (error, waiting) before the ambient work (active, running), so
+    // what survives a narrow clip is what matters.
+    expect(familySegments(activity({ running: 3, waiting: 2, error: 1, active: 4 })).map(s => s.state))
+      .toEqual(['error', 'waiting', 'active', 'running'])
+    expect(familySegments(activity({ running: 3, error: 1 })).map(s => s.state))
+      .toEqual(['error', 'running'])
+    // The glyph table is the vocabulary: dots for states that have
+    // them, and the running state's null dot is the `$`.
+    expect(familySegments(activity({ running: 1 }))[0].dot).toBeNull()
+    expect(familySegments(activity({ waiting: 1 }))[0].dot).toBe('unread')
   })
 
   it('spells the glyph row out for screen readers, attention first', () => {
-    expect(familyActivityLabel(activity({ error: 1, unread: 2, workingAgents: 1, workingProcesses: 3 })))
-      .toBe('Also in this family: 1 member with an error, 2 unread members, 1 working subagent, 3 running processes')
+    expect(familyActivityLabel(activity({ error: 1, waiting: 2, active: 1, running: 3 })))
+      .toBe('In this family: 1 member with an error, 2 members waiting on you, 1 active subagent, 3 running processes')
   })
 
   it('omits zero states from the label', () => {
-    expect(familyActivityLabel(activity({ unread: 1 })))
-      .toBe('Also in this family: 1 unread member')
+    expect(familyActivityLabel(activity({ waiting: 1 })))
+      .toBe('In this family: 1 member waiting on you')
   })
 })
 

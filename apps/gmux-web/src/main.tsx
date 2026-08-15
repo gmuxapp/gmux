@@ -15,7 +15,8 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyRoot, hasFamily } from './family'
+import { familyAncestors, familyRoot, familySegments, hasFamily } from './family'
+import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -32,7 +33,7 @@ import {
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
-  sessionStaleness, sessionDotState, activityMap, familyDotById, tabHref,
+  sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
 
@@ -225,10 +226,15 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   )
 }
 
-/** The family panel's trigger: a ghost icon button (3-node tree) with a
- * corner badge showing the family's aggregated dot state — same roll-up
- * the sidebar row shows, so background family activity is visible without
- * opening the panel. */
+/** The family panel's trigger: a pill wearing the standard family
+ * segments — `familySegments` over `familyActivityById`, the same
+ * derivation and display order as the sidebar's line and the panel's
+ * tally, so the same dots never wear different numbers or a different
+ * order anywhere. Nothing here depends on which session you are
+ * viewing: the count is a fact about the family, not the viewport. A
+ * family with nothing to report shows the tree icon instead; no count
+ * with it, because the segments' numbers are news and a quiet family
+ * has none. */
 function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   session: Session
   open: boolean
@@ -236,7 +242,7 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   onToggle: () => void
 }) {
   const rootId = familyRoot(session, sessions.value).id
-  const dot = familyDotById.value.get(rootId) ?? 'none'
+  const segments = familySegments(familyActivityById.value.get(rootId))
   return (
     <button
       ref={triggerRef}
@@ -248,13 +254,16 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
       aria-controls="agent-family-drawer"
       onClick={onToggle}
     >
-      <svg class="family-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 5.5v2M8 7.5c0 1.5-3.5 1-3.5 3M8 7.5c0 1.5 3.5 1 3.5 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        <circle cx="8" cy="3.75" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-        <circle cx="4.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-        <circle cx="11.5" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3" />
-      </svg>
-      {dot !== 'none' && <span class={`family-trigger-badge session-dot-indicator ${dot}`} aria-hidden="true" />}
+      {segments.length > 0
+        ? segments.map(segment => (
+          <span key={segment.state} class="family-trigger-seg">
+            {segment.dot
+              ? <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
+              : <span class="family-trigger-proc" aria-hidden="true">$</span>}
+            {segment.count}
+          </span>
+        ))
+        : <FamilyIcon class="family-trigger-icon" />}
     </button>
   )
 }
@@ -273,19 +282,26 @@ function HeaderCrumbs({ session }: { session: Session }) {
   const am = activityMap.value
   return (
     <nav class="header-crumbs" aria-label="Ancestor agents">
-      {shown.map((ancestor) => (
-        <Fragment key={ancestor?.id ?? 'gap'}>
-          {ancestor
-            ? (
-              <a class="header-crumb" href={sessionHref(ancestor)}>
-                <span class={`session-dot-indicator ${sessionDotState(ancestor, am)}`} aria-hidden="true" />
-                <span class="header-crumb-title">{ancestor.title}</span>
-              </a>
-            )
-            : <span class="header-crumb-gap" title="More ancestors in the family panel">…</span>}
-          <span class="header-crumb-sep" aria-hidden="true">›</span>
-        </Fragment>
-      ))}
+      {shown.map((ancestor) => {
+        const dot = ancestor ? sessionDotState(ancestor, am) : 'none'
+        return (
+          <Fragment key={ancestor?.id ?? 'gap'}>
+            {ancestor
+              ? (
+                <a class="header-crumb" href={sessionHref(ancestor)}>
+                  {/* The sidebar's `none` dot is an invisible placeholder
+                    * that holds a column; a crumb has no column, so a
+                    * quiet ancestor would just wear a permanent hole
+                    * where its dot should be. */}
+                  {dot !== 'none' && <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
+                  <span class="header-crumb-title">{ancestor.title}</span>
+                </a>
+              )
+              : <span class="header-crumb-gap" title="More ancestors in the family panel">…</span>}
+            <span class="header-crumb-sep" aria-hidden="true">›</span>
+          </Fragment>
+        )
+      })}
     </nav>
   )
 }
@@ -295,10 +311,12 @@ function sessionHref(session: Session): string | undefined {
   return path ? tabHref(path) : undefined
 }
 
-/** Session status in the header, one chip slot for both states: alive shows
- * Working…/Error, dead shows Exited (N). While a resume is in flight the
- * dead chip flips to the busy label — the menu closes on click, so this
- * chip is the visible feedback until the session comes alive. */
+/** Session status in the header — only states that need the header to
+ * say something the view doesn't already: Error, and the resume-in-
+ * flight busy label (the menu closes on click, so this chip is the
+ * visible feedback until the session comes alive). A dead session gets
+ * no chip: a replay view is unmistakably an ended session, and the chip
+ * only restated it. */
 function HeaderStatusChip({ session, resuming }: {
   session: Session
   resuming?: boolean
@@ -312,11 +330,7 @@ function HeaderStatusChip({ session, resuming }: {
         </div>
       )
     }
-    return (
-      <div class="main-header-status ended">
-        {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
-      </div>
-    )
+    return null
   }
   // A live "Working…" chip is redundant with the session's own dot
   // indicator, so only the error state earns a header chip here.

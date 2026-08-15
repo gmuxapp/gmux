@@ -20,7 +20,7 @@ import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
 import {
-  familyAncestors, familyIndex, familyRootId, isFamilyChild, isProcessSession,
+  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild,
   type FamilyActivity,
 } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
@@ -137,22 +137,35 @@ export function applyPending(
   pending: PendingMutation[],
 ): Session[] {
   if (pending.length === 0) return rawSessions
-  let sess = rawSessions
+  // Indexed, then one pass: "mark all read" on a family stacks a
+  // mutation per member, and a pass each would make every recompute in
+  // the app cost mutations × sessions until the server echoed them back
+  // — measurably, ~3ms a recompute for 250 of them over 1500 sessions.
+  //
+  // Order between the two kinds doesn't survive the rewrite, and
+  // doesn't need to: for one id, dismissal wins either way round —
+  // marking a removed session read is a no-op, and dismissing a
+  // read-marked one still removes it.
+  const readTokens = new Map<string, Set<string>>()
+  const dismissed = new Set<string>()
   for (const m of pending) {
-    switch (m.kind) {
-      case 'mark-read':
-        sess = sess.map(s => s.id !== m.id || (s.unread_token ?? '') !== m.token ? s : ({
-          ...s,
-          unread: false,
-          status: s.status?.error ? { ...s.status, error: false } : s.status,
-        }))
-        break
-      case 'dismiss':
-        sess = sess.filter(s => s.id !== m.id)
-        break
+    if (m.kind === 'dismiss') dismissed.add(m.id)
+    else {
+      // Several tokens can be in flight for one session; each only
+      // applies to the state it was issued against.
+      const tokens = readTokens.get(m.id)
+      if (tokens) tokens.add(m.token)
+      else readTokens.set(m.id, new Set([m.token]))
     }
   }
-  return sess
+  const out: Session[] = []
+  for (const s of rawSessions) {
+    if (dismissed.has(s.id)) continue
+    out.push(readTokens.get(s.id)?.has(s.unread_token ?? '')
+      ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status }
+      : s)
+  }
+  return out
 }
 
 /** True when the raw state already reflects the mutation, so replaying
@@ -1051,44 +1064,34 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
   return map
 })
 
-/** What the *rest* of each family is doing, keyed by presentation-root id.
+/** What each family is doing, keyed by presentation-root id: the
+ * standard family numbers — every descendant of the root, the root
+ * excluded, bucketed once each by `familyStateOf` — the same rule and
+ * the same population as the header pill and the panel tally, so the
+ * same dots never wear different numbers anywhere.
  *
- * The sidebar entry names two members: the root, on its own row with
- * its own dot, and the slot member below it. This is everyone else —
- * hence the `+` the row leads with. One invariant holds the entry
- * together: every family member is represented exactly once, either by
- * name or by a number, so a subagent you're watching can't show up as
- * both a row and a count.
+ * Deliberately a fact about the family, not the viewport: the line
+ * does not subtract the slot member named beneath it (a summary may
+ * include what is separately visible — the panel's tally counts the
+ * rows below it too) and does not subtract members the alive-only
+ * toggle hides (the panel one click away shows them regardless). Both
+ * subtractions used to make this number wobble with unrelated view
+ * state, which read as the count being wrong.
  *
- * Members are tallied once each under dot precedence (error > working
- * > unread). Idle members are not counted and roots with nothing else
- * happening are absent from the map: no line, nothing to say. */
+ * Idle members are not counted, and an entry exists if and only if
+ * some count is non-zero — a quiet family is absent from the map, and
+ * `undefined` is the whole of "nothing to report" for every caller. */
 export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
   const index = familyIndex(sessions.value)
-  const named = familySlotById.value
-  const onlyAlive = aliveOnly.value
-  const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
+  const map = new Map<string, { error: number; waiting: number; active: number; running: number }>()
   for (const s of sessions.value) {
     if (!index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (!rootId || rootId === s.id) continue
-    // The line counts what the list would show you. With alive-only on,
-    // a dead member is filtered out of the sidebar, so reporting its
-    // unread here would point at a row that isn't there.
-    if (onlyAlive && !s.alive) continue
-    // Already named by the slot row above: counting it too would show
-    // one member twice, and claim attention its own dot already carries.
-    if (named.get(rootId)?.session.id === s.id) continue
-    let bucket: keyof FamilyActivity
-    if (s.alive && s.status?.error) {
-      bucket = 'error'
-    } else if (s.alive && s.status?.active) {
-      bucket = isProcessSession(s) ? 'workingProcesses' : 'workingAgents'
-    } else if (s.unread) {
-      bucket = 'unread'
-    } else continue
-    const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
-    entry[bucket]++
+    const state = familyStateOf(s)
+    if (!state) continue
+    const entry = map.get(rootId) ?? { error: 0, waiting: 0, active: 0, running: 0 }
+    entry[state]++
     map.set(rootId, entry)
   }
   return map
@@ -1766,17 +1769,21 @@ async function errorMessageFromResponse(resp: Response): Promise<string> {
  * on failure. A network reject counts as "not succeeded" for rollback,
  * even though it's silent toast-wise.
  */
-async function postAction(endpoint: string, label = 'Action', body?: Record<string, unknown>): Promise<boolean> {
+async function postAction(endpoint: string, label = 'Action', opts: {
+  /** Suppress the per-call toast; the caller reports once instead. */
+  quiet?: boolean
+  /** One more status to treat as success, for endpoints where a
+   * rejection is the outcome the caller asked for anyway. */
+  alsoOk?: number
+} = {}): Promise<boolean> {
+  const { quiet = false, alsoOk } = opts
   try {
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      ...(body ? {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      } : {}),
-    })
-    if (!resp.ok) {
-      pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
+    const resp = await fetch(endpoint, { method: 'POST' })
+    if (!resp.ok && resp.status !== alsoOk) {
+      // `quiet` is for bulk callers: one toast per failed member turns a
+      // daemon hiccup during "Stop all" into two hundred toasts, so they
+      // take the boolean and report once.
+      if (!quiet) pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
       return false
     }
     return true
@@ -1791,8 +1798,22 @@ async function postAction(endpoint: string, label = 'Action', body?: Record<stri
 // toast fires, instead of waiting out a timeout. Note these promises never
 // reject — postAction converts all failures into `false` — so `.catch()`
 // on them is dead code; branch on the boolean instead.
-export function killSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill')
+export function killSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill', { quiet: opts?.quiet })
+}
+
+/** Interrupt an agent's current turn (POST /cancel — the daemon's word;
+ * the UI says "interrupt", ADR 0023's word for ending a turn early).
+ *
+ * A 409 is swallowed rather than toasted: cancel is live-and-active
+ * only, enforced by the runner at delivery, so "no turn to cancel"
+ * means the agent finished between your click and the wire. For the
+ * bulk caller iterating a family that race is routine, and the outcome
+ * is the one the click asked for — the agent is no longer mid-turn. */
+export function cancelSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/cancel`, 'Interrupt', {
+    quiet: opts?.quiet, alsoOk: 409,
+  })
 }
 
 export function dismissSession(sessionId: string): Promise<void> {
