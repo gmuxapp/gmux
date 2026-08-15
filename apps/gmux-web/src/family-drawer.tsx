@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
-  familyCounts, familyStateOf, isProcessSession, projectFamily,
+  familySegments, familyStateOf, isProcessSession, NO_FAMILY_ACTIVITY, projectFamily,
   type FamilyNode, type FamilyState,
 } from './family'
 import { splitLevel, visibleFamilyRows, type FamilyView } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import {
-  activityMap, cancelSession, killSession, markSessionRead,
+  activityMap, cancelSession, familyActivityById, killSession, markSessionRead,
   projects, sessions, sessionDotState, tabHref,
 } from './store'
 import { pushError } from './toasts'
@@ -211,58 +211,39 @@ async function runBulk(action: FamilyAction, targets: readonly Session[]): Promi
  * The root's own dot is on its pinned row directly beneath: it speaks
  * for itself, and counting it here would make this tally the one place
  * quoting a different number for the same dots. */
-function CountsLine({ tree, filter, onFilter }: {
-  tree: FamilyNode
+function CountsLine({ rootId, filter, onFilter }: {
+  rootId: string
   filter: FamilyState | null
   onFilter: (state: FamilyState | null) => void
 }) {
-  const counts = familyCounts(tree.children)
-  const segments: {
-    key: FamilyState | 'all'
-    dot?: string
-    process?: boolean
-    count?: number
-    label: string
-    cls?: string
-  }[] = [{ key: 'all', label: 'all' }]
-  // Then the same precedence the dot itself resolves by: error, then
-  // active, then waiting. Processes follow the agents they belong to.
-  if (counts.error > 0) {
-    segments.push({ key: 'error', dot: 'error', count: counts.error, label: 'error', cls: 'attention' })
-  }
-  if (counts.workingAgents > 0) {
-    segments.push({ key: 'active', dot: 'working', count: counts.workingAgents, label: 'active' })
-  }
-  if (counts.workingProcesses > 0) {
-    // `running`, not `active`: one turn model (ADR 0023), but a command
-    // runs where an agent works, and this codebase already says
-    // "running process" in the sidebar's own summary.
-    segments.push({ key: 'running', process: true, count: counts.workingProcesses, label: 'running' })
-  }
-  if (counts.unread > 0) {
-    segments.push({ key: 'waiting', dot: 'unread', count: counts.unread, label: 'waiting', cls: 'attention' })
-  }
+  const activity = familyActivityById.value.get(rootId) ?? NO_FAMILY_ACTIVITY
+  const tally = (state: FamilyState | null, active: boolean, children: preact.ComponentChildren) => (
+    <button
+      key={state ?? 'all'}
+      type="button"
+      // A tally you can press is a filter; pressing the one that's on
+      // turns it off, so the panel never traps you in a view.
+      class={`family-count${state === 'error' || state === 'waiting' ? ' family-count-attention' : ''}${active ? ' active' : ''}`}
+      aria-pressed={active}
+      onClick={() => onFilter(active ? null : state)}
+    >
+      {children}
+    </button>
+  )
   return (
     <div class="family-counts">
-      {segments.map(segment => {
-        const state = segment.key === 'all' ? null : segment.key
-        const active = filter === state
-        return (
-          <button
-            key={segment.key}
-            type="button"
-            // A tally you can press is a filter; pressing the one that's
-            // on turns it off, so the panel never traps you in a view.
-            class={`family-count${segment.cls ? ` family-count-${segment.cls}` : ''}${active ? ' active' : ''}`}
-            aria-pressed={active}
-            onClick={() => onFilter(active ? null : state)}
-          >
-            {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
-            {segment.process && <span class="family-row-proc working" aria-hidden="true">$</span>}
-            {segment.count !== undefined && `${segment.count} `}{segment.label}
-          </button>
-        )
-      })}
+      {tally(null, filter === null, 'all')}
+      {familySegments(activity).map(segment => tally(segment.state, filter === segment.state, (
+        <>
+          {segment.dot
+            ? <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
+            : <span class="family-row-proc working" aria-hidden="true">$</span>}
+          {/* The state's own name is the label: `running`, not a second
+            * `active` — one turn model (ADR 0023), but a command runs
+            * where an agent works. */}
+          {segment.count} {segment.state}
+        </>
+      )))}
     </div>
   )
 }
@@ -354,7 +335,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
-        <CountsLine tree={projection.tree} filter={filter} onFilter={setFilter} />
+        <CountsLine rootId={projection.root.id} filter={filter} onFilter={setFilter} />
         {action && targets.length > 0 && (
           <button
             type="button"

@@ -14,7 +14,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyCounts, hasFamily, projectFamily } from './family'
+import { familyAncestors, familyRoot, familySegments, hasFamily, NO_FAMILY_ACTIVITY } from './family'
 import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
@@ -32,7 +32,7 @@ import {
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
-  sessionStaleness, sessionDotState, activityMap, tabHref,
+  sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
 
@@ -225,28 +225,23 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   )
 }
 
-/** The family panel's trigger: a pill speaking the standard family
- * numbers — every descendant of the root, the root excluded — as dot +
- * count segments in dot precedence order. The sidebar's activity line
- * and the panel's tally quote the same rule, so the same dots never
- * wear different numbers, and nothing here depends on which session
- * you happen to be viewing: the count is a fact about the family, not
- * the viewport. The root is never orphaned by its exclusion — it
- * speaks for itself wherever it appears in person. A family with
- * nothing to report shows the tree icon instead; no count with it,
- * because the segments' numbers are news and a quiet family has none. */
+/** The family panel's trigger: a pill wearing the standard family
+ * segments — `familySegments` over `familyActivityById`, the same
+ * derivation and display order as the sidebar's line and the panel's
+ * tally, so the same dots never wear different numbers or a different
+ * order anywhere. Nothing here depends on which session you are
+ * viewing: the count is a fact about the family, not the viewport. A
+ * family with nothing to report shows the tree icon instead; no count
+ * with it, because the segments' numbers are news and a quiet family
+ * has none. */
 function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   session: Session
   open: boolean
   triggerRef: { current: HTMLButtonElement | null }
   onToggle: () => void
 }) {
-  const counts = familyCounts(projectFamily(session, sessions.value).tree.children)
-  const segments: { key: string; dot?: string; proc?: boolean; count: number }[] = []
-  if (counts.error > 0) segments.push({ key: 'error', dot: 'error', count: counts.error })
-  if (counts.workingAgents > 0) segments.push({ key: 'active', dot: 'working', count: counts.workingAgents })
-  if (counts.workingProcesses > 0) segments.push({ key: 'running', proc: true, count: counts.workingProcesses })
-  if (counts.unread > 0) segments.push({ key: 'waiting', dot: 'unread', count: counts.unread })
+  const rootId = familyRoot(session, sessions.value).id
+  const segments = familySegments(familyActivityById.value.get(rootId) ?? NO_FAMILY_ACTIVITY)
   return (
     <button
       ref={triggerRef}
@@ -260,9 +255,10 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
     >
       {segments.length > 0
         ? segments.map(segment => (
-          <span key={segment.key} class="family-trigger-seg">
-            {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
-            {segment.proc && <span class="family-trigger-proc" aria-hidden="true">$</span>}
+          <span key={segment.state} class="family-trigger-seg">
+            {segment.dot
+              ? <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
+              : <span class="family-trigger-proc" aria-hidden="true">$</span>}
             {segment.count}
           </span>
         ))

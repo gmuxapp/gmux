@@ -1344,7 +1344,7 @@ describe('sidebar family entry derivations', () => {
         proc('p2', 'grandkid', { status: { active: true }, unread: true }),
       ]
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 1, unread: 1, workingAgents: 2, workingProcesses: 2,
+        error: 1, waiting: 1, active: 2, running: 2,
       })
       // The root's own working state is never in its family's counts.
       expect(familyActivityById.value.get('kid')).toBeUndefined()
@@ -1356,12 +1356,12 @@ describe('sidebar family entry derivations', () => {
         agent('live', { parent_session_id: 'root', unread: true }),
         agent('dead', { parent_session_id: 'root', unread: true, alive: false, resumable: true }),
       ]
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       // The standard family numbers are a fact about the family, not
       // the viewport: the toggle hides rows, and the panel one click
       // away shows the hidden member regardless, so the count stands.
       setAliveOnly(true)
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       setAliveOnly(false)
     })
 
@@ -1384,7 +1384,7 @@ describe('sidebar family entry derivations', () => {
         agent('unseen', { parent_session_id: 'root', alive: false, unread: true }),
       ]
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 0, workingProcesses: 0,
+        error: 0, waiting: 1, active: 0, running: 0,
       })
     })
 
@@ -1396,17 +1396,17 @@ describe('sidebar family entry derivations', () => {
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
         agent('b', { slug: 'bb', parent_session_id: 'root', unread: true }),
       ]
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       // Viewing 'a' names it on the slot row; the count does not budge.
       // A summary may include what is separately visible — the panel's
       // tally counts the rows below it too — and subtracting the slot
       // made this number wobble with which member you last visited.
       urlPath.value = '/proj/pi/aa'
-      expect(familyActivityById.value.get('root')?.unread).toBe(2)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(2)
       _rawSessions.value = _rawSessions.value.map(s =>
         s.id === 'a' ? { ...s, unread: false, status: { active: true } } : s)
       expect(familyActivityById.value.get('root')).toEqual({
-        error: 0, unread: 1, workingAgents: 1, workingProcesses: 0,
+        error: 0, waiting: 1, active: 1, running: 0,
       })
     })
 
@@ -1418,7 +1418,7 @@ describe('sidebar family entry derivations', () => {
       urlPath.value = '/proj/pi/aa'
       rememberFamilyChild('a')
       expect(familySlotById.value.get('root')?.session.id).toBe('a')
-      expect(familyActivityById.value.get('root')?.unread).toBe(1)
+      expect(familyActivityById.value.get('root')?.waiting).toBe(1)
     })
 
     it('gives a promoted descendant its own counts, not its old family\u2019s', () => {
@@ -1428,7 +1428,7 @@ describe('sidebar family entry derivations', () => {
         proc('p', 'kid', { status: { active: true } }),
       ]
       expect(familyActivityById.value.has('root')).toBe(false)
-      expect(familyActivityById.value.get('kid')?.workingProcesses).toBe(1)
+      expect(familyActivityById.value.get('kid')?.running).toBe(1)
     })
   })
 

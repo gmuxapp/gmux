@@ -190,47 +190,84 @@ export function isProcessSession(session: Session): boolean {
   return session.semantic_agent !== true
 }
 
-/** What a family is *doing right now*, counted over the descendants of
- * one presentation root. Idle members are deliberately not counted: the
- * sidebar line exists to surface live work, not to take a census.
+/** The one state a member is counted under — and, since the panel's
+ * tally doubles as its filter, the one state it can be filtered by.
  *
- * Every counted member lands in exactly one bucket, under the same
- * precedence `sessionDotState` uses (error > working > unread), so the
- * line and the family drawer can never disagree. */
-export interface FamilyActivity {
-  /** Alive members whose last turn failed. */
-  readonly error: number
-  /** Members with output you haven't seen. */
-  readonly unread: number
-  /** Semantic-agent members mid-turn ("subagents"). */
-  readonly workingAgents: number
-  /** Non-agent members running a command ("processes"). */
-  readonly workingProcesses: number
+ * The tally and the filter must be the same rule or the panel lies:
+ * pressing `3 error` and getting four rows is worse than not being able
+ * to press it. So both derive from here, and the precedence is the
+ * dot's own: error, then a running turn, then waiting on you. */
+export type FamilyState = 'error' | 'active' | 'running' | 'waiting'
+
+export function familyStateOf(session: Session): FamilyState | null {
+  if (session.alive && session.status?.error) return 'error'
+  if (session.alive && session.status?.active) return isProcessSession(session) ? 'running' : 'active'
+  if (session.unread) return 'waiting'
+  return null
 }
+
+/** The standard family numbers: what the descendants of one
+ * presentation root are doing right now, one bucket per canonical
+ * state, each member counted once by `familyStateOf`. Every surface
+ * that summarizes a family — the sidebar line, the header pill, the
+ * panel tally — quotes this shape and nothing else, so the same dots
+ * can never wear different numbers. Idle members are deliberately not
+ * counted: the summaries exist to surface live work, not take a
+ * census. */
+export type FamilyActivity = Readonly<Record<FamilyState, number>>
 
 export const NO_FAMILY_ACTIVITY: FamilyActivity = {
-  error: 0, unread: 0, workingAgents: 0, workingProcesses: 0,
+  error: 0, waiting: 0, active: 0, running: 0,
 }
 
-/** True when a family has something worth a second sidebar line. */
+/** True when a family has something worth a summary line. */
 export function hasFamilyActivity(activity: FamilyActivity): boolean {
-  return activity.error > 0 || activity.unread > 0
-    || activity.workingAgents > 0 || activity.workingProcesses > 0
+  return activity.error > 0 || activity.waiting > 0
+    || activity.active > 0 || activity.running > 0
 }
 
-/** Spoken form of the activity line, which is otherwise pure glyphs.
- * The standard family numbers: everyone beneath the root, in the turn
- * model's words — waiting on you, active — matching the panel tally's
- * vocabulary rather than the wire's field names. */
+/** One segment per non-zero state, in the one display order every
+ * surface uses: attention first (error, then waiting — the members
+ * that need you), ambient work after (active agents, then running
+ * commands). Narrow surfaces clip from the right, so what survives a
+ * clip is what matters; bucketing precedence is `familyStateOf`'s
+ * concern, display order is this one's.
+ *
+ * `dot` is the CSS token the rows themselves wear (`unread` is how the
+ * app spells "waiting on you"); `running` wears the `$` glyph instead
+ * of a dot, exactly like its rows. This table is the vocabulary —
+ * surfaces decide typography, never what a state looks like. */
+export interface FamilySegment {
+  readonly state: FamilyState
+  /** Dot CSS token, or null for the `$`-glyphed running state. */
+  readonly dot: 'error' | 'unread' | 'working' | null
+  readonly count: number
+}
+
+export function familySegments(activity: FamilyActivity): FamilySegment[] {
+  const order = [
+    { state: 'error', dot: 'error' },
+    { state: 'waiting', dot: 'unread' },
+    { state: 'active', dot: 'working' },
+    { state: 'running', dot: null },
+  ] as const
+  return order
+    .filter(({ state }) => activity[state] > 0)
+    .map(({ state, dot }) => ({ state, dot, count: activity[state] }))
+}
+
+/** Spoken form of the activity segments, which are otherwise pure
+ * glyphs — the turn model's words (waiting on you, active), not the
+ * wire's field names. */
 export function familyActivityLabel(activity: FamilyActivity): string {
   const parts: string[] = []
   // 'process' takes -es; everything else here takes -s.
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? '' : word.endsWith('s') ? 'es' : 's'}`
   if (activity.error > 0) parts.push(`${plural(activity.error, 'member')} with an error`)
-  if (activity.unread > 0) parts.push(`${plural(activity.unread, 'member')} waiting on you`)
-  if (activity.workingAgents > 0) parts.push(plural(activity.workingAgents, 'active subagent'))
-  if (activity.workingProcesses > 0) parts.push(plural(activity.workingProcesses, 'running process'))
+  if (activity.waiting > 0) parts.push(`${plural(activity.waiting, 'member')} waiting on you`)
+  if (activity.active > 0) parts.push(plural(activity.active, 'active subagent'))
+  if (activity.running > 0) parts.push(plural(activity.running, 'running process'))
   return `In this family: ${parts.join(', ')}`
 }
 
@@ -299,53 +336,5 @@ export function projectFamily(selected: Session, source: FamilySource): FamilyDr
   }
 }
 
-/** Status totals for the panel's counts line, over every family member
- * the panel shows — which is now the whole family, root included. Each
- * member is tallied once under its dot-precedence state so the line and
- * the row dots can never disagree. */
-export interface FamilyCounts {
-  error: number
-  /** Semantic-agent members mid-turn. */
-  workingAgents: number
-  /** Non-agent members running a command. Split from the agents for the
-   * same reason the rows carry different glyphs: three subagents
-   * thinking and three shells running are different news, and a family
-   * is routinely mostly shells. */
-  workingProcesses: number
-  unread: number
-  total: number
-}
 
-/** The one state a member is counted under — and, since the panel's
- * tally doubles as its filter, the one state it can be filtered by.
- *
- * The tally and the filter must be the same rule or the panel lies:
- * pressing `3 error` and getting four rows is worse than not being able
- * to press it. So both derive from here, and the precedence is the
- * dot's own: error, then a running turn, then waiting on you. */
-export type FamilyState = 'error' | 'active' | 'running' | 'waiting'
 
-export function familyStateOf(session: Session): FamilyState | null {
-  if (session.alive && session.status?.error) return 'error'
-  if (session.alive && session.status?.active) return isProcessSession(session) ? 'running' : 'active'
-  if (session.unread) return 'waiting'
-  return null
-}
-
-export function familyCounts(trees: readonly FamilyNode[]): FamilyCounts {
-  const counts: FamilyCounts = {
-    error: 0, workingAgents: 0, workingProcesses: 0, unread: 0, total: 0,
-  }
-  const visit = (node: FamilyNode) => {
-    counts.total++
-    switch (familyStateOf(node.session)) {
-      case 'error': counts.error++; break
-      case 'active': counts.workingAgents++; break
-      case 'running': counts.workingProcesses++; break
-      case 'waiting': counts.unread++; break
-    }
-    for (const child of node.children) visit(child)
-  }
-  for (const tree of trees) visit(tree)
-  return counts
-}

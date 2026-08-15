@@ -1082,21 +1082,15 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
  * map: no line, nothing to say. */
 export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
   const index = familyIndex(sessions.value)
-  const map = new Map<string, { error: number; unread: number; workingAgents: number; workingProcesses: number }>()
+  const map = new Map<string, { error: number; waiting: number; active: number; running: number }>()
   for (const s of sessions.value) {
     if (!index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (!rootId || rootId === s.id) continue
-    let bucket: keyof FamilyActivity
-    switch (familyStateOf(s)) {
-      case 'error': bucket = 'error'; break
-      case 'active': bucket = 'workingAgents'; break
-      case 'running': bucket = 'workingProcesses'; break
-      case 'waiting': bucket = 'unread'; break
-      default: continue
-    }
-    const entry = map.get(rootId) ?? { error: 0, unread: 0, workingAgents: 0, workingProcesses: 0 }
-    entry[bucket]++
+    const state = familyStateOf(s)
+    if (!state) continue
+    const entry = map.get(rootId) ?? { error: 0, waiting: 0, active: 0, running: 0 }
+    entry[state]++
     map.set(rootId, entry)
   }
   return map

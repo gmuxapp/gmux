@@ -29,7 +29,7 @@ import {
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import {
-  childTrailTitle, familyActivityLabel, familyMemberGlyph, hasFamilyActivity,
+  childTrailTitle, familyActivityLabel, familyMemberGlyph, familySegments, hasFamilyActivity,
   NO_FAMILY_ACTIVITY, type FamilyActivity,
 } from './family'
 import type { Session, Folder } from './types'
@@ -246,30 +246,14 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
       <span class="family-glyph" aria-hidden="true"><FamilyIcon class="family-activity-icon" /></span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
-        {activity.error > 0 && (
-          <span class="family-activity-seg">
-            <span class="family-glyph session-dot-indicator error" />
-            {activity.error}
+        {familySegments(activity).map(segment => (
+          <span key={segment.state} class="family-activity-seg">
+            {segment.dot
+              ? <span class={`family-glyph session-dot-indicator ${segment.dot}`} />
+              : <span class="family-glyph family-child-proc working">$</span>}
+            {segment.count}
           </span>
-        )}
-        {activity.unread > 0 && (
-          <span class="family-activity-seg">
-            <span class="family-glyph session-dot-indicator unread" />
-            {activity.unread}
-          </span>
-        )}
-        {activity.workingAgents > 0 && (
-          <span class="family-activity-seg">
-            <span class="family-glyph session-dot-indicator working" />
-            {activity.workingAgents}
-          </span>
-        )}
-        {activity.workingProcesses > 0 && (
-          <span class="family-activity-seg">
-            <span class="family-glyph family-child-proc working">$</span>
-            {activity.workingProcesses}
-          </span>
-        )}
+        ))}
       </span>
       <span class="sr-only">{label}</span>
     </div>
