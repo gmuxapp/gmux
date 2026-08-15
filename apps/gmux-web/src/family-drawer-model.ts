@@ -163,15 +163,31 @@ export function visibleFamilyRows(
     for (const node of flat) universe.add(node.session.id)
   }
 
+  /** How many of a node's children could be drawn at all. Under a
+   * filter this is not `children.length`: a level whose excluded
+   * children are all hidden renders no summary (see `splitLevel`), so
+   * charging a fold line for them would spend budget on a row that
+   * never appears and push real matches out of the panel. Computed
+   * once — recomputing it per candidate made the free-leaf pass
+   * quadratic in a wide level. */
+  const eligibleKids = new Map<string, number>()
+  for (const node of flat) {
+    eligibleKids.set(node.session.id,
+      node.children.reduce((n, child) => n + (universe.has(child.session.id) ? 1 : 0), 0))
+  }
+
   const visible = new Set<string>()
   const shownKids = new Map<string, number>()
-  /** Agents already showing a command, so the rest of theirs stay in the
-   * fold rather than pushing other branches off the panel. */
-  const commandShown = new Set<string>()
+  /** Commands currently drawn per agent, so the rest of an agent's stay
+   * in the fold rather than pushing other branches off the panel. A
+   * count, not a set: a speculative admission that the budget rejects
+   * must leave no trace, or an agent with no visible command at all
+   * would go on suppressing its own siblings. */
+  const shownProcs = new Map<string, number>()
   /** Lines drawn so far: visible rows plus one per folded level. */
   let lines = 0
   const folds = (id: string) =>
-    (nodeById.get(id)?.children.length ?? 0) > (shownKids.get(id) ?? 0) ? 1 : 0
+    (eligibleKids.get(id) ?? 0) > (shownKids.get(id) ?? 0) ? 1 : 0
 
   /** Draw one row whose parent is already drawn, keeping the line count
    * honest: it may retire its parent's summary and may raise one of its
@@ -185,7 +201,7 @@ export function visibleFamilyRows(
     }
     visible.add(id)
     if (isProcessSession(nodeById.get(id)?.session ?? tree.session) && parent !== undefined) {
-      commandShown.add(parent)
+      shownProcs.set(parent, (shownProcs.get(parent) ?? 0) + 1)
     }
     lines += 1 + folds(id)
   }
@@ -195,6 +211,9 @@ export function visibleFamilyRows(
     lines -= 1 + folds(id)
     const parent = parentOf.get(id)
     if (parent === undefined) return
+    if (isProcessSession(nodeById.get(id)?.session ?? tree.session)) {
+      shownProcs.set(parent, (shownProcs.get(parent) ?? 0) - 1)
+    }
     const before = folds(parent)
     shownKids.set(parent, (shownKids.get(parent) ?? 0) - 1)
     lines += folds(parent) - before
@@ -231,7 +250,7 @@ export function visibleFamilyRows(
       // of a family that is 248 processes to 8 agents.
       if (triage && isProcessSession(node.session)) {
         const parent = parentOf.get(id)
-        if (parent !== undefined && commandShown.has(parent)) continue
+        if (parent !== undefined && (shownProcs.get(parent) ?? 0) > 0) continue
         if ((subtreeNewest.get(id) ?? 0) < processStaleBefore) continue
       }
       // A row costs its own line plus every ancestor still missing: an
@@ -276,8 +295,7 @@ export function visibleFamilyRows(
       if (visible.has(id) || node.children.length > 0 || !universe.has(id)) continue
       const parent = parentOf.get(id)
       if (parent === undefined || !visible.has(parent)) continue
-      const eligibleKids = nodeById.get(parent)?.children.filter(c => universe.has(c.session.id)).length ?? 0
-      if ((shownKids.get(parent) ?? 0) + 1 !== eligibleKids) continue
+      if ((shownKids.get(parent) ?? 0) + 1 !== (eligibleKids.get(parent) ?? 0)) continue
       admit(id)
       changed = true
     }

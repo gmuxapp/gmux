@@ -457,3 +457,35 @@ describe('filtering by a state the tally counts', () => {
     expect(rows).toContain('noise-0')
   })
 })
+
+describe('the budget charges only for folds that get drawn', () => {
+  const at = (minutes: number, id: string, parent: string | undefined, extra: Partial<Session> = {}) =>
+    makeSession({
+      id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true,
+      created_at: '2026-08-04T00:00:00Z',
+      last_output_at: new Date(Date.parse('2026-08-04T20:00:00Z') - minutes * 60_000).toISOString(),
+      ...extra,
+    })
+
+  it("doesn't spend budget on summaries a filter will never render", () => {
+    // Three branches, each hiding 50 idle children behind two errors.
+    // Under the filter those children are not on offer, so `splitLevel`
+    // renders no summary for them — charging a fold line per branch
+    // anyway spends budget on rows that never appear, and the branches
+    // that come last pay for it. Branch-consecutive recency matters:
+    // the line a finished branch gives back is what admits the next.
+    const start: Record<string, number> = { a: 1, b: 1.5, c: 2 }
+    const snapshot = [at(0, 'root', undefined)]
+    for (const branch of ['a', 'b', 'c']) {
+      snapshot.push(at(start[branch], branch, 'root'))
+      snapshot.push(at(start[branch] + 1.5, `${branch}1`, branch, { status: { active: true, error: true } }))
+      snapshot.push(at(start[branch] + 1.6, `${branch}2`, branch, { status: { active: true, error: true } }))
+      for (let i = 0; i < 50; i++) snapshot.push(at(20 + i, `${branch}-idle-${i}`, branch))
+    }
+    const tree = projectFamily(snapshot[0], snapshot).tree
+    // Budget 9 buys nine lines of errors; charging for the three
+    // phantom summaries buys seven and folds branch b away entirely.
+    expect(renderedLines(tree, visibleFamilyRows(tree, { filter: 'error', budget: 9 })))
+      .toEqual(['root', 'a', 'a1', 'a2', 'b', 'b1', 'b2', 'c', 'c:+2 more'])
+  })
+})
