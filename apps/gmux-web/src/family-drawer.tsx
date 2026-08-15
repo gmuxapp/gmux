@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
-  familySegments, familyStateOf, isProcessSession, NO_FAMILY_ACTIVITY, projectFamily,
+  familySegments, familyStateOf, isProcessSession, projectFamily,
   type FamilyNode, type FamilyState,
 } from './family'
 import { splitLevel, visibleFamilyRows, type FamilyView } from './family-drawer-model'
@@ -45,8 +45,12 @@ function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
         href={hrefFor(session)}
         aria-current={session.id === selectedId ? 'page' : undefined}
       >
+        {/* A process keeps its `$` shape and carries state as colour —
+          * the glyph column is the only place this row's state appears,
+          * so a `$` that can't say `unread` would hide a member the
+          * tally counts and the `waiting` filter shows. */}
         {process
-          ? <span class={`family-row-proc${session.alive && session.status?.active ? ' working' : ''}`} aria-hidden="true">$</span>
+          ? <span class={`family-proc ${dot}`} aria-hidden="true">$</span>
           : <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
         <span class="family-row-title">{session.title}</span>
         {/* Levels are ordered by this timestamp, so it has to be on
@@ -106,14 +110,14 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, view, now, on
             type="button"
             class="family-more"
             style={{ paddingLeft: `${12 + depth * 18}px` }}
-            aria-expanded={summary.expanded}
-            onClick={() => onToggle(summary.key)}
+            aria-expanded={expanded.has(parentId)}
+            onClick={() => onToggle(parentId)}
           >
             {/* The summary sits below the rows it controls, so collapsing
               * takes them back upwards: `▴`, not the `▾` that would point
               * at the empty space where nothing is about to happen. */}
-            <span class="family-more-chevron" aria-hidden="true">{summary.expanded ? '▴' : '▸'}</span>
-            {summary.label}
+            <span class="family-more-chevron" aria-hidden="true">{expanded.has(parentId) ? '▴' : '▸'}</span>
+            {summary}
           </button>
         </li>
       )}
@@ -121,8 +125,14 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, view, now, on
   )
 }
 
-/** Every member the given filter matches — the same `familyStateOf`
- * rule the tally counts by, over the same population it counts: the
+/** Every member the given filter matches — the twin of
+ * `familyActivityById`, which counts what this collects. They agree
+ * because both start from the same family membership with the root
+ * excluded and neither filters further; a filter added to one alone
+ * would put a number on a button that touches a different set.
+ *
+ * The same `familyStateOf` rule the tally counts by, over the same
+ * population it counts: the
  * root's descendants, never the root. The tally, the verb's label, and
  * the verb's targets must quote one number, and the root is not the
  * family's to act on — you act on the root by visiting it, which is
@@ -156,15 +166,16 @@ function membersInState(tree: FamilyNode, state: FamilyState): Session[] {
  * everything. */
 type FamilyAction = {
   label: (n: number) => string
+  /** Returns false for a member that failed, so `runBulk` can report
+   * once at the end. `markSessionRead` returns nothing: it is
+   * optimistic and fire-and-forget, so it has no failure to count. */
   run: (id: string) => unknown
-  /** Verbs that can fail per member and report once at the end. */
-  aggregate?: boolean
 }
 const FAMILY_ACTIONS: Partial<Record<FamilyState, FamilyAction>> = {
   waiting: { label: () => 'Mark all read', run: markSessionRead },
   error: { label: () => 'Mark all read', run: markSessionRead },
-  running: { label: n => `Stop all ${n}`, run: id => killSession(id, { quiet: true }), aggregate: true },
-  active: { label: n => `Interrupt all ${n}`, run: id => cancelSession(id, { quiet: true }), aggregate: true },
+  running: { label: n => `Stop all ${n}`, run: id => killSession(id, { quiet: true }) },
+  active: { label: n => `Interrupt all ${n}`, run: id => cancelSession(id, { quiet: true }) },
 }
 
 /** Run a bulk verb over a family's worth of members.
@@ -184,9 +195,7 @@ async function runBulk(action: FamilyAction, targets: readonly Session[]): Promi
     }
   }
   await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker))
-  if (action.aggregate && failed > 0) {
-    pushError(`${failed} of ${targets.length} did not respond`)
-  }
+  if (failed > 0) pushError(`${failed} of ${targets.length} did not respond`)
 }
 
 /** The header's tally, in the turn model's own words (ADR 0023: a
@@ -216,7 +225,7 @@ function CountsLine({ rootId, filter, onFilter }: {
   filter: FamilyState | null
   onFilter: (state: FamilyState | null) => void
 }) {
-  const activity = familyActivityById.value.get(rootId) ?? NO_FAMILY_ACTIVITY
+  const activity = familyActivityById.value.get(rootId)
   const tally = (state: FamilyState | null, active: boolean, children: preact.ComponentChildren) => (
     <button
       key={state ?? 'all'}
@@ -237,7 +246,7 @@ function CountsLine({ rootId, filter, onFilter }: {
         <>
           {segment.dot
             ? <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
-            : <span class="family-row-proc working" aria-hidden="true">$</span>}
+            : <span class="family-proc working" aria-hidden="true">$</span>}
           {/* The state's own name is the label: `running`, not a second
             * `active` — one turn model (ADR 0023), but a command runs
             * where an agent works. */}
@@ -354,10 +363,15 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
         )}
       </div>
       <div class="family-drawer-scroll">
+        {/* The root is a row, not a level: wrapping it in `LevelRows`
+          * keyed the outer level by the root's own id — the same key
+          * its children's level uses — so expanding the children put a
+          * second, orphan `show fewer` under the whole tree. It could
+          * never fold anyway; the root is admitted before anything
+          * competes for the budget. */}
         <ul class="family-tree">
-          <LevelRows
-            nodes={[projection.tree]}
-            parentId={projection.root.id}
+          <FamilyRow
+            node={projection.tree}
             selectedId={selected.id}
             depth={0}
             expanded={expanded}

@@ -14,7 +14,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyRoot, familySegments, hasFamily, NO_FAMILY_ACTIVITY } from './family'
+import { familyAncestors, familyRoot, familySegments, hasFamily } from './family'
 import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
@@ -241,7 +241,7 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
   onToggle: () => void
 }) {
   const rootId = familyRoot(session, sessions.value).id
-  const segments = familySegments(familyActivityById.value.get(rootId) ?? NO_FAMILY_ACTIVITY)
+  const segments = familySegments(familyActivityById.value.get(rootId))
   return (
     <button
       ref={triggerRef}

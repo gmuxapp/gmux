@@ -1162,16 +1162,31 @@ body {
   gap: 5px;
   flex: 0 0 auto;
 }
-.family-child-proc {
+/* The `$`: a process where an agent shows a status dot. Shape (not
+   just colour) distinguishes them, so the cue survives tiny sizes and
+   colour blindness — and it carries the same state vocabulary the dots
+   do, in the glyph's own colour, wherever it appears.
+
+   Vocabulary only: no box. The sidebar pairs it with `.family-glyph`,
+   which owns the fixed column there, and repeating those properties
+   here would silently outrank that class by source order — the exact
+   drift this merge existed to end. */
+.family-proc {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1;
   color: var(--text-muted);
 }
-.family-child-proc.working { color: var(--accent); }
-/* The rest of the dot vocabulary, in the `$`'s colour. */
-.family-child-proc.unread { color: var(--unread); }
-.family-child-proc.error { color: var(--status-error); }
+/* The panel has no glyph-column class of its own, so it gives the `$`
+   the same box its status dots occupy. */
+.family-row .family-proc {
+  flex: 0 0 auto;
+  width: 7px; /* match .session-dot-indicator for title alignment */
+  text-align: center;
+}
+.family-proc.working { color: var(--accent); }
+.family-proc.unread { color: var(--unread); }
+.family-proc.error { color: var(--status-error); }
 
 /* States that belong to the root row are the whole entry's states —
    it's one entry, so it dims, drags and takes a drop line as a unit. */
@@ -2464,18 +2479,6 @@ body {
 .family-row { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 5px; color: var(--text-secondary); text-decoration: none; }
 .family-row:hover { background: var(--bg-hover); color: var(--text); }
 .family-row.selected { background: var(--bg-selected); color: var(--text); }
-/* Processes: a mono $ glyph where agents show a status dot, muted title.
- * Shape (not just color) distinguishes them from agents, so the cue
- * survives tiny sizes and color blindness. */
-.family-row-proc {
-  flex: 0 0 auto;
-  width: 7px; /* match .session-dot-indicator for title alignment */
-  font-family: 'Fira Code', monospace;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--text-muted);
-}
-.family-row-proc.working { color: var(--accent); }
 .family-row.process .family-row-title { color: var(--text-muted); }
 .family-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Age: the key every level is sorted by, so it stays on screen. Tabular

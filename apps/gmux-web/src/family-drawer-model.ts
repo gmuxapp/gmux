@@ -55,7 +55,11 @@ export const FAMILY_PROCESS_STALE_AFTER_MS = 60 * 60 * 1000
 export interface LevelSplit {
   shown: readonly FamilyNode[]
   /** Present iff the level has rows the budget folded away. */
-  summary: { key: string; expanded: boolean; label: string } | null
+  /** The fold control's text, or null when the level has nothing
+   * folded. Whether it's expanded and which level it toggles are the
+   * caller's own `expanded` and `parentId` — restating them here only
+   * created two ways to know one thing. */
+  summary: string | null
 }
 
 export interface FamilyView {
@@ -200,7 +204,9 @@ export function visibleFamilyRows(
       lines -= before - folds(parent)
     }
     visible.add(id)
-    if (isProcessSession(nodeById.get(id)?.session ?? tree.session) && parent !== undefined) {
+    // Every id here came from the walk, so the node is present: no
+    // fallback, which would have quietly typed a process as an agent.
+    if (parent !== undefined && isProcessSession(nodeById.get(id)!.session)) {
       shownProcs.set(parent, (shownProcs.get(parent) ?? 0) + 1)
     }
     lines += 1 + folds(id)
@@ -211,7 +217,7 @@ export function visibleFamilyRows(
     lines -= 1 + folds(id)
     const parent = parentOf.get(id)
     if (parent === undefined) return
-    if (isProcessSession(nodeById.get(id)?.session ?? tree.session)) {
+    if (isProcessSession(nodeById.get(id)!.session)) {
       shownProcs.set(parent, (shownProcs.get(parent) ?? 0) - 1)
     }
     const before = folds(parent)
@@ -292,7 +298,10 @@ export function visibleFamilyRows(
     changed = false
     for (const node of byRecency) {
       const id = node.session.id
-      if (visible.has(id) || node.children.length > 0 || !universe.has(id)) continue
+      // "Leaf" means leaf *of the view*: under a filter, a node whose
+      // children were all excluded raises no summary of its own, so it
+      // is exactly as free as a childless one.
+      if (visible.has(id) || (eligibleKids.get(id) ?? 0) > 0 || !universe.has(id)) continue
       const parent = parentOf.get(id)
       if (parent === undefined || !visible.has(parent)) continue
       if ((shownKids.get(parent) ?? 0) + 1 !== (eligibleKids.get(parent) ?? 0)) continue
@@ -320,13 +329,20 @@ export function splitLevel(
   // counting them would advertise an expansion that contradicts what
   // was asked for.
   const eligible = nodes.filter(node => view.universe.has(node.session.id))
-  if (expanded.has(parentId)) {
-    return { shown: eligible, summary: { key: parentId, expanded: true, label: 'show fewer' } }
-  }
   const shown = eligible.filter(node => view.visible.has(node.session.id))
-  if (shown.length === eligible.length) return { shown, summary: null }
-  return {
-    shown,
-    summary: { key: parentId, expanded: false, label: `+${eligible.length - shown.length} more` },
+  const folded = eligible.length - shown.length
+  // Expanded levels show everything eligible — but only offer `show
+  // fewer` if collapsing would actually hide something. A filter
+  // applied after an expansion can shrink a level to nothing folded,
+  // and a control that visibly does nothing is worse than no control.
+  //
+  // Safe only because `visibleFamilyRows` knows nothing about
+  // `expanded`: `folded` is therefore invariant under expanding, so
+  // this can never strand a reader inside an expanded level with no
+  // way back. Teach the budget about expansion and this becomes a
+  // trap.
+  if (expanded.has(parentId)) {
+    return { shown: eligible, summary: folded > 0 ? 'show fewer' : null }
   }
+  return { shown, summary: folded > 0 ? `+${folded} more` : null }
 }

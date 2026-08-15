@@ -29,8 +29,8 @@ import {
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import {
-  childTrailTitle, familyActivityLabel, familyMemberGlyph, familySegments, hasFamilyActivity,
-  NO_FAMILY_ACTIVITY, type FamilyActivity,
+  childTrailTitle, familyActivityLabel, familyMemberGlyph, familySegments,
+  type FamilyActivity,
 } from './family'
 import type { Session, Folder } from './types'
 
@@ -164,9 +164,10 @@ function SessionItem({
   onDragOver?: () => void
   onDragEnd?: () => void
 }) {
-  // Selection muting ("nothing is unread if you're already looking at it")
-  // happens per family member inside `familyDotById`, so a sibling child's
-  // attention still surfaces here while you view another member.
+  // The row's own status, muted for selection ("nothing is unread if
+  // you're already looking at it") by `ownDotState` — a root row shows
+  // the root's state, never a roll-up of its children's, so a working
+  // child cannot masquerade as a working root.
   const dotState = resuming ? 'working' : rawDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
@@ -235,7 +236,12 @@ function SessionItem({
  *  running process — each segment dropped at zero. It's a count, not a
  *  destination, so it has no target of its own; like the rest of the
  *  entry's slack it belongs to the group, which selects the root. */
-function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
+function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined }) {
+  // `familyActivityById` holds an entry only when something is non-zero,
+  // so absence is the whole of "nothing to report" — one spelling of
+  // the question, here, instead of one per call site.
+  if (!activity) return null
+  const segments = familySegments(activity)
   const label = familyActivityLabel(activity)
   return (
     <div class="family-sub family-activity" title={label}>
@@ -246,11 +252,11 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
       <span class="family-glyph" aria-hidden="true"><FamilyIcon class="family-activity-icon" /></span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
       <span class="family-activity-glyphs" aria-hidden="true">
-        {familySegments(activity).map(segment => (
+        {segments.map(segment => (
           <span key={segment.state} class="family-activity-seg">
             {segment.dot
               ? <span class={`family-glyph session-dot-indicator ${segment.dot}`} />
-              : <span class="family-glyph family-child-proc working">$</span>}
+              : <span class="family-glyph family-proc working">$</span>}
             {segment.count}
           </span>
         ))}
@@ -262,7 +268,7 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
 
 /** The sidebar's family entry: a root row, the one family member kept
  *  beneath it — the member you're viewing, or the last one you did —
- *  and a line counting everyone else.
+ *  and a line counting the family beneath the root.
  *
  *  Selection and hit areas nest, the way the sessions do:
  *   - the group is the root's area. Hovering anywhere in it highlights
@@ -275,10 +281,13 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity }) {
  *     *which row*, so selecting a member keeps the group lit and moves
  *     the bar down to it.
  *
- *  Two more rules hold the content together: the root row's dot is the
- *  root session's own status, so a working child never masquerades as a
- *  working root; and each member is represented exactly once, named by
- *  a row or counted on the line, never both.
+ *  One more rule holds the content together: the root row's dot is the
+ *  root session's own status, so a working child never masquerades as
+ *  a working root. The line, by contrast, is a summary and may well
+ *  include the member named above it — the standard family numbers are
+ *  a fact about the family, the same on every surface, and subtracting
+ *  whatever a surface happens to name made them wobble with unrelated
+ *  state (see `familyActivityById`).
  */
 function FamilyEntry({
   selected,
@@ -299,7 +308,7 @@ function FamilyEntry({
   slotHref?: string
   /** Root › … › member trail, for the member row's hover title. */
   slotTrail?: string
-  activity: FamilyActivity
+  activity: FamilyActivity | undefined
   onClick?: () => void
   /** Reorder drop target for the whole group, not just the root row. */
   onDragOver?: () => void
@@ -309,9 +318,10 @@ function FamilyEntry({
 }) {
   const member = slot?.session
   // One decision, made in `family.ts` so it can be tested: which glyph
-  // this member gets, and what state it carries. The row is the only
-  // place a named member's state can appear — the activity line
-  // subtracts it — so the glyph has to be able to say `unread`.
+  // this member gets, and what state it carries. This row is the only
+  // place this member is named, so its glyph has to be able to say
+  // `unread` — the line below counts it among many, but a count is not
+  // a way to see which member needs you.
   const glyph = member
     ? familyMemberGlyph(member, ownDotState(member, activityMap.value, selectedId.value))
     : null
@@ -358,14 +368,14 @@ function FamilyEntry({
             * it keeps the title from sliding sideways when state
             * arrives or clears. */}
           {glyph?.kind === 'process'
-            ? <span class={`family-glyph family-child-proc ${glyph.state}`} aria-hidden="true">$</span>
+            ? <span class={`family-glyph family-proc ${glyph.state}`} aria-hidden="true">$</span>
             : glyph?.kind === 'dot'
             ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
             : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}
           <span class="family-slot-title">{member.title}</span>
         </a>
       )}
-      {hasFamilyActivity(activity) && <FamilyActivityLine activity={activity} />}
+      <FamilyActivityLine activity={activity} />
     </div>
   )
 }
@@ -509,7 +519,7 @@ function FolderGroup({
       <div class="folder-sessions">
         {shown.map((s, i) => {
           const href = tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))
-          const activity = activityById.get(s.id) ?? NO_FAMILY_ACTIVITY
+          const activity = activityById.get(s.id)
           const slot = slots.get(s.id)
           const item = (
             <SessionItem
@@ -536,7 +546,7 @@ function FolderGroup({
             />
           )
           // No member to name and nothing else to count: one plain row.
-          if (!slot && !hasFamilyActivity(activity)) return item
+          if (!slot && !activity) return item
           return (
             <FamilyEntry
               key={s.id}

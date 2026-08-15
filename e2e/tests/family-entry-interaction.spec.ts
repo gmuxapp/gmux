@@ -162,7 +162,7 @@ test.describe('the family line and the panel tally', () => {
     const segments = await counts.locator('.family-count').evaluateAll(nodes => nodes.map(n => ({
       text: n.textContent?.replace(/\s+/g, ' ').trim(),
       dot: n.querySelector('.session-dot-indicator')?.className ?? null,
-      proc: n.querySelector('.family-row-proc')?.textContent ?? null,
+      proc: n.querySelector('.family-proc')?.textContent ?? null,
     })))
     for (const segment of segments) {
       if (segment.text === 'all') {
@@ -350,5 +350,23 @@ test.describe('the family line and the panel tally', () => {
     expect(segCount('unread')).toBe(tallyCount('waiting'))
     expect(segCount('$')).toBe(tallyCount('running'))
     expect(tallyCount('active')).toBeGreaterThan(0)
+  })
+
+  test('a process row wears the state the tally counted it under', async ({ page }) => {
+    // famBroot is a process-only family: one running command, one that
+    // finished with output you have not seen. The `$` is the only place
+    // that row's state can appear, so a stateless glyph would leave the
+    // member the tally counts — and the `waiting` filter shows —
+    // unmarked on screen.
+    await openMockSidebar(page, '/my-project/claude/~famBroot')
+    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    const glyphs = await page.locator('.family-row').evaluateAll(rows => rows.map(row => ({
+      title: row.querySelector('.family-row-title')?.textContent ?? '',
+      glyph: row.querySelector('.family-proc')?.className ?? null,
+    })))
+    const gofmt = glyphs.find(g => g.title.startsWith('gofmt'))
+    expect(gofmt?.glyph, 'the waiting process is marked as waiting').toContain('unread')
+    const build = glyphs.find(g => g.title.startsWith('vite build'))
+    expect(build?.glyph, 'and the running one as running').toContain('working')
   })
 })

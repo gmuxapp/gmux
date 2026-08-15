@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  descendantTree, familyAncestors, familyIndex, familySegments, familyStateOf,
-  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, hasFamilyActivity,
-  familyMemberGlyph, isFamilyChild, NO_FAMILY_ACTIVITY, projectFamily,
+  descendantTree, familyAncestors, familyIndex, familySegments,
+  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
+  familyMemberGlyph, isFamilyChild, projectFamily,
 } from './family'
 import { makeSession } from './test-helpers'
 
@@ -155,30 +155,6 @@ describe('flat panel projection', () => {
       .toEqual(['newest-dead', 'mid-idle', 'created-only', 'old-working'])
   })
 
-  it('tallies the counts line by dot precedence over all panel members', () => {
-    const root = agent('root')
-    const sessions = [
-      root,
-      member('working', { status: { active: true } }),
-      member('working-unread', { status: { active: true }, unread: true }),
-      member('errored', { status: { active: true, error: true } }),
-      member('dead-unread', { alive: false, unread: true }),
-      member('grandchild-unread', { parent_session_id: 'working', unread: true }),
-      member('proc-working', { semantic_agent: undefined, adapter: 'shell', status: { active: true } }),
-      member('dead-viewed', { alive: false }),
-    ]
-    // Each member counted once under its highest-precedence state: the
-    // working-unread agent is active (dot precedence), the dead unread
-    // one is waiting (not alive-gated), and processes run rather than
-    // work. The root and the quiet members land nowhere: idle is not a
-    // bucket, and the root is not a descendant.
-    const counted = sessions.filter(s => s.id !== 'root').map(s => familyStateOf(s))
-    expect(counted.filter(state => state === 'error')).toHaveLength(1)
-    expect(counted.filter(state => state === 'active')).toHaveLength(2)
-    expect(counted.filter(state => state === 'running')).toHaveLength(1)
-    expect(counted.filter(state => state === 'waiting')).toHaveLength(2)
-    expect(counted.filter(state => state === null)).toHaveLength(1)
-  })
 })
 
 describe('member row glyph', () => {
@@ -218,26 +194,29 @@ describe('member row glyph', () => {
 })
 
 describe('family activity line', () => {
-  const activity = (over = {}) => ({ ...NO_FAMILY_ACTIVITY, ...over })
+  const activity = (over: Partial<FamilyActivity> = {}): FamilyActivity =>
+    ({ error: 0, waiting: 0, active: 0, running: 0, ...over })
 
-  it('shows nothing for an idle family', () => {
-    expect(hasFamilyActivity(NO_FAMILY_ACTIVITY)).toBe(false)
+  it('has no segments for an idle family, or for one with no entry at all', () => {
+    expect(familySegments(activity())).toEqual([])
+    // A quiet family is absent from the activity map entirely, and that
+    // absence is the same fact as "nothing to report".
+    expect(familySegments(undefined)).toEqual([])
   })
 
-  it('shows for any single non-zero state', () => {
-    expect(hasFamilyActivity(activity({ error: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ waiting: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ active: 1 }))).toBe(true)
-    expect(hasFamilyActivity(activity({ running: 1 }))).toBe(true)
+  it('gives every state a segment', () => {
+    for (const state of ['error', 'waiting', 'active', 'running'] as const) {
+      expect(familySegments(activity({ [state]: 1 })).map(s => s.state)).toEqual([state])
+    }
   })
 
   it('orders segments attention-first, and drops the zeros', () => {
     // One display order for every surface: the members that need you
     // (error, waiting) before the ambient work (active, running), so
     // what survives a narrow clip is what matters.
-    expect(familySegments(activity({ running: 3, waiting: 2, error: 1, active: 4 })).map((s: { state: string }) => s.state))
+    expect(familySegments(activity({ running: 3, waiting: 2, error: 1, active: 4 })).map(s => s.state))
       .toEqual(['error', 'waiting', 'active', 'running'])
-    expect(familySegments(activity({ running: 3, error: 1 })).map((s: { state: string }) => s.state))
+    expect(familySegments(activity({ running: 3, error: 1 })).map(s => s.state))
       .toEqual(['error', 'running'])
     // The glyph table is the vocabulary: dots for states that have
     // them, and the running state's null dot is the `$`.

@@ -31,7 +31,7 @@ function renderedLines(tree: FamilyNode, view: FamilyView): string[] {
     out.push(node.session.id)
     const { shown, summary } = splitLevel(node.children, node.session.id, new Set(), view)
     for (const kid of shown) walk(kid)
-    if (summary) out.push(`${node.session.id}:${summary.label}`)
+    if (summary) out.push(`${node.session.id}:${summary}`)
   }
   walk(tree)
   return out
@@ -51,7 +51,7 @@ describe('the panel draws at most a screenful, whatever the family looks like', 
     const rows = renderedLines(tree, view)
     expect(rows).toHaveLength(FAMILY_ROW_BUDGET)
     const { shown, summary } = splitLevel(tree.children, 'root', new Set(), view)
-    expect(summary).toEqual({ key: 'root', expanded: false, label: `+${40 - shown.length} more` })
+    expect(summary).toBe(`+${40 - shown.length} more`)
   })
 
   it('bounds a deep family too, where a per-level cap bounded nothing', () => {
@@ -149,10 +149,19 @@ describe('level rows', () => {
     const view = visibleFamilyRows(tree)
     const { shown, summary } = splitLevel(tree.children, 'root', new Set(['root']), view)
     expect(shown).toHaveLength(40)
-    expect(summary).toEqual({ key: 'root', expanded: true, label: 'show fewer' })
+    expect(summary).toBe('show fewer')
     // Another parent's expansion state does not leak into this level.
     expect(splitLevel(tree.children, 'root', new Set(['other-parent']), view).shown.length)
       .toBeLessThan(40)
+  })
+
+  it('offers no control when the level has nothing folded', () => {
+    // Reachable by expanding a level and then filtering it down to
+    // what already fits: `show fewer` would then take nothing away.
+    const tree = rootChildren(3)
+    const view = visibleFamilyRows(tree)
+    expect(splitLevel(tree.children, 'root', new Set(), view).summary).toBeNull()
+    expect(splitLevel(tree.children, 'root', new Set(['root']), view).summary).toBeNull()
   })
 })
 

@@ -1078,8 +1078,9 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
  * subtractions used to make this number wobble with unrelated view
  * state, which read as the count being wrong.
  *
- * Idle members are not counted and quiet families are absent from the
- * map: no line, nothing to say. */
+ * Idle members are not counted, and an entry exists if and only if
+ * some count is non-zero — a quiet family is absent from the map, and
+ * `undefined` is the whole of "nothing to report" for every caller. */
 export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(() => {
   const index = familyIndex(sessions.value)
   const map = new Map<string, { error: number; waiting: number; active: number; running: number }>()
@@ -1768,16 +1769,17 @@ async function errorMessageFromResponse(resp: Response): Promise<string> {
  * on failure. A network reject counts as "not succeeded" for rollback,
  * even though it's silent toast-wise.
  */
-async function postAction(endpoint: string, label = 'Action', body?: Record<string, unknown>, quiet = false): Promise<boolean> {
+async function postAction(endpoint: string, label = 'Action', opts: {
+  /** Suppress the per-call toast; the caller reports once instead. */
+  quiet?: boolean
+  /** One more status to treat as success, for endpoints where a
+   * rejection is the outcome the caller asked for anyway. */
+  alsoOk?: number
+} = {}): Promise<boolean> {
+  const { quiet = false, alsoOk } = opts
   try {
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      ...(body ? {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      } : {}),
-    })
-    if (!resp.ok) {
+    const resp = await fetch(endpoint, { method: 'POST' })
+    if (!resp.ok && resp.status !== alsoOk) {
       // `quiet` is for bulk callers: one toast per failed member turns a
       // daemon hiccup during "Stop all" into two hundred toasts, so they
       // take the boolean and report once.
@@ -1797,7 +1799,7 @@ async function postAction(endpoint: string, label = 'Action', body?: Record<stri
 // reject — postAction converts all failures into `false` — so `.catch()`
 // on them is dead code; branch on the boolean instead.
 export function killSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill', undefined, opts?.quiet)
+  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill', { quiet: opts?.quiet })
 }
 
 /** Interrupt an agent's current turn (POST /cancel — the daemon's word;
@@ -1808,16 +1810,10 @@ export function killSession(sessionId: string, opts?: { quiet?: boolean }): Prom
  * means the agent finished between your click and the wire. For the
  * bulk caller iterating a family that race is routine, and the outcome
  * is the one the click asked for — the agent is no longer mid-turn. */
-export async function cancelSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
-  try {
-    const resp = await fetch(`/v1/sessions/${sessionId}/cancel`, { method: 'POST' })
-    if (resp.ok || resp.status === 409) return true
-    if (!opts?.quiet) pushError(`Interrupt failed: ${await errorMessageFromResponse(resp)}`)
-    return false
-  } catch {
-    console.debug(`/v1/sessions/${sessionId}/cancel: network error (suppressed toast)`)
-    return false
-  }
+export function cancelSession(sessionId: string, opts?: { quiet?: boolean }): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/cancel`, 'Interrupt', {
+    quiet: opts?.quiet, alsoOk: 409,
+  })
 }
 
 export function dismissSession(sessionId: string): Promise<void> {

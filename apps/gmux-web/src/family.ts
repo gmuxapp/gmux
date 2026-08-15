@@ -168,12 +168,12 @@ function byRecency(a: Session, b: Session): number {
  *  dot state the sidebar computed for it.
  *
  *  The column is always occupied, and — this is the load-bearing part —
- *  it is the *only* place a named member's state can appear, because
- *  the activity line subtracts whoever the row names. A glyph that
- *  can't express `unread` therefore doesn't just look plainer; it drops
- *  that member's attention entirely: counted nowhere, shown nowhere.
- *  So a process keeps its `$` shape but carries state as colour, and an
- *  agent with nothing to report falls back to the branch. */
+ *  it is the only place *this* member's state is shown: the summary
+ *  line below counts it among many, which tells you something needs
+ *  you but never which row. A glyph that can't express `unread` makes
+ *  the named member the one you cannot see. So a process keeps its `$`
+ *  shape but carries state as colour, and an agent with nothing to
+ *  report falls back to the branch. */
 export type MemberGlyph =
   | { readonly kind: 'process'; readonly state: DotState }
   | { readonly kind: 'dot'; readonly state: Exclude<DotState, 'none'> }
@@ -216,27 +216,31 @@ export function familyStateOf(session: Session): FamilyState | null {
  * census. */
 export type FamilyActivity = Readonly<Record<FamilyState, number>>
 
-export const NO_FAMILY_ACTIVITY: FamilyActivity = {
-  error: 0, waiting: 0, active: 0, running: 0,
-}
-
-/** True when a family has something worth a summary line. */
-export function hasFamilyActivity(activity: FamilyActivity): boolean {
-  return activity.error > 0 || activity.waiting > 0
-    || activity.active > 0 || activity.running > 0
-}
-
-/** One segment per non-zero state, in the one display order every
+/** How each state presents itself, in the one display order every
  * surface uses: attention first (error, then waiting — the members
  * that need you), ambient work after (active agents, then running
  * commands). Narrow surfaces clip from the right, so what survives a
  * clip is what matters; bucketing precedence is `familyStateOf`'s
  * concern, display order is this one's.
  *
- * `dot` is the CSS token the rows themselves wear (`unread` is how the
- * app spells "waiting on you"); `running` wears the `$` glyph instead
- * of a dot, exactly like its rows. This table is the vocabulary —
- * surfaces decide typography, never what a state looks like. */
+ * One row per state, carrying everything a summary needs to say it:
+ * the dot CSS token the rows themselves wear (`unread` is how the app
+ * spells "waiting on you"; `null` means the `$` glyph, exactly like a
+ * process row), and the words for readers who get the sentence instead
+ * of the glyphs. Surfaces choose typography — never what a state looks
+ * like, is called, or comes before. */
+const FAMILY_DISPLAY = [
+  { state: 'error', dot: 'error', phrase: (n: number) => `${plural(n, 'member')} with an error` },
+  { state: 'waiting', dot: 'unread', phrase: (n: number) => `${plural(n, 'member')} waiting on you` },
+  { state: 'active', dot: 'working', phrase: (n: number) => plural(n, 'active subagent') },
+  { state: 'running', dot: null, phrase: (n: number) => plural(n, 'running process') },
+] as const
+
+/** 'process' takes -es; everything else here takes -s. */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : word.endsWith('s') ? 'es' : 's'}`
+}
+
 export interface FamilySegment {
   readonly state: FamilyState
   /** Dot CSS token, or null for the `$`-glyphed running state. */
@@ -244,30 +248,23 @@ export interface FamilySegment {
   readonly count: number
 }
 
-export function familySegments(activity: FamilyActivity): FamilySegment[] {
-  const order = [
-    { state: 'error', dot: 'error' },
-    { state: 'waiting', dot: 'unread' },
-    { state: 'active', dot: 'working' },
-    { state: 'running', dot: null },
-  ] as const
-  return order
+/** One segment per non-zero state. Takes the raw map entry, so a
+ * family with no activity at all (absent from the map) is simply no
+ * segments rather than a constant every caller has to remember. */
+export function familySegments(activity: FamilyActivity | undefined): FamilySegment[] {
+  if (!activity) return []
+  return FAMILY_DISPLAY
     .filter(({ state }) => activity[state] > 0)
     .map(({ state, dot }) => ({ state, dot, count: activity[state] }))
 }
 
-/** Spoken form of the activity segments, which are otherwise pure
- * glyphs — the turn model's words (waiting on you, active), not the
- * wire's field names. */
+/** Spoken form of the segments, which are otherwise pure glyphs — the
+ * turn model's words (waiting on you, active), not the wire's field
+ * names, and in the same order the glyphs appear. */
 export function familyActivityLabel(activity: FamilyActivity): string {
-  const parts: string[] = []
-  // 'process' takes -es; everything else here takes -s.
-  const plural = (n: number, word: string) =>
-    `${n} ${word}${n === 1 ? '' : word.endsWith('s') ? 'es' : 's'}`
-  if (activity.error > 0) parts.push(`${plural(activity.error, 'member')} with an error`)
-  if (activity.waiting > 0) parts.push(`${plural(activity.waiting, 'member')} waiting on you`)
-  if (activity.active > 0) parts.push(plural(activity.active, 'active subagent'))
-  if (activity.running > 0) parts.push(plural(activity.running, 'running process'))
+  const parts = FAMILY_DISPLAY
+    .filter(({ state }) => activity[state] > 0)
+    .map(({ state, phrase }) => phrase(activity[state]))
   return `In this family: ${parts.join(', ')}`
 }
 
@@ -312,11 +309,11 @@ export function descendantTree(root: Session, source: FamilySource): FamilyNode 
  * mean something different on every row you visit. Now one scope holds
  * wherever you stand: the same members, the same counts.
  *
- * That is *membership*, not aggregation. The three family surfaces
- * still summarise this set differently on purpose — the trigger badge
- * mutes what you're looking at, the sidebar line subtracts the member
- * its own row names, and this panel counts every row it draws, because
- * it draws them all.
+ * That is *membership*. Aggregation is one rule now, shared by every
+ * surface (`familyActivityById` + `familySegments`): the root's
+ * descendants, one bucket per state. The surfaces once each subtracted
+ * whatever they happened to name, which made the same glyphs quote a
+ * different number depending on where you stood.
  *
  * `ancestors` stays for callers that want the spine on its own (the
  * header crumbs); the tree already contains those rows. */
@@ -335,6 +332,3 @@ export function projectFamily(selected: Session, source: FamilySource): FamilyDr
     tree: descendantTree(root, index),
   }
 }
-
-
-
