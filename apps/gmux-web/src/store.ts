@@ -1808,6 +1808,26 @@ export function killSession(sessionId: string): Promise<boolean> {
   return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill')
 }
 
+/** Interrupt an agent's current turn (POST /cancel — the daemon's word;
+ * the UI says "interrupt", ADR 0023's word for ending a turn early).
+ *
+ * A 409 is swallowed rather than toasted: cancel is live-and-active
+ * only, enforced by the runner at delivery, so "no turn to cancel"
+ * means the agent finished between your click and the wire. For the
+ * bulk caller iterating a family that race is routine, and the outcome
+ * is the one the click asked for — the agent is no longer mid-turn. */
+export async function cancelSession(sessionId: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/v1/sessions/${sessionId}/cancel`, { method: 'POST' })
+    if (resp.ok || resp.status === 409) return true
+    pushError(`Interrupt failed: ${await errorMessageFromResponse(resp)}`)
+    return false
+  } catch {
+    console.debug(`/v1/sessions/${sessionId}/cancel: network error (suppressed toast)`)
+    return false
+  }
+}
+
 export function dismissSession(sessionId: string): Promise<void> {
   // Optimistic dismissal: hide the session locally now, and retract
   // immediately if the server rejects — so the toast and the row

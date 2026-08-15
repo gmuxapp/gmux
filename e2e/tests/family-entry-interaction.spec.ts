@@ -154,7 +154,9 @@ test.describe('the family line and the panel tally', () => {
     // token `working` is the active dot; the header says what the turn
     // model says (ADR 0023), not what the fields are called.
     expect(await counts.textContent()).not.toMatch(/unread|working/)
-    await expect(counts.locator('.family-count').last()).toHaveText(/\d+ total/)
+    // `all` — the absence of a filter — goes first, where the panel
+    // opens, and carries no count: it isn't a state being tallied.
+    await expect(counts.locator('.family-count').first()).toHaveText('all')
 
     // Every state segment carries the dot its rows carry, so the header
     // reads as a key to the tree rather than a second vocabulary.
@@ -164,8 +166,8 @@ test.describe('the family line and the panel tally', () => {
       proc: n.querySelector('.family-row-proc')?.textContent ?? null,
     })))
     for (const segment of segments) {
-      if (/total/.test(segment.text ?? '')) {
-        expect(segment.dot, 'total is not a state, so it gets no glyph').toBeNull()
+      if (segment.text === 'all') {
+        expect(segment.dot, 'all is not a state, so it gets no glyph').toBeNull()
         expect(segment.proc).toBeNull()
         continue
       }
@@ -218,12 +220,51 @@ test.describe('the family line and the panel tally', () => {
     expect(running.some(t => t.startsWith('investigate a really long descendant'))).toBe(false)
     await expect(page.locator('.family-row[aria-current="page"]')).toBeVisible()
 
-    // Pressing the live filter clears it; so does `total`.
+    // Pressing the live filter clears it; so does `all`.
     await tally('running').click()
     expect(await titles()).toEqual(unfiltered)
     await tally('error').click()
     expect((await titles()).length).toBeLessThan(unfiltered.length)
-    await tally('total').click()
+    await tally('all').click()
     expect(await titles()).toEqual(unfiltered)
+  })
+
+  test('each filter offers its own bulk action, and none is ambient', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    const counts = page.locator('.family-counts')
+    await counts.waitFor()
+    const tally = (label: string) => counts.locator('.family-count').filter({ hasText: label })
+    const action = page.locator('.family-mark-read')
+
+    // No filter, no verb: a bulk action only exists while you are
+    // looking at the complete list of what it will touch.
+    await expect(action).toHaveCount(0)
+
+    const expected: [string, string][] = [
+      ['waiting', 'Mark all read'],
+      ['error', 'Mark all read'],
+      ['running', 'Stop all'],
+      ['active', 'Interrupt all'],
+    ]
+    for (const [state, verb] of expected) {
+      await tally(state).click()
+      await expect(action).toHaveText(verb)
+      await tally('all').click()
+      await expect(action).toHaveCount(0)
+    }
+
+    // The waiting action still acts — and only on the waiting members.
+    const reads: string[] = []
+    await page.route('**/v1/sessions/**/read*', route => {
+      reads.push(route.request().url())
+      route.fulfill({ status: 200, body: '{}' })
+    })
+    await tally('waiting').click()
+    await action.click()
+    await expect.poll(() => reads.length).toBeGreaterThan(0)
+    // Only fam1kid is `waiting` in this family: the errored member is
+    // under `error`, precedence keeps it out of this verb's reach.
+    expect(reads.every(url => url.includes('fam1kid'))).toBe(true)
   })
 })

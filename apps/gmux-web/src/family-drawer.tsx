@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
-  familyCounts, isProcessSession, projectFamily,
+  familyCounts, familyStateOf, isProcessSession, projectFamily,
   type FamilyNode, type FamilyState,
 } from './family'
 import { splitLevel, visibleFamilyRows, type FamilyView } from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
-import { activityMap, markSessionRead, projects, sessions, sessionDotState, tabHref } from './store'
+import {
+  activityMap, cancelSession, killSession, markSessionRead,
+  projects, sessions, sessionDotState, tabHref,
+} from './store'
 import type { Session } from './types'
 
 function hrefFor(session: Session): string | undefined {
@@ -117,18 +120,34 @@ function LevelRows({ nodes, parentId, selectedId, depth, expanded, view, now, on
   )
 }
 
-/** Every member with something outstanding, in one pass over the tree.
- * `markSessionRead` clears the error flag alongside the unread one, so
- * both belong here — the button answers the counts line, and the counts
- * line counts both. */
-function unreadMembers(tree: FamilyNode): Session[] {
+/** Every member the given filter matches — the same `familyStateOf`
+ * rule the tally counts by and the tree filters by, so the action the
+ * header offers acts on exactly the rows the panel is showing. */
+function membersInState(tree: FamilyNode, state: FamilyState): Session[] {
   const out: Session[] = []
   const visit = (node: FamilyNode) => {
-    if (node.session.unread || node.session.status?.error) out.push(node.session)
+    if (familyStateOf(node.session) === state) out.push(node.session)
     for (const child of node.children) visit(child)
   }
   visit(tree)
   return out
+}
+
+/** The one bulk action each filter's members admit. There is no ambient
+ * action: a verb only appears once its filter is on, so you are looking
+ * at the complete list of what it will touch before the button exists —
+ * that, not a confirm dialog, is the safety for the destructive ones.
+ *
+ * `error` shares the waiting verb because acknowledging is all you can
+ * do in bulk to an error — `markSessionRead` clears the error flag — and
+ * error's precedence means an errored member never surfaces under
+ * `waiting`. There is no action for `all`: no single verb answers
+ * everything. */
+const FAMILY_ACTIONS: Partial<Record<FamilyState, { label: string; run: (id: string) => unknown }>> = {
+  waiting: { label: 'Mark all read', run: markSessionRead },
+  error: { label: 'Mark all read', run: markSessionRead },
+  running: { label: 'Stop all', run: killSession },
+  active: { label: 'Interrupt all', run: cancelSession },
 }
 
 /** The header's tally, in the turn model's own words (ADR 0023: a
@@ -142,8 +161,11 @@ function unreadMembers(tree: FamilyNode): Session[] {
  * the header and the tree can be read against each other without
  * translating — including the `$`, because a family is routinely mostly
  * processes and "3 active" reads very differently depending on whether
- * that means subagents thinking or shells running. `total` gets no
- * glyph: it isn't a state. */
+ * that means subagents thinking or shells running. `all` gets no glyph
+ * or count: it isn't a state, it's the absence of the question — and it
+ * goes first because it's the position the panel opens in. The family's
+ * size was the one fact the old `total` carried, and members mostly
+ * accumulate; the folds' `+N more` already says how much lies below. */
 function CountsLine({ tree, filter, onFilter }: {
   tree: FamilyNode
   filter: FamilyState | null
@@ -151,15 +173,15 @@ function CountsLine({ tree, filter, onFilter }: {
 }) {
   const counts = familyCounts([tree])
   const segments: {
-    key: FamilyState | 'total'
+    key: FamilyState | 'all'
     dot?: string
     process?: boolean
-    count: number
+    count?: number
     label: string
     cls?: string
-  }[] = []
-  // Same precedence the dot itself resolves by: error, then active,
-  // then waiting. Processes follow the agents they belong to.
+  }[] = [{ key: 'all', label: 'all' }]
+  // Then the same precedence the dot itself resolves by: error, then
+  // active, then waiting. Processes follow the agents they belong to.
   if (counts.error > 0) {
     segments.push({ key: 'error', dot: 'error', count: counts.error, label: 'error', cls: 'attention' })
   }
@@ -175,13 +197,10 @@ function CountsLine({ tree, filter, onFilter }: {
   if (counts.unread > 0) {
     segments.push({ key: 'waiting', dot: 'unread', count: counts.unread, label: 'waiting', cls: 'attention' })
   }
-  // `total` is the way back: it's already the count of everyone, so it
-  // doubles as "no filter" rather than needing a clear button of its own.
-  segments.push({ key: 'total', count: counts.total, label: 'total' })
   return (
     <div class="family-counts">
       {segments.map(segment => {
-        const state = segment.key === 'total' ? null : segment.key
+        const state = segment.key === 'all' ? null : segment.key
         const active = filter === state
         return (
           <button
@@ -195,7 +214,7 @@ function CountsLine({ tree, filter, onFilter }: {
           >
             {segment.dot && <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />}
             {segment.process && <span class="family-row-proc working" aria-hidden="true">$</span>}
-            {segment.count} {segment.label}
+            {segment.count !== undefined && `${segment.count} `}{segment.label}
           </button>
         )
       })}
@@ -282,23 +301,25 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Your own path, root to selection: the budget may fold anything but this.
   const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
   const view = visibleFamilyRows(projection.tree, { pinned, filter })
-  const outstanding = unreadMembers(projection.tree)
+  const action = filter ? FAMILY_ACTIONS[filter] : undefined
+  const targets = filter && action ? membersInState(projection.tree, filter) : []
   // One clock for the whole paint, so sibling ages can't disagree.
   const now = Date.now()
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
         <CountsLine tree={projection.tree} filter={filter} onFilter={setFilter} />
-        {outstanding.length > 0 && (
+        {action && targets.length > 0 && (
           <button
             type="button"
             class="family-mark-read"
-            // Iterating is the whole implementation: `markSessionRead` is
-            // optimistic and token-bound, so the panel clears instantly
-            // and a member that speaks again mid-flight keeps its dot.
-            onClick={() => { for (const session of outstanding) markSessionRead(session.id) }}
+            // Iterating is the whole implementation: mark-read is
+            // optimistic and token-bound, kill and cancel are one POST
+            // each, and every call is idempotent-or-tolerant, so a
+            // member that changes state mid-flight loses nothing.
+            onClick={() => { for (const session of targets) action.run(session.id) }}
           >
-            Mark all read
+            {action.label}
           </button>
         )}
       </div>
