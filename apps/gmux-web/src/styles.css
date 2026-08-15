@@ -2613,6 +2613,25 @@ body {
   color: oklch(88% 0.15 65);
 }
 
+/* Promote/demote item: label plus an explanatory note underneath. The
+ * note is part of the button (one accessible name, one hit target) and
+ * says what the flag does NOT do — promotion never severs ownership —
+ * or which family a demote rejoins. */
+.session-menu-action.session-menu-promotion {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.session-menu-action-note {
+  display: block;
+  max-width: 240px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
 /* Small tag shown next to the action label when runner is stale */
 .session-menu-action-tag {
   font-size: 10px;

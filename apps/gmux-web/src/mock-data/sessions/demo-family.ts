@@ -57,6 +57,13 @@ export const DEMO_FAMILY: MockSession[] = [
   // Long-titled one-parent chain (shallow case).
   fam({ id: 'famAroot', title: 'a genuinely very long root agent title for truncation checks', last_output_at: ago(60) }),
   fam({ id: 'famAkid', title: 'child of the long-titled root with its own long title', parent_session_id: 'famAroot', unread: true, last_output_at: ago(4) }),
+  // A promoted family member: renders as its own root row while the
+  // organizational parent edge stays on the session. Exercises the ⋮ menu's
+  // "Return to family" action and the sidebar's promoted projection.
+  fam({
+    id: 'famApromoted', title: 'promoted research spike', parent_session_id: 'famAroot',
+    promoted_to_root: true, last_output_at: ago(15),
+  }),
   // Process-only family: the summary line drops the empty segment and
   // reads just "2 processes".
   fam({ id: 'famBroot', title: 'build watcher agent', last_output_at: ago(90) }),

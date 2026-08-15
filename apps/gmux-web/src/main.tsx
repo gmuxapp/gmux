@@ -15,7 +15,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyRoot, familySegments, hasFamily } from './family'
+import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
@@ -32,7 +32,7 @@ import {
   keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
-  dismissSession, resumeSession, restartSession,
+  dismissSession, resumeSession, restartSession, promoteSession, demoteSession,
   sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
@@ -351,6 +351,7 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const healthVal = health.value
 
   // For remote sessions, compare against the peer's version (not the local
@@ -403,9 +404,19 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
     : undefined
   const showStale = action?.id === 'restart' && !!staleKind
 
+  // Presentation promotion (ADR 0026 §8). Eligibility mirrors the family
+  // projection's own edge rule and is null for peer-projected sessions, so
+  // the menu never offers a mutation the daemon would refuse. The `⋮` menu
+  // is deliberately the only surface carrying these verbs: it exists for
+  // every session view (desktop and mobile, alive and dead), and a promoted
+  // session — no longer a family member — has no family panel to demote from.
+  const promotion = promotionAction(session, sessions.value)
+  const promotionWords = promotion ? promotionCopy(promotion) : null
+
   return (
     <div class="session-menu" ref={menuRef}>
       <button
+        ref={triggerRef}
         class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
         onClick={() => setOpen(!open)}
         title="Session actions"
@@ -434,7 +445,24 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
               {showStale && <span class="session-menu-action-tag">outdated</span>}
             </button>
           )}
-          {(canFind || (action && actionHandler)) && <div class="session-menu-divider" />}
+          {promotion && promotionWords && (
+            <button
+              class="session-menu-action session-menu-promotion"
+              onClick={() => {
+                setOpen(false)
+                // Focus back to the trigger: the activated item unmounts with
+                // the dropdown, and a keyboard user shouldn't land on <body>.
+                triggerRef.current?.focus()
+                void (promotion.kind === 'promote'
+                  ? promoteSession(session.id)
+                  : demoteSession(session.id))
+              }}
+            >
+              {promotionWords.label}
+              <span class="session-menu-action-note">{promotionWords.note}</span>
+            </button>
+          )}
+          {(canFind || (action && actionHandler) || promotion) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>

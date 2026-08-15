@@ -1834,6 +1834,23 @@ export function restartSession(sessionId: string): Promise<boolean> {
   return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart')
 }
 
+// Promote/demote flip the server-owned `promoted_to_root` presentation flag
+// (ADR 0026 §8, endpoints from #475). Deliberately no optimistic overlay,
+// for the same reason as `reorderSessions`: the projection *and the URL*
+// derive from the presentation root, and the snapshot commit path
+// (`commitWithSlugRewrite`) rewrites the selected session's URL atomically
+// with the session data — an optimistic flag flip without that coupled
+// rewrite would leave the old URL unresolvable for a beat and bounce the
+// router home. The mutation is local-only (the daemon refuses it for peer
+// sessions), so the authoritative snapshot echoes in the same beat anyway.
+export function promoteSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/promote`, 'Promote')
+}
+
+export function demoteSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/demote`, 'Return to family')
+}
+
 // ── Launch ───────────────────────────────────────────────────────────────────
 
 let _pendingLaunchAt = 0

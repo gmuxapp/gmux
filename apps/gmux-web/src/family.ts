@@ -153,6 +153,55 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
   return reverse.reverse()
 }
 
+/** The one promotion mutation this session admits right now, or null.
+ *
+ * Presentation promotion is sticky, user-authored state on the session
+ * (ADR 0026 §8): promoting breaks only the presentation edge — the
+ * organizational parent keeps owning the session — and demoting rejoins
+ * the *current* organizational parent's presentation family. Eligibility
+ * therefore mirrors the projection's own edge rule (`familyIndex`), so the
+ * menu can never offer a mutation whose result the sidebar wouldn't show:
+ *
+ *  - peer-projected sessions (network peers and Local/devcontainer peers
+ *    alike) get nothing: the daemon refuses promote/demote for sessions it
+ *    doesn't own (`local_only`), so offering the verb would be a lie;
+ *  - a family child (cycle-safe, parent local and a semantic agent, not
+ *    already promoted) can be promoted;
+ *  - a promoted session can return to its family only while that family
+ *    still exists: the current parent resolves locally and is a semantic
+ *    agent. A deleted parent (deletion repair cleared the edge) or a
+ *    non-agent parent leaves the flag inert and the action hidden —
+ *    demoting would visibly do nothing.
+ *
+ * `parent` is the session the copy names: the owner that keeps the child
+ * after a promote, the family a demote rejoins. */
+export type PromotionAction =
+  | { readonly kind: 'promote'; readonly parent: Session }
+  | { readonly kind: 'demote'; readonly parent: Session }
+
+export function promotionAction(session: Session, source: FamilySource): PromotionAction | null {
+  if (session.peer) return null
+  const index = indexFor(source)
+  if (index.childIds.has(session.id)) {
+    const parent = index.byId.get(session.parent_session_id!)
+    return parent ? { kind: 'promote', parent } : null
+  }
+  if (session.promoted_to_root !== true) return null
+  if (!session.parent_session_id || session.parent_session_id === session.id) return null
+  const parent = index.byId.get(session.parent_session_id)
+  if (!parent || parent.semantic_agent !== true || parent.peer) return null
+  return { kind: 'demote', parent }
+}
+
+/** The words the menu says for a promotion action. Centralized so every
+ * surface (and its tests) quotes one copy: promotion must say that
+ * ownership is not severed, and demotion must name the current parent. */
+export function promotionCopy(action: PromotionAction): { label: string; note: string } {
+  return action.kind === 'promote'
+    ? { label: 'Promote to root', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
+    : { label: 'Return to family', note: `Groups back under ${action.parent.title}` }
+}
+
 export interface FamilyNode {
   session: Session
   children: FamilyNode[]

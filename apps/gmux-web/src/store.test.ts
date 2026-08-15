@@ -3,6 +3,7 @@ import { toasts } from './toasts'
 import {
   sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
+  promoteSession, demoteSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, familySelectedId, folders,
@@ -681,6 +682,134 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     expect(sessionsLoaded.value).toBe(true)
     expect(sessions.value.map(s => s.id)).toContain('12ak7jhz')
     expect(navCalls).toEqual([])
+  })
+})
+
+describe('promote/demote: endpoint wiring and failure surfacing', () => {
+  beforeEach(() => { toasts.value = [] })
+  afterEach(() => { vi.unstubAllGlobals(); toasts.value = [] })
+
+  it('hits the #475 endpoints with POST', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK', text: () => Promise.resolve(''),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(promoteSession('kid1')).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/promote', { method: 'POST' })
+    await expect(demoteSession('kid1')).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/demote', { method: 'POST' })
+    expect(toasts.value).toHaveLength(0)
+  })
+
+  it('toasts the daemon message on rejection (e.g. local_only for a raced peer)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 400, statusText: 'Bad Request',
+      text: () => Promise.resolve(JSON.stringify({
+        ok: false, error: { code: 'local_only', message: 'promote is only available for sessions owned by this daemon; run gmux on the owning host' },
+      })),
+    }))
+    await expect(promoteSession('peer-kid')).resolves.toBe(false)
+    expect(toasts.value[0]).toMatchObject({
+      kind: 'error',
+      message: 'Promote failed: promote is only available for sessions owned by this daemon; run gmux on the owning host',
+    })
+    // No optimistic overlay exists for promotion, so there is nothing to
+    // retract and the sidebar keeps showing the server's truth throughout.
+    expect(_pendingMutations.value).toHaveLength(0)
+  })
+
+  it('demote failures label the action in the user\u2019s words', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 404, statusText: 'Not Found',
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'session not found' } })),
+    }))
+    await expect(demoteSession('ghost')).resolves.toBe(false)
+    expect(toasts.value[0].message).toBe('Return to family failed: session not found')
+  })
+
+  it('stays silent on a network reject (connectivity is the pill\u2019s story)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(promoteSession('kid1')).resolves.toBe(false)
+    expect(toasts.value).toHaveLength(0)
+  })
+})
+
+describe('promotion snapshots preserve the selected session\u2019s routing', () => {
+  // Promotion changes which project a session presents under: an
+  // unpromoted child routes through its root's project, a promoted one
+  // through its own project_slug. The authoritative SSE snapshot must
+  // therefore land together with a URL rewrite (commitWithSlugRewrite),
+  // or the old URL stops resolving and the router boots the user home —
+  // the "false root state" failure mode. These pin the seam for both
+  // directions with the worst case: the child's own project differs
+  // from the root's.
+  const navCalls: Array<[string, boolean | undefined]> = []
+  const rootSession = () => makeSession({
+    id: '1aaaaaaa', cwd: '/dev/alpha', adapter: 'pi', slug: 'orchestrator',
+    semantic_agent: true, project_slug: 'alpha',
+  })
+  const childSession = (promoted: boolean) => makeSession({
+    id: '1bbbbbbb', cwd: '/dev/beta', adapter: 'pi', slug: 'worker',
+    semantic_agent: true, parent_session_id: '1aaaaaaa',
+    project_slug: 'beta', promoted_to_root: promoted,
+  })
+  beforeEach(() => {
+    navCalls.length = 0
+    setNavigate((url, replace) => { navCalls.push([url, replace]) })
+    _setRawWorld({ projects: [
+      { slug: 'alpha', match: [{ path: '/dev/alpha' }] },
+      { slug: 'beta', match: [{ path: '/dev/beta' }] },
+    ] })
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+  })
+  afterEach(() => { setNavigate(() => {/* no-op */}) })
+
+  it('promote: URL moves from the root\u2019s project to the child\u2019s own, view stays put', () => {
+    _rawSessions.value = [rootSession(), childSession(false)]
+    urlPath.value = '/alpha/pi/worker'
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+
+    applySessionsSnapshot([rootSession(), childSession(true)])
+
+    expect(urlPath.value).toBe('/beta/pi/worker')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+    expect(navCalls).toContainEqual(['/beta/pi/worker', true])
+  })
+
+  it('demote: URL rejoins the root\u2019s project, view stays put', () => {
+    _rawSessions.value = [rootSession(), childSession(true)]
+    urlPath.value = '/beta/pi/worker'
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+
+    applySessionsSnapshot([rootSession(), childSession(false)])
+
+    expect(urlPath.value).toBe('/alpha/pi/worker')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+    expect(navCalls).toContainEqual(['/alpha/pi/worker', true])
+  })
+
+  it('promoting a NON-selected session never touches the URL', () => {
+    _rawSessions.value = [rootSession(), childSession(false)]
+    urlPath.value = '/alpha/pi/orchestrator'
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1aaaaaaa' })
+
+    applySessionsSnapshot([rootSession(), childSession(true)])
+
+    expect(urlPath.value).toBe('/alpha/pi/orchestrator')
+    expect(navCalls).toEqual([])
+  })
+
+  it('promote reprojects the sidebar: the child earns its own folder row', () => {
+    _rawSessions.value = [rootSession(), childSession(false)]
+    const before = folders.value
+    expect(before.find(f => f.slug === 'beta')?.sessions ?? []).toHaveLength(0)
+
+    applySessionsSnapshot([rootSession(), childSession(true)])
+
+    const after = folders.value
+    expect(after.find(f => f.slug === 'beta')?.sessions.map(s => s.id)).toEqual(['1bbbbbbb'])
+    expect(after.find(f => f.slug === 'alpha')?.sessions.map(s => s.id)).toEqual(['1aaaaaaa'])
   })
 })
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   descendantTree, familyAncestors, familyIndex, familySegments,
   childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
-  familyMemberGlyph, isFamilyChild, projectFamily,
+  familyMemberGlyph, isFamilyChild, projectFamily, promotionAction, promotionCopy,
 } from './family'
 import { makeSession } from './test-helpers'
 
@@ -68,6 +68,84 @@ describe('task-family projection', () => {
     const snapshot = [a, b, descendant]
     expect(snapshot.map(s => isFamilyChild(s, snapshot))).toEqual([false, false, false])
     expect(snapshot.map(s => familyRoot(s, snapshot).id)).toEqual(['a', 'b', 'descendant'])
+  })
+
+  describe('promotionAction eligibility', () => {
+    it('offers promote to a family child and names its parent', () => {
+      const root = agent('root', undefined, { title: 'orchestrator' })
+      const child = agent('child', 'root')
+      const shell = makeSession({ id: 'shell', cwd: '/p', parent_session_id: 'root', adapter: 'shell' })
+      const snapshot = [root, child, shell]
+      expect(promotionAction(child, snapshot)).toEqual({ kind: 'promote', parent: root })
+      // A process child is a family member too and can be promoted.
+      expect(promotionAction(shell, snapshot)).toEqual({ kind: 'promote', parent: root })
+      // The root itself has nothing to promote or demote.
+      expect(promotionAction(root, snapshot)).toBeNull()
+    })
+
+    it('offers demote to a promoted session whose family still exists', () => {
+      const root = agent('root', undefined, { title: 'orchestrator' })
+      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      expect(promotionAction(promoted, [root, promoted])).toEqual({ kind: 'demote', parent: root })
+    })
+
+    it('hides demote when no valid local parent exists', () => {
+      // Parent reconciled away: deletion repair normally clears the edge, but
+      // a stale id must not offer a demote that rejoins nothing.
+      const orphan = agent('orphan', 'gone', { promoted_to_root: true })
+      expect(promotionAction(orphan, [orphan])).toBeNull()
+      // Edge cleared entirely (post deletion repair).
+      const cleared = agent('cleared', undefined, { promoted_to_root: true })
+      expect(promotionAction(cleared, [cleared])).toBeNull()
+      // Parent exists but is not a semantic agent: demoting would not rejoin
+      // any presentation family.
+      const shellParent = makeSession({ id: 'sh', cwd: '/p', adapter: 'shell' })
+      const flagged = agent('flagged', 'sh', { promoted_to_root: true })
+      expect(promotionAction(flagged, [shellParent, flagged])).toBeNull()
+      // Malformed self-parent.
+      const selfie = agent('selfie', 'selfie', { promoted_to_root: true })
+      expect(promotionAction(selfie, [selfie])).toBeNull()
+    })
+
+    it('never offers mutations on peer-projected sessions', () => {
+      // The daemon refuses promote/demote for sessions it does not own
+      // (local_only) — network peers and Local/devcontainer peers alike.
+      const root = agent('root', undefined, { peer: 'devbox' })
+      const child = agent('child', 'root', { peer: 'devbox' })
+      const promoted = agent('promoted', 'root', { peer: 'devbox', promoted_to_root: true })
+      const snapshot = [root, child, promoted]
+      expect(promotionAction(child, snapshot)).toBeNull()
+      expect(promotionAction(promoted, snapshot)).toBeNull()
+    })
+
+    it('offers nothing to plain roots, orphans and cycle members', () => {
+      const solo = agent('solo')
+      expect(promotionAction(solo, [solo])).toBeNull()
+      const orphan = agent('orphan', 'missing')
+      expect(promotionAction(orphan, [orphan])).toBeNull()
+      const a = agent('a', 'b')
+      const b = agent('b', 'a')
+      expect(promotionAction(a, [a, b])).toBeNull()
+      expect(promotionAction(b, [a, b])).toBeNull()
+    })
+
+    it('works for dead retained children: promotion is presentation state', () => {
+      const root = agent('root')
+      const corpse = agent('corpse', 'root', { alive: false, resumable: true })
+      expect(promotionAction(corpse, [root, corpse])).toEqual({ kind: 'promote', parent: root })
+    })
+
+    it('says that promotion keeps ownership and names the demote target', () => {
+      const root = agent('root', undefined, { title: 'orchestrator' })
+      const child = agent('child', 'root')
+      const promote = promotionCopy(promotionAction(child, [root, child])!)
+      expect(promote.label).toBe('Promote to root')
+      expect(promote.note).toContain('orchestrator still owns it')
+      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      const demote = promotionCopy(promotionAction(promoted, [root, promoted])!)
+      expect(demote.label).toBe('Return to family')
+      expect(demote.note).toContain('under orchestrator')
+    })
   })
 
   it('derives the breadcrumb ancestor spine, root first', () => {
