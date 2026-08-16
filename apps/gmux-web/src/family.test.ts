@@ -146,6 +146,17 @@ describe('task-family projection', () => {
       expect(demote.label).toBe('Return to family')
       expect(demote.note).toContain('under orchestrator')
     })
+
+    it('carries a busy label while the mutation is in flight', () => {
+      const root = agent('root', undefined, { title: 'orchestrator' })
+      const child = agent('child', 'root')
+      const pendingPromote = promotionCopy(promotionAction(child, [root, child])!, true)
+      expect(pendingPromote.label).toBe('Promoting…')
+      // The explanation stays: what the click does is still true mid-flight.
+      expect(pendingPromote.note).toContain('orchestrator still owns it')
+      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      expect(promotionCopy(promotionAction(promoted, [root, promoted])!, true).label).toBe('Returning…')
+    })
   })
 
   it('derives the breadcrumb ancestor spine, root first', () => {

@@ -195,8 +195,16 @@ export function promotionAction(session: Session, source: FamilySource): Promoti
 
 /** The words the menu says for a promotion action. Centralized so every
  * surface (and its tests) quotes one copy: promotion must say that
- * ownership is not severed, and demotion must name the current parent. */
-export function promotionCopy(action: PromotionAction): { label: string; note: string } {
+ * ownership is not severed, and demotion must name the current parent.
+ * `pending` is the in-flight state (same convention as `lifecycleAction`'s
+ * resuming labels): the request left, the authoritative snapshot hasn't
+ * flipped the projection yet, and the item is busy rather than offerable. */
+export function promotionCopy(action: PromotionAction, pending = false): { label: string; note: string } {
+  if (pending) {
+    return action.kind === 'promote'
+      ? { label: 'Promoting…', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
+      : { label: 'Returning…', note: `Groups back under ${action.parent.title}` }
+  }
   return action.kind === 'promote'
     ? { label: 'Promote to root', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
     : { label: 'Return to family', note: `Groups back under ${action.parent.title}` }

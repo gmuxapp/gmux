@@ -82,6 +82,73 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await expect.poll(() => posts).toContain('/v1/sessions/famApromoted/demote')
   })
 
+  test('an in-flight promotion cannot be double-submitted from a reopened menu', async ({ page }) => {
+    // The menu closes on activation, but the authoritative snapshot takes a
+    // beat (and in mock never comes) — reopening used to offer the same verb
+    // again and fire a second POST per click. The item must instead show the
+    // busy label, disabled, until the projection flips or the request fails.
+    await openMock(page, '/my-project/claude/~fam2kid')
+    const posts: string[] = []
+    await page.route('**/v1/sessions/**', async (route) => {
+      if (route.request().method() === 'POST') {
+        posts.push(new URL(route.request().url()).pathname)
+        return route.fulfill({ status: 200, body: '{"ok":true,"data":{}}' })
+      }
+      return route.continue()
+    })
+    await openMenu(page)
+    await promotionItem(page).click()
+    await expect.poll(() => posts.filter(p => p.endsWith('/promote'))).toHaveLength(1)
+
+    await openMenu(page)
+    const item = promotionItem(page)
+    await expect(item).toBeDisabled()
+    await expect(item).toContainText('Promoting…')
+    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'menu-promote-pending.png') })
+    await item.click({ force: true }) // a forced click must still be inert
+    await page.waitForTimeout(200)
+    expect(posts.filter(p => p.endsWith('/promote'))).toHaveLength(1)
+  })
+
+  test('a failed promotion re-arms the item beside its toast', async ({ page }) => {
+    await openMock(page, '/my-project/claude/~fam2kid')
+    await page.route('**/v1/sessions/**', async (route) => {
+      if (route.request().method() === 'POST') {
+        return route.fulfill({
+          status: 400,
+          body: '{"ok":false,"error":{"code":"local_only","message":"promote is only available for sessions owned by this daemon"}}',
+        })
+      }
+      return route.continue()
+    })
+    await openMenu(page)
+    await promotionItem(page).click()
+    await expect(page.locator('.toast-message').first()).toContainText('Promote failed')
+    await openMenu(page)
+    const item = promotionItem(page)
+    await expect(item).toBeEnabled()
+    await expect(item).toContainText('Promote to root')
+  })
+
+  test('Escape hands focus back to the ⋮ trigger, even from inside the dropdown', async ({ page }) => {
+    await openMock(page, '/my-project/claude/~fam2kid')
+    await openMenu(page)
+    // The Escape listener attaches in a post-paint effect; give it a beat so
+    // the keypress can't race the registration.
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Tab') // focus moves onto a menu item
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.session-menu-dropdown')).toHaveCount(0)
+    // Without the explicit hand-back, focus fell to <body> here.
+    await expect(page.locator('.session-menu-trigger')).toBeFocused()
+  })
+
+  test('the ⋮ trigger carries an accessible name, not a glyph', async ({ page }) => {
+    await openMock(page, '/my-project/claude/~fam2kid')
+    await expect(page.locator('.session-menu-trigger')).toHaveAttribute('aria-label', 'Session actions')
+  })
+
   test('a plain root offers neither, and the rest of the menu is intact', async ({ page }) => {
     await openMock(page, '/my-project/claude/~fam0root')
     await openMenu(page)

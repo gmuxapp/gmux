@@ -371,7 +371,14 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // open on top of it (see FamilyDrawer for the same fix).
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setOpen(false)
+      // A keyboard user may have tabbed into the dropdown; closing unmounts
+      // the focused item and would strand focus on <body>. Same convention
+      // as FamilyDrawer's Escape: hand focus back to the trigger.
+      triggerRef.current?.focus()
+    }
     const onPointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false)
     }
@@ -411,7 +418,17 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // every session view (desktop and mobile, alive and dead), and a promoted
   // session — no longer a family member — has no family panel to demote from.
   const promotion = promotionAction(session, sessions.value)
-  const promotionWords = promotion ? promotionCopy(promotion) : null
+  // In-flight guard: the menu closes on activation, but reopening it before
+  // the authoritative snapshot lands would offer the same verb again — a
+  // second POST per click (reproduced in e2e). Pending sticks until the
+  // snapshot flips the offered action (kind change / ineligibility) or the
+  // request fails; the item meanwhile shows the busy label, disabled, the
+  // same convention as the resuming lifecycle action.
+  const [promotionPending, setPromotionPending] = useState<'promote' | 'demote' | null>(null)
+  useEffect(() => {
+    setPromotionPending(null)
+  }, [session.id, promotion?.kind])
+  const promotionWords = promotion ? promotionCopy(promotion, promotionPending !== null) : null
 
   return (
     <div class="session-menu" ref={menuRef}>
@@ -420,6 +437,10 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
         class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
         onClick={() => setOpen(!open)}
         title="Session actions"
+        // The visible content is a bare "⋮" glyph, which is also what a
+        // screen reader would announce without this (every other icon
+        // button in the app carries its name the same way).
+        aria-label="Session actions"
         aria-expanded={open}
       >
         <span class="session-menu-icon">⋮</span>
@@ -448,14 +469,21 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
           {promotion && promotionWords && (
             <button
               class="session-menu-action session-menu-promotion"
+              disabled={promotionPending !== null}
               onClick={() => {
                 setOpen(false)
                 // Focus back to the trigger: the activated item unmounts with
                 // the dropdown, and a keyboard user shouldn't land on <body>.
                 triggerRef.current?.focus()
+                setPromotionPending(promotion.kind)
                 void (promotion.kind === 'promote'
                   ? promoteSession(session.id)
-                  : demoteSession(session.id))
+                  : demoteSession(session.id)
+                ).then(ok => {
+                  // Rejection re-arms the item beside its failure toast; on
+                  // success the snapshot's kind flip clears it instead.
+                  if (!ok) setPromotionPending(null)
+                })
               }}
             >
               {promotionWords.label}
