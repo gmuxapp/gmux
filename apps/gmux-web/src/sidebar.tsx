@@ -9,7 +9,7 @@ import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { needsReveal } from './sidebar-reveal'
 import { hasSessionSlugCollision, sessionPath, viewToPath } from './routing'
 import { FamilyIcon } from './family-icon'
-import { requestFamilyDrawer } from './family-drawer-state'
+import { familyDrawerRoot } from './family-drawer-state'
 import { selectorLabel, folderMatchesFilter, type Selector } from './tab-filter'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -262,8 +262,20 @@ function FamilyActivityLine({
       aria-label={`${label}. Open family panel`}
       aria-controls="agent-family-drawer"
       onClick={() => {
+        // A second press dismisses: if the panel is already open and
+        // there is nowhere left to navigate, the press can only mean
+        // "put it away". While elsewhere in the family it navigates to
+        // the root instead, and the open drawer simply follows.
+        if (familyDrawerRoot.value === rootId && selectedId.value === rootId) {
+          familyDrawerRoot.value = null
+          return
+        }
+        // Name the family first, then go: the header opens the drawer
+        // when it arrives somewhere that family owns. Stating the want
+        // before the trip also keeps it true if navigation ever became
+        // synchronous — the arrival would already agree with it.
+        familyDrawerRoot.value = rootId
         navigate(rootHref)
-        requestFamilyDrawer(rootId)
         onClick?.()
       }}
     >

@@ -37,10 +37,9 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     const item = promotionItem(page)
     await expect(item).toHaveCount(1)
     await expect(item).toContainText('Promote to root')
-    // Promotion must not read as severing ownership: the note names the
-    // parent that keeps the child.
-    await expect(item.locator('.session-menu-action-note'))
-      .toHaveText('Shows as its own top-level session — implement drawer still owns it')
+    // An offerable verb explains itself: subtext is reserved for
+    // blocked actions, which owe their reason.
+    await expect(item.locator('.session-menu-action-note')).toHaveCount(0)
 
     const posts: string[] = []
     await page.route('**/v1/sessions/**', async (route) => {
@@ -67,8 +66,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await openMenu(page)
     const item = promotionItem(page)
     await expect(item).toContainText('Return to family')
-    await expect(item.locator('.session-menu-action-note'))
-      .toHaveText('Groups back under a genuinely very long root agent title for truncation checks')
+    await expect(item.locator('.session-menu-action-note')).toHaveCount(0)
 
     const posts: string[] = []
     await page.route('**/v1/sessions/**', async (route) => {

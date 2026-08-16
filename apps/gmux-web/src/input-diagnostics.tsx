@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { copyText } from './clipboard'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { TERM_THEME } from './terminal'
@@ -241,19 +242,9 @@ export default function InputDiagnostics() {
 
   const handleCopy = useCallback(async () => {
     const report = buildReport(entries)
-    try {
-      await navigator.clipboard.writeText(report)
-      addEntry('info', 'Diagnostics copied to clipboard!')
-    } catch {
-      // Fallback: select a textarea
-      const ta = document.createElement('textarea')
-      ta.value = report
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      addEntry('info', 'Diagnostics copied to clipboard (fallback).')
-    }
+    addEntry('info', await copyText(report)
+      ? 'Diagnostics copied to clipboard!'
+      : 'Copy failed — select the log text manually.')
   }, [entries, addEntry])
 
   const handleClear = useCallback(() => {

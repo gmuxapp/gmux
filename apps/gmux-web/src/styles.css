@@ -1053,14 +1053,22 @@ body {
 /* Sub-rows share one fixed indent: a glyph column under the root title
    (14px pad + 7px dot + 8px gap), then content. The member row puts
    its status there and the activity line its branch, so the two rows
-   line up on both columns. */
+   line up on both columns. The indent is a variable because the
+   activity button reaches the same column by a different route —
+   see `.family-activity`. */
+.session-family {
+  --family-indent: 29px;
+  /* The activity button's own inner padding, subtracted from the
+     indent so its glyph still lands on the column. */
+  --family-pill-pad: 8px;
+}
 .family-sub {
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 3px 8px 3px 29px;
+  padding: 3px 8px 3px var(--family-indent);
 }
 
 /* Every glyph in that column occupies the same width, whatever it is,
@@ -1134,17 +1142,26 @@ body {
 /* Activity button: the standard family numbers — everyone beneath the
    root — one segment per state, each dropped at zero. It is a nested
    target inside the family's broad hover area and opens the same panel
-   as the header pill. Its transparent resting border reserves the
-   exact geometry of that pill outline, so hovering does not move a
-   glyph. Numbers sit a touch under the title size. */
+   as the header's trigger, but it does not borrow that pill: the
+   sidebar's design language is flat rows with background hovers, so it
+   takes the member row's exact treatment — one tone above the group's,
+   in both states. Unlike that row it is not a navigation target, so it
+   does not claim the full row: the hit area stops where the numbers
+   do, and the slack to the right stays the root's, like the rest of
+   the entry's slack. Numbers sit a touch under the title size. */
 .family-activity {
-  width: 100%;
-  /* `.family-sub` aligns its content at 29px. The button's own 1px
-     border participates in that offset, so take one pixel back from
-     each horizontal padding rather than moving the family mark. */
-  padding: 1px 7px 4px 28px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  width: fit-content;
+  /* The row's indent, split: the part before the hit area is margin,
+     the rest is the button's own padding, so the glyph lands on the
+     shared column and the gutter left of it still belongs to the root.
+     Derived, so the two rows cannot drift apart. */
+  --family-pill-inset: calc(var(--family-indent) - var(--family-pill-pad));
+  /* Clip, not spill, at the sidebar's narrowest. */
+  max-width: calc(100% - var(--family-pill-inset));
+  margin: 0 0 2px var(--family-pill-inset);
+  padding: 1px var(--family-pill-pad) 2px var(--family-pill-pad);
+  border: 0;
+  border-radius: 3px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -1153,12 +1170,12 @@ body {
   font-variant-numeric: tabular-nums;
   text-align: left;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-activity:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-  border-color: var(--border-strong);
+  background: oklch(26% 0.02 250);
+}
+.session-family.selected .family-activity:hover {
+  background: oklch(30% 0.02 250);
 }
 .family-activity:focus-visible {
   outline: 2px solid var(--accent);
@@ -2689,6 +2706,31 @@ body {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* The ID row: monospace value with a minimal inline copy button — icon
+   only, ghost until hovered, sized to disappear into the row. */
+.session-menu-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-menu-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.session-menu-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .session-menu-value.stale {

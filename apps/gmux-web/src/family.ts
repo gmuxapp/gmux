@@ -230,12 +230,13 @@ export function promotionAction(
 }
 
 /** The words the menu says for a promotion action. Centralized so every
- * surface (and its tests) quotes one copy: promotion must say that
- * ownership is not severed, and demotion must name the current parent.
+ * surface (and its tests) quotes one copy. A note appears only when the
+ * action is blocked — a disabled item owes its reason, but an offerable
+ * verb explains itself and a subtext under it is noise.
  * `pending` is the in-flight state (same convention as `lifecycleAction`'s
  * resuming labels): the request left, the authoritative snapshot hasn't
  * flipped the projection yet, and the item is busy rather than offerable. */
-export function promotionCopy(action: PromotionAction, pending = false): { label: string; note: string } {
+export function promotionCopy(action: PromotionAction, pending = false): { label: string; note?: string } {
   if (action.blocked === 'no-project') {
     return {
       label: action.kind === 'promote' ? 'Promote to root' : 'Return to family',
@@ -244,14 +245,8 @@ export function promotionCopy(action: PromotionAction, pending = false): { label
         : 'Unavailable: the family root has no project-backed sidebar row. Add one in Settings → Projects before returning this session to its family.',
     }
   }
-  if (pending) {
-    return action.kind === 'promote'
-      ? { label: 'Promoting…', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
-      : { label: 'Returning…', note: `Groups back under ${action.parent.title}` }
-  }
-  return action.kind === 'promote'
-    ? { label: 'Promote to root', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
-    : { label: 'Return to family', note: `Groups back under ${action.parent.title}` }
+  if (pending) return { label: action.kind === 'promote' ? 'Promoting…' : 'Returning…' }
+  return { label: action.kind === 'promote' ? 'Promote to root' : 'Return to family' }
 }
 
 export interface FamilyNode {

@@ -63,3 +63,8 @@ messages directly. Rules that follow from this:
 - Push changes and create pull requests. Don't commit directly to
   `main`.
 - Use `./scripts/install.sh` when asked to install locally.
+- **Frontend and UI changes are developed iteratively with a human in
+  the loop.** Show the actual rendered result (screenshots against
+  `?mock` fixtures) at each design step, expect several rounds of
+  feedback, and never merge a user-facing change without explicit
+  approval. Visual design decisions are the user's to make.

@@ -32,16 +32,29 @@ test.describe('sidebar family entry', () => {
     await expect(indicator).toHaveJSProperty('tagName', 'BUTTON')
     await expect(indicator).toHaveAttribute('aria-controls', 'agent-family-drawer')
 
-    // It remains inside the family's broad hit area, but hovering the
-    // nested target gives it the header button's pill treatment.
-    await indicator.hover()
-    const sidebarPill = await indicator.evaluate(el => {
-      const s = getComputedStyle(el)
-      return { borderRadius: s.borderRadius, borderColor: s.borderColor, background: s.backgroundColor }
-    })
-    expect(sidebarPill.borderRadius).toBe('999px')
-    expect(sidebarPill.borderColor).not.toBe('rgba(0, 0, 0, 0)')
-    expect(sidebarPill.background).not.toBe('rgba(0, 0, 0, 0)')
+    // It remains inside the family's broad hit area, and hovering the
+    // nested target answers in the sidebar's own language: the member
+    // row's background treatment, not the header's bordered pill.
+    const hoverBg = async (loc: typeof indicator) => {
+      await loc.hover()
+      return loc.evaluate(el => getComputedStyle(el).backgroundColor)
+    }
+    // Both nested targets wear one treatment, tone-matched to their
+    // group's state — compare within one entry (the selected family
+    // shows both rows; this quiet one shows no member row).
+    const selectedEntry = familyEntry(page, 'orchestrator')
+    expect(await hoverBg(selectedEntry.locator('.family-activity')), 'same hover as the member row above')
+      .toBe(await hoverBg(selectedEntry.locator('.family-slot')))
+    expect(await indicator.evaluate(el => getComputedStyle(el).borderStyle)).toBe('none')
+
+    // The hit area stops where the numbers do: the slack to its right
+    // belongs to the root, like the rest of the entry's slack — a
+    // click there must select the root without opening the panel.
+    const rowBox = (await entry.boundingBox())!
+    const buttonBox = (await indicator.boundingBox())!
+    await page.mouse.click(rowBox.x + rowBox.width - 12, buttonBox.y + buttonBox.height / 2)
+    await expect(page).toHaveURL(/~famBroot/)
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
 
     await indicator.click()
     await expect(page).toHaveURL(/~famBroot/)
@@ -54,6 +67,22 @@ test.describe('sidebar family entry', () => {
     await indicator.focus()
     await page.keyboard.press('Enter')
     await expect(page.locator('#agent-family-drawer')).toBeVisible()
+
+    // With the panel open and nowhere left to navigate, a second press
+    // is a dismissal — the indicator toggles rather than insists.
+    await indicator.click()
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
+    await indicator.click()
+    await expect(page.locator('#agent-family-drawer')).toBeVisible()
+
+    // Leaving the family closes its drawer, and coming back does not
+    // pop it open again: open-ness is a statement about the present,
+    // not a preference to be remembered.
+    await familyEntry(page, 'orchestrator').locator('.family-slot').click()
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
+    await page.goBack()
+    await expect(page).toHaveURL(/~famBroot/)
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
   })
 
   test('a drop anywhere on the entry reorders exactly once', async ({ page }) => {

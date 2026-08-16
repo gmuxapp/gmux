@@ -189,29 +189,28 @@ describe('task-family projection', () => {
       expect(promotionCopy(action!).note).toContain('no row of its own')
     })
 
-    it('says that promotion keeps ownership and names the demote target', () => {
+    it('carries no note when the action is offerable — notes are for blockers', () => {
       const root = agent('root', undefined, { title: 'orchestrator' })
       const child = agent('child', 'root')
       const promote = promotionCopy(promotionAction(child, [root, child], placed)!)
       expect(promote.label).toBe('Promote to root')
-      expect(promote.note).toBe('Shows as its own top-level session — orchestrator still owns it')
+      expect(promote.note).toBeUndefined()
       const promoted = agent('promoted', 'root', { promoted_to_root: true })
       const demote = promotionCopy(promotionAction(promoted, [root, promoted], placed)!)
       expect(demote.label).toBe('Return to family')
-      expect(demote.note).toBe('Groups back under orchestrator')
+      expect(demote.note).toBeUndefined()
     })
 
-    it('pins every pending string, label and note, both kinds', () => {
+    it('pins the pending labels, both kinds', () => {
       const root = agent('root', undefined, { title: 'orchestrator' })
       const child = agent('child', 'root')
       const pendingPromote = promotionCopy(promotionAction(child, [root, child], placed)!, true)
       expect(pendingPromote.label).toBe('Promoting…')
-      // The explanation stays: what the click did is still true mid-flight.
-      expect(pendingPromote.note).toBe('Shows as its own top-level session — orchestrator still owns it')
+      expect(pendingPromote.note).toBeUndefined()
       const promoted = agent('promoted', 'root', { promoted_to_root: true })
       const pendingDemote = promotionCopy(promotionAction(promoted, [root, promoted], placed)!, true)
       expect(pendingDemote.label).toBe('Returning…')
-      expect(pendingDemote.note).toBe('Groups back under orchestrator')
+      expect(pendingDemote.note).toBeUndefined()
     })
   })
 
