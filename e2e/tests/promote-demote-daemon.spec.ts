@@ -211,6 +211,9 @@ for (const [name, viewport, mobile] of [
       await shot('2-menu')
       await item.click()
       await expect.poll(promoted, { timeout: 10_000 }).toBe(true)
+      // The success announcement is authoritative and survives the dropdown
+      // closure; this assertion fails if only the promote direction is wired.
+      await expect(page.locator('[data-promotion-status]')).toHaveText('Promoted to root.')
 
       // The router stays on the session (no bounce home / false root state).
       expect(page.url()).toContain('/test-project/')
@@ -230,6 +233,7 @@ for (const [name, viewport, mobile] of [
       await expect(demoteItem).toContainText('Return to family')
       await demoteItem.click()
       await expect.poll(async () => !(await promoted()), { timeout: 10_000 }).toBe(true)
+      await expect(page.locator('[data-promotion-status]')).toHaveText('Returned to family.')
 
       expect(page.url()).toContain('/test-project/')
       await withSidebar(page, mobile, viewport, async () => {
@@ -261,10 +265,13 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
 
     await page.locator('.session-menu-trigger').click()
     const item = page.locator('.session-menu-promotion')
-    await expect(item).toBeDisabled()
+    await expect(item).not.toHaveAttribute('disabled')
+    await expect(item).toHaveAttribute('aria-disabled', 'true')
     await expect(item).toContainText('Promote to root')
     await expect(item.locator('.session-menu-action-note')).toContainText('Needs a project')
-    await item.click({ force: true })
+    await item.focus()
+    await expect(item).toBeFocused()
+    await item.press('Enter')
     await page.waitForTimeout(300)
     // No mutation left the browser; the daemon still reports it unpromoted,
     // and the session is exactly where it was.
@@ -288,6 +295,53 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
       () => page.evaluate(id => (window as any).__gmuxNavigateToSession(id), outside.id),
       { timeout: 10_000 },
     ).toBe(true) // demote makes it reachable again
+    await expect(page.locator('.xterm')).toBeVisible()
+  })
+
+  test('blocks demote when the family root is outside every project', async ({ page }) => {
+    // Mirror the promote-stranding schedule: the promoted child is stamped and
+    // routable, but clearing its flag would rejoin an unplaced parent.
+    const outsideParentDir = path.join(tmpDir, 'outside-parent')
+    fs.mkdirSync(outsideParentDir, { recursive: true })
+    extraProcs.push(spawnGmux(['--', 'claude'], outsideParentDir))
+    const outsideParent = await pollUntil(async () =>
+      (await listSessions()).find(s => s.alive && s.adapter === 'claude' && s.cwd === outsideParentDir),
+    { timeoutMs: 15_000, description: 'outside semantic parent registered' })
+    expect(outsideParent.semantic_agent).toBe(true)
+    extraIds.push(outsideParent.id)
+
+    extraProcs.push(spawnGmux(['--', 'sh', '-c', 'echo placed child; sleep 600'], process.env.GMUX_TEST_WORKSPACE!, {
+      GMUX_SESSION_ID: outsideParent.id,
+    }))
+    const placedChild = await pollUntil(async () =>
+      (await listSessions()).find(s => s.alive && s.parent_session_id === outsideParent.id && s.cwd === process.env.GMUX_TEST_WORKSPACE),
+    { timeoutMs: 15_000, description: 'placed child under outside parent registered' })
+    extraIds.push(placedChild.id)
+    expect(placedChild.project_slug).toBe('test-project')
+
+    expect(await post(`/v1/sessions/${placedChild.id}/promote`)).toBe(200)
+    await pollUntil(async () =>
+      (await listSessions()).find(s => s.id === placedChild.id)?.promoted_to_root === true,
+    { timeoutMs: 10_000, description: 'placed child promoted' })
+
+    await openApp(page)
+    await gotoSession(page, placedChild.id)
+    expect(page.url()).toContain('/test-project/')
+    const posts: string[] = []
+    await page.route(`**/v1/sessions/${placedChild.id}/demote`, async route => {
+      posts.push(route.request().url())
+      await route.fulfill({ status: 200, body: '{}' })
+    })
+    await page.locator('.session-menu-trigger').click()
+    const item = page.locator('.session-menu-promotion')
+    await expect(item).toContainText('Return to family')
+    await expect(item).toHaveAttribute('aria-disabled', 'true')
+    await expect(item.locator('.session-menu-action-note')).toContainText('family root has no project-backed sidebar row')
+    await item.focus()
+    await item.press('Enter')
+    await expect.poll(() => posts).toHaveLength(0)
+    expect((await listSessions()).find(s => s.id === placedChild.id)?.promoted_to_root).toBe(true)
+    expect(page.url()).toContain('/test-project/')
     await expect(page.locator('.xterm')).toBeVisible()
   })
 

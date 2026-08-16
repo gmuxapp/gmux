@@ -3,7 +3,9 @@ import { toasts } from './toasts'
 import {
   sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
-  promoteSession, demoteSession, promotionPending, beginPromotion, settlePromotion,
+  promoteSession, demoteSession, promotionPending, promotionAnnouncements,
+  beginPromotion, settlePromotion, reconcilePromotionPending, acknowledgePromotionAnnouncement,
+  PROMOTION_PENDING_TTL_MS,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, familySelectedId, folders,
@@ -50,6 +52,7 @@ beforeEach(() => {
   _setRawWorld({ projects: [], peers: [] })
   _pendingMutations.value = []
   promotionPending.value = new Map()
+  promotionAnnouncements.value = new Map()
   sessionsLoaded.value = false
   worldLoaded.value = false
   urlPath.value = '/'
@@ -708,6 +711,67 @@ describe('promote/demote pending request ownership', () => {
     expect(promotionPending.value.get('session')?.seq).toBe(second)
     settlePromotion('session', second)
     expect(promotionPending.value.has('session')).toBe(false)
+  })
+
+  it('reconciles an unmounted session target and reversal without a stale guard', () => {
+    const root = makeSession({ id: 'root', semantic_agent: true, project_slug: 'p' })
+    const child = makeSession({ id: 'child', parent_session_id: 'root', project_slug: 'p' })
+    _setRawWorld({ projects: [{ slug: 'p', match: [{ path: '/p' }] }] })
+    _rawSessions.value = [root, child]
+    const seq = beginPromotion('child', 'promote')
+
+    // A is not selected/mounted; the central snapshot boundary still consumes it.
+    reconcilePromotionPending([root, { ...child, promoted_to_root: true }])
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq, kind: 'promote' })
+
+    // An external demote after that success must not recreate or wedge A.
+    reconcilePromotionPending([root, { ...child, promoted_to_root: false }])
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.get('child')?.message).toBe('Promoted to root.')
+    acknowledgePromotionAnnouncement('child', seq)
+    expect(promotionAnnouncements.value.get('child')?.seq).toBe(seq)
+  })
+
+  it('reconciles demote success and clears deletion/terminal transitions silently', () => {
+    const root = makeSession({ id: 'root', semantic_agent: true, project_slug: 'p' })
+    const child = makeSession({ id: 'child', parent_session_id: 'root', project_slug: 'p', promoted_to_root: true })
+    _setRawWorld({ projects: [{ slug: 'p', match: [{ path: '/p' }] }] })
+
+    _rawSessions.value = [root, child]
+    const demoteSeq = beginPromotion('child', 'demote')
+    // Some legacy wire snapshots omit false optional booleans; false is the
+    // authoritative demote state either way.
+    reconcilePromotionPending([{ ...root }, { ...child, promoted_to_root: undefined }])
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq: demoteSeq, kind: 'demote', message: 'Returned to family.' })
+
+    promotionAnnouncements.value = new Map()
+    _rawSessions.value = [root, child]
+    const deletedSeq = beginPromotion('child', 'demote')
+    reconcilePromotionPending([root])
+    expect(deletedSeq).toBeTypeOf('number')
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.has('child')).toBe(false)
+
+    _rawSessions.value = [root, child]
+    const terminalSeq = beginPromotion('child', 'demote')
+    reconcilePromotionPending([{ ...child, parent_session_id: undefined }])
+    expect(terminalSeq).toBeTypeOf('number')
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.has('child')).toBe(false)
+  })
+
+  it('clears a hung request at the explicit final safety deadline', () => {
+    vi.useFakeTimers()
+    try {
+      beginPromotion('hung', 'promote')
+      expect(promotionPending.value.has('hung')).toBe(true)
+      vi.advanceTimersByTime(PROMOTION_PENDING_TTL_MS)
+      expect(promotionPending.value.has('hung')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

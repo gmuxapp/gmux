@@ -7,7 +7,7 @@ import {
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
-  id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true, ...extra,
+  id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true, project_slug: 'p', ...extra,
 })
 
 describe('task-family projection', () => {
@@ -78,7 +78,7 @@ describe('task-family projection', () => {
     it('offers promote to a family child and names its parent', () => {
       const root = agent('root', undefined, { title: 'orchestrator' })
       const child = agent('child', 'root')
-      const shell = makeSession({ id: 'shell', cwd: '/p', parent_session_id: 'root', adapter: 'shell' })
+      const shell = makeSession({ id: 'shell', cwd: '/p', parent_session_id: 'root', adapter: 'shell', project_slug: 'p' })
       const snapshot = [root, child, shell]
       expect(promotionAction(child, snapshot, placed)).toEqual({ kind: 'promote', parent: root })
       // A process child is a family member too and can be promoted.
@@ -108,7 +108,7 @@ describe('task-family projection', () => {
       // strand it with no sidebar row and a dead URL. The action is offered
       // blocked — visible with the reason — never silently hidden.
       const root = agent('root', undefined, { title: 'orchestrator' })
-      const child = agent('child', 'root')
+      const child = agent('child', 'root', { project_slug: undefined })
       const action = promotionAction(child, [root, child], [])
       expect(action).toEqual({ kind: 'promote', parent: root, blocked: 'no-project' })
       const copy = promotionCopy(action!)
@@ -116,11 +116,15 @@ describe('task-family projection', () => {
       expect(copy.note).toBe('Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.')
     })
 
-    it('never blocks demote on placement: it restores reachability', () => {
-      const root = agent('root')
+    it('blocks demote when the family root has no sidebar placement', () => {
+      const root = agent('root', undefined, { project_slug: undefined })
       const promoted = agent('promoted', 'root', { promoted_to_root: true })
-      // No project places the promoted session — demote must still be offered.
-      expect(promotionAction(promoted, [root, promoted], [])).toEqual({ kind: 'demote', parent: root })
+      // The promoted child is placed, but demotion would rejoin an unplaced
+      // parent and strand the selected route.
+      const action = promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }])
+      expect(action).toEqual({ kind: 'demote', parent: root, blocked: 'no-project' })
+      expect(promotionCopy(action!).label).toBe('Return to family')
+      expect(promotionCopy(action!).note).toContain('family root has no project-backed sidebar row')
     })
 
     it('offers demote to a promoted session whose family still exists', () => {
@@ -169,10 +173,20 @@ describe('task-family projection', () => {
       expect(promotionAction(b, [a, b], placed)).toBeNull()
     })
 
-    it('works for dead retained children: promotion is presentation state', () => {
+    it('works for dead retained children when their stamped row is placeable', () => {
       const root = agent('root')
       const corpse = agent('corpse', 'root', { alive: false, resumable: true })
       expect(promotionAction(corpse, [root, corpse], placed)).toEqual({ kind: 'promote', parent: root })
+    })
+
+    it('blocks an unstamped retained corpse even when a match rule exists', () => {
+      const root = agent('root')
+      const corpse = agent('corpse', 'root', {
+        project_slug: undefined, alive: false, resumable: true,
+      })
+      const action = promotionAction(corpse, [root, corpse], placed)
+      expect(action).toEqual({ kind: 'promote', parent: root, blocked: 'no-project' })
+      expect(promotionCopy(action!).note).toContain('no row of its own')
     })
 
     it('says that promotion keeps ownership and names the demote target', () => {

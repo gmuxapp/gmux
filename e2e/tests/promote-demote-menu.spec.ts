@@ -125,6 +125,9 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await openMenu(page)
     await promotionItem(page).click()
     await expect(page.locator('.toast-message').first()).toContainText('Promote failed')
+    // A rejected request announces only through the error toast, never as a
+    // false success status.
+    await expect(page.locator('[data-promotion-status]')).toHaveText('')
     await openMenu(page)
     const item = promotionItem(page)
     await expect(item).toBeEnabled()
@@ -179,7 +182,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
       }
       return route.continue()
     })
-    const status = page.locator('.session-menu [role="status"]')
+    const status = page.locator('[data-promotion-status]')
     await expect(status).toHaveAttribute('aria-live', 'polite')
     await expect(status).toHaveAttribute('aria-atomic', 'true')
     await expect(status).toHaveText('')
@@ -262,6 +265,35 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     expect(posts).toHaveLength(1)
   })
 
+  test('authoritative target then reversal clears an unmounted pending entry', async ({ page }) => {
+    await openMock(page, '/my-project/claude/~fam2kid')
+    await page.waitForFunction(() => Boolean((window as any).__store))
+    const posts: string[] = []
+    await page.route('**/v1/sessions/fam2kid/promote', async route => {
+      posts.push('promote')
+      await new Promise(() => { /* held: snapshots, not HTTP completion, settle A */ })
+    })
+    await openMenu(page)
+    await promotionItem(page).click()
+    await expect.poll(() => posts).toHaveLength(1)
+
+    // Unmount A, deliver its authoritative target, then an external reversal.
+    await page.locator('.session-item').filter({ hasText: 'promoted research spike' }).click()
+    await page.evaluate(() => {
+      const store = (window as any).__store
+      const current = store.sessions.value as any[]
+      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: true } : s))
+      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: false } : s))
+    })
+    await page.locator('.family-slot').filter({ hasText: 'wire up the protocol' }).click()
+    await expect(page).toHaveURL(/~fam2kid/)
+    await openMenu(page)
+    await expect(promotionItem(page)).toBeEnabled()
+    await expect(promotionItem(page)).toContainText('Promote to root')
+    await expect(promotionItem(page)).not.toContainText('Promoting…')
+    await expect(page.locator('[data-promotion-status]')).toHaveText('Promoted to root.')
+  })
+
   test('a child outside every project offers Promote blocked, with the reason', async ({ page }) => {
     // famBoutside works in /tmp/scratch — no stamp, no matching rule. The
     // daemon has nowhere to place its promoted row (parentage never overrides
@@ -279,11 +311,15 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     })
     await openMenu(page)
     const item = promotionItem(page)
-    await expect(item).toBeDisabled()
+    await expect(item).not.toHaveAttribute('disabled')
+    await expect(item).toHaveAttribute('aria-disabled', 'true')
+    await expect(item).toHaveAttribute('aria-describedby', 'session-promotion-note')
     await expect(item).toContainText('Promote to root')
     await expect(item.locator('.session-menu-action-note'))
       .toHaveText('Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.')
-    await item.click({ force: true })
+    await item.focus()
+    await expect(item).toBeFocused()
+    await item.press('Enter')
     await page.waitForTimeout(200)
     expect(posts).toHaveLength(0)
     // The session itself stays fully reachable through its family.
