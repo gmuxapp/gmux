@@ -10,10 +10,20 @@ A resolved parent relationship is a family edge when its direct parent carries
 Missing parents and children of shells, editors, or terminal helpers remain
 presentation roots and cannot be hidden accidentally.
 
-`gmux session promote|demote` exposes the sticky presentation override.
+`gmux session promote|demote` exposes the sticky presentation override; the
+web UI exposes the same pair in the session's `⋮` menu ("Promote to root" /
+"Return to family", `promotionAction` in `family.ts`), offered only for
+daemon-owned sessions and only while the demote target — the current
+organizational parent — resolves locally as a semantic agent. Promote is
+additionally blocked (visible, disabled, with the reason) when no project
+places the session: an unplaced promoted root has no sidebar row and no
+routable URL, and the daemon deliberately gives parentage no say in project
+matching. Promotion also re-roots the active-subagent budget under the
+promoted session; notification suppression is untouched by both promote and
+reparent — it follows the immutable launch parent (see below).
 `gmux session reparent <id> <parent-id>` (or `--clear`) changes the direct
-parent used by this projection, recursive dismissal, and child-notification
-suppression. Both rows must exist on the local daemon; self-parenting, ancestor
+parent used by this projection, recursive dismissal, and the active-subagent
+budget. Both rows must exist on the local daemon; self-parenting, ancestor
 cycles, and cross-peer reassignment are rejected transactionally.
 
 The daemon derives `semantic_agent` from the existing

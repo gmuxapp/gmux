@@ -768,6 +768,45 @@ session dead — the same path as the UI's kill button.
 gmux kill a3f20187
 ```
 
+### `gmux session`
+
+Change task-family ownership and presentation.
+
+```
+gmux session promote <id>                present a child as a root
+gmux session demote <id>                 restore normal child presentation
+gmux session reparent <id> <parent-id>   assign a new direct parent
+gmux session reparent <id> --clear       clear the direct parent
+```
+
+**Promotion is sticky presentation state, plus one behavioral edge**: the
+session renders as its own root with full root visibility in the session
+list, and its subtree gets its own
+[active-subagent budget](/reference/host-toml/) instead of drawing on the
+family's. Its organizational parent keeps owning it — recursive dismissal
+still reaches the promoted child, and launch provenance is untouched.
+Completion-notification suppression is also unchanged: it follows the
+immutable *launch* parent, so a promoted session's completions are still
+suppressed while the session that launched it is active. Demotion clears
+the override, grouping the session back under its current parent. The web
+UI exposes the same pair in the session's **⋮** menu (**Promote to root** /
+**Return to family** — see [Session families](/using-the-ui/#session-families));
+there it also requires a project that places the session, since an unplaced
+root has no sidebar row to show.
+
+**Reparenting changes ownership itself**: the new parent is what family
+grouping, recursive dismissal, and the active-subagent budget follow from
+then on. Notification suppression does *not* move — it stays with the
+immutable launch parent. Both sessions must exist on this daemon;
+self-parenting, cycles, and cross-peer reassignment are refused.
+Reparenting has no UI equivalent.
+
+```bash
+gmux session promote a3f20187          # the child earns its own sidebar row
+gmux session demote a3f20187           # …and returns to its family
+gmux session reparent a3f20187 9c41b2   # hand the worker to the reviewer
+```
+
 ### `gmux edit [file]`
 
 Open a file in a managed **editor session** — a first-class tab in the UI.

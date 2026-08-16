@@ -27,6 +27,12 @@ The **⋮** menu holds the lifecycle action — **Restart** for a live session, 
 
 To get rid of a session, hover it in the sidebar and click **×**. This stops the session **and every session it launched**, then removes them from the UI — but it isn't data deletion: agent conversations stay in their own tools, and terminal history is kept until gmux eventually cleans it up.
 
+## Session families
+
+Sessions launched by an agent — subagents, test runners, watchers — group **under that agent** in the sidebar: one root row stands in for the whole family, with a counts line for what its members are doing and a family panel (the pill next to the session title) mapping the full tree. Viewing a member shows its ancestry as breadcrumbs in the header.
+
+When a child grows into work you track in its own right, open its **⋮** menu and choose **Promote to root**. The session gets its own sidebar row — placed by its own directory, like any root, so it needs a project that contains that directory (if none does, the menu item says so and stays unavailable until you add one). Its waiting/error states then surface on its own row instead of the family roll-up, and its subtree gets its own [active-subagent budget](/reference/host-toml/). The parent **still owns it**: **×** on the parent still stops and removes the promoted child, who-launched-what is preserved, and completion notifications keep their launch-time behavior — they are suppressed while the session that launched this one is active, promoted or not. The same menu on a promoted session offers **Return to family**, which groups it back under its current parent. Both actions are available only on the host that owns the session, and from the CLI as [`gmux session promote|demote`](/reference/cli/#gmux-session).
+
 ## On your phone
 
 Open the same URL on your phone — or from anywhere via [remote access](/remote-access/). The sidebar slides in from the left (tap **☰**), and a bottom toolbar supplies the keys phones don't have: esc, tab, arrows, word-jump, and send. **ctrl** and **alt** arm for the next key — tap **ctrl**, then `c`, for Ctrl+C. Long-press a link in the terminal to copy or open it.

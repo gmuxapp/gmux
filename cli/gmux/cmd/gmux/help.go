@@ -242,11 +242,13 @@ then escalates to SIGKILL. The session stays listed
   gmux session reparent <id> --clear       clear the direct parent
 
 Promotion is sticky presentation state: it preserves the organizational
-parent while giving the session full root visibility and notification behavior.
+parent while giving the session full root visibility and its own
+active-subagent budget. Completion-notification suppression is unchanged
+either way: it follows the immutable launch parent, not presentation.
 Demotion clears that presentation override.
 
 Reparenting changes the parent used by family grouping, recursive dismissal,
-and child-notification suppression. Both sessions must exist on this daemon;
+and the active-subagent budget. Both sessions must exist on this daemon;
 self-parenting, cycles, and cross-peer reassignment are refused.
 `,
 
