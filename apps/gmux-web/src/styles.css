@@ -1134,17 +1134,23 @@ body {
 /* Activity button: the standard family numbers — everyone beneath the
    root — one segment per state, each dropped at zero. It is a nested
    target inside the family's broad hover area and opens the same panel
-   as the header pill. Its transparent resting border reserves the
-   exact geometry of that pill outline, so hovering does not move a
-   glyph. Numbers sit a touch under the title size. */
+   as the header's trigger, but it does not borrow that pill: the
+   sidebar's design language is flat rows with background hovers, so it
+   takes the member row's exact treatment — one tone above the group's,
+   in both states. Unlike that row it is not a navigation target, so it
+   does not claim the full row: the hit area stops where the numbers
+   do, and the slack to the right stays the root's, like the rest of
+   the entry's slack. Numbers sit a touch under the title size. */
 .family-activity {
-  width: 100%;
-  /* `.family-sub` aligns its content at 29px. The button's own 1px
-     border participates in that offset, so take one pixel back from
-     each horizontal padding rather than moving the family mark. */
-  padding: 1px 7px 4px 28px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  width: fit-content;
+  /* Clip, not spill, at the sidebar's narrowest. */
+  max-width: calc(100% - 21px);
+  /* `.family-sub` puts the glyph column at 29px; reach it with margin
+     + padding (21 + 8) so the gutter stays outside the hit area. */
+  margin: 0 0 2px 21px;
+  padding: 1px 8px 2px 8px;
+  border: 0;
+  border-radius: 3px;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
@@ -1153,12 +1159,12 @@ body {
   font-variant-numeric: tabular-nums;
   text-align: left;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-activity:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-  border-color: var(--border-strong);
+  background: oklch(26% 0.02 250);
+}
+.session-family.selected .family-activity:hover {
+  background: oklch(30% 0.02 250);
 }
 .family-activity:focus-visible {
   outline: 2px solid var(--accent);
