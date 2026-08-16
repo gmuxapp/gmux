@@ -19,8 +19,10 @@ additionally blocked (visible, disabled, with the reason) when no project
 places the session: an unplaced promoted root has no sidebar row and no
 routable URL, and the daemon deliberately gives parentage no say in project
 matching. Promotion also re-roots the active-subagent budget under the
-promoted session; notification suppression is untouched by both promote and
-reparent — it follows the immutable launch parent (see below).
+promoted session; demotion is offered only when the post-demotion family root
+has the same stamp-backed sidebar placement, so an outside-project parent cannot
+strand the selected child. Notification suppression is untouched by both
+promote and reparent — it follows the immutable launch parent (see below).
 `gmux session reparent <id> <parent-id>` (or `--clear`) changes the direct
 parent used by this projection, recursive dismissal, and the active-subagent
 budget. Both rows must exist on the local daemon; self-parenting, ancestor

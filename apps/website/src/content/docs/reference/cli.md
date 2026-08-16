@@ -791,8 +791,11 @@ suppressed while the session that launched it is active. Demotion clears
 the override, grouping the session back under its current parent. The web
 UI exposes the same pair in the session's **⋮** menu (**Promote to root** /
 **Return to family** — see [Session families](/using-the-ui/#session-families));
-there it also requires a project that places the session, since an unplaced
-root has no sidebar row to show.
+there it requires a project-backed sidebar placement for the resulting root
+(or family root), since an unplaced root has no sidebar row or routable URL to
+show. The CLI/API endpoints do not invent a project placement; using them on an
+unplaced root can make the session temporarily unreachable until its placement
+is restored or its presentation flag is reversed.
 
 **Reparenting changes ownership itself**: the new parent is what family
 grouping, recursive dismissal, and the active-subagent budget follow from
