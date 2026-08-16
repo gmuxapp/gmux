@@ -216,7 +216,6 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
         </div>
       </div>
       <div class="main-header-right">
-        <HeaderStatusChip session={session} resuming={resuming} />
         <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
       {showFamily && familyOpen && (
@@ -270,9 +269,8 @@ function FamilyTrigger({ session, open, triggerRef, onToggle }: {
 
 /** Ancestor breadcrumbs in the title row: `●root › ●parent › title`. Each
  * crumb is a live-dotted ghost link; the current session is the plain bold
- * title that follows (its state lives in the status chip). Depth > 3
- * collapses the middle to a static `…` — the panel still shows the full
- * structure. */
+ * title that follows. Depth > 3 collapses the middle to a static `…` — the
+ * panel still shows the full structure. */
 function HeaderCrumbs({ session }: { session: Session }) {
   const ancestors = familyAncestors(session, sessions.value)
   if (ancestors.length === 0) return null
@@ -309,38 +307,6 @@ function HeaderCrumbs({ session }: { session: Session }) {
 function sessionHref(session: Session): string | undefined {
   const path = viewToPath({ kind: 'session', sessionId: session.id }, projects.value, sessions.value)
   return path ? tabHref(path) : undefined
-}
-
-/** Session status in the header — only states that need the header to
- * say something the view doesn't already: Error, and the resume-in-
- * flight busy label (the menu closes on click, so this chip is the
- * visible feedback until the session comes alive). A dead session gets
- * no chip: a replay view is unmistakably an ended session, and the chip
- * only restated it. */
-function HeaderStatusChip({ session, resuming }: {
-  session: Session
-  resuming?: boolean
-}) {
-  if (!session.alive) {
-    if (resuming) {
-      return (
-        <div class="main-header-status working">
-          <span class="session-dot working" style={{ width: 5, height: 5 }} />
-          {lifecycleAction(session, true)?.label ?? 'Resuming…'}
-        </div>
-      )
-    }
-    return null
-  }
-  // A live "Working…" chip is redundant with the session's own dot
-  // indicator, so only the error state earns a header chip here.
-  if (!session.status?.error) return null
-  return (
-    <div class="main-header-status error">
-      <span class="session-dot error" style={{ width: 5, height: 5 }} />
-      Error
-    </div>
-  )
 }
 
 function SessionMenu({ session, onRestart, onResume, resuming }: {
