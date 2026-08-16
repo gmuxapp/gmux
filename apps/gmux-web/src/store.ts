@@ -1851,6 +1851,40 @@ export function demoteSession(sessionId: string): Promise<boolean> {
   return postAction(`/v1/sessions/${sessionId}/demote`, 'Return to family')
 }
 
+// In-flight promote/demote requests, keyed by session id. Module scope, not
+// menu component state: the guard must survive the menu unmounting and the
+// user navigating between sessions (a request stays in flight regardless).
+// Each request carries a generation so a completion can settle only the
+// entry it created — a stale failure from session A must never re-arm
+// session B's pending item, and on one session a late failure of an old
+// request must not clear a newer request's entry.
+export type PromotionPendingEntry = {
+  kind: 'promote' | 'demote'
+  /** The authoritative flag value this request is waiting to observe. */
+  targetPromoted: boolean
+  seq: number
+}
+
+export const promotionPending = signal<ReadonlyMap<string, PromotionPendingEntry>>(new Map())
+let _promotionSeq = 0
+
+export function beginPromotion(id: string, kind: 'promote' | 'demote'): number {
+  const seq = ++_promotionSeq
+  const next = new Map(promotionPending.value)
+  next.set(id, { kind, targetPromoted: kind === 'promote', seq })
+  promotionPending.value = next
+  return seq
+}
+
+/** Drop the entry, but only if it is still the one this request created. */
+export function settlePromotion(id: string, seq: number): void {
+  const entry = promotionPending.value.get(id)
+  if (!entry || entry.seq !== seq) return
+  const next = new Map(promotionPending.value)
+  next.delete(id)
+  promotionPending.value = next
+}
+
 // ── Launch ───────────────────────────────────────────────────────────────────
 
 let _pendingLaunchAt = 0

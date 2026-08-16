@@ -1,6 +1,7 @@
-import type { Session } from './types'
+import type { ProjectItem, Session } from './types'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
+import { matchSession } from './projects'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -156,35 +157,70 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
 /** The one promotion mutation this session admits right now, or null.
  *
  * Presentation promotion is sticky, user-authored state on the session
- * (ADR 0026 §8): promoting breaks only the presentation edge — the
+ * (ADR 0026 §8): promoting breaks the presentation edge — the
  * organizational parent keeps owning the session — and demoting rejoins
- * the *current* organizational parent's presentation family. Eligibility
- * therefore mirrors the projection's own edge rule (`familyIndex`), so the
+ * the *current* organizational parent's presentation family. (Not *only*
+ * presentation: the daemon also re-roots the active-subagent budget under
+ * the promoted session, and notification suppression stays with the
+ * immutable launch parent either way — see the docs.) Eligibility
+ * mirrors the projection's own edge rule (`familyIndex`), so the
  * menu can never offer a mutation whose result the sidebar wouldn't show:
  *
  *  - peer-projected sessions (network peers and Local/devcontainer peers
  *    alike) get nothing: the daemon refuses promote/demote for sessions it
  *    doesn't own (`local_only`), so offering the verb would be a lie;
  *  - a family child (cycle-safe, parent local and a semantic agent, not
- *    already promoted) can be promoted;
+ *    already promoted) can be promoted — but only if the promoted row
+ *    would exist somewhere: a session no project places (no stamp, no
+ *    matching rule) renders nowhere once it stops presenting under its
+ *    root, and its URL stops resolving. The daemon deliberately has no
+ *    placement for such a row (parentage never overrides project
+ *    matching, ADR 0026 §8), so instead of promoting into nowhere the
+ *    action is offered `blocked`, with the reason — not hidden, so the
+ *    limitation is discoverable and fixable (add a project);
  *  - a promoted session can return to its family only while that family
  *    still exists: the current parent resolves locally and is a semantic
  *    agent. A deleted parent (deletion repair cleared the edge) or a
  *    non-agent parent leaves the flag inert and the action hidden —
- *    demoting would visibly do nothing.
+ *    demoting would visibly do nothing. Demote is never blocked on
+ *    placement: it restores the presentation that made the session
+ *    reachable in the first place.
  *
  * `parent` is the session the copy names: the owner that keeps the child
  * after a promote, the family a demote rejoins. */
 export type PromotionAction =
-  | { readonly kind: 'promote'; readonly parent: Session }
+  | { readonly kind: 'promote'; readonly parent: Session; readonly blocked?: 'no-project' }
   | { readonly kind: 'demote'; readonly parent: Session }
 
-export function promotionAction(session: Session, source: FamilySource): PromotionAction | null {
+/** Whether the session would remain addressable after it becomes its own
+ * presentation root. Stamps are only useful when this viewer has the matching
+ * local project; otherwise resolveViewFromPath accepts no such folder and the
+ * sidebar cannot render it. A disclaimed session may be adopted by a local
+ * match rule, after which the daemon's normal reconciliation supplies the
+ * stamp. */
+function hasRootPlacement(session: Session, projects: ProjectItem[]): boolean {
+  if (session.project_slug) {
+    return projects.some(project => !project.peer && project.slug === session.project_slug)
+  }
+  return matchSession(session, projects) !== null
+}
+
+export function promotionAction(
+  session: Session,
+  source: FamilySource,
+  projects: ProjectItem[],
+): PromotionAction | null {
   if (session.peer) return null
   const index = indexFor(source)
   if (index.childIds.has(session.id)) {
     const parent = index.byId.get(session.parent_session_id!)
-    return parent ? { kind: 'promote', parent } : null
+    if (!parent) return null
+    // Same placement question the router asks (`viewToPath`): a stamp from
+    // the daemon, or a viewer match rule adopting the disclaimed session.
+    const placeable = hasRootPlacement(session, projects)
+    return placeable
+      ? { kind: 'promote', parent }
+      : { kind: 'promote', parent, blocked: 'no-project' }
   }
   if (session.promoted_to_root !== true) return null
   if (!session.parent_session_id || session.parent_session_id === session.id) return null
@@ -200,6 +236,12 @@ export function promotionAction(session: Session, source: FamilySource): Promoti
  * resuming labels): the request left, the authoritative snapshot hasn't
  * flipped the projection yet, and the item is busy rather than offerable. */
 export function promotionCopy(action: PromotionAction, pending = false): { label: string; note: string } {
+  if (action.kind === 'promote' && action.blocked === 'no-project') {
+    return {
+      label: 'Promote to root',
+      note: 'Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.',
+    }
+  }
   if (pending) {
     return action.kind === 'promote'
       ? { label: 'Promoting…', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }

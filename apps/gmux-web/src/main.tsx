@@ -33,6 +33,7 @@ import {
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession, promoteSession, demoteSession,
+  promotionPending, beginPromotion, settlePromotion,
   sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
@@ -369,7 +370,13 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // the terminal cancels the synthesized mouse cascade on its touch
   // gestures, so a tap into the terminal would otherwise leave this menu
   // open on top of it (see FamilyDrawer for the same fix).
-  useEffect(() => {
+  //
+  // useLayoutEffect, not useEffect: a passive effect is deferred to a later
+  // task, so a fast keyboard user's very first Escape after opening could
+  // arrive before the listener existed and leave the menu stranded open.
+  // The layout effect attaches synchronously with the commit that mounts
+  // the dropdown, so no keystroke can slip through the gap.
+  useLayoutEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
@@ -417,18 +424,52 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // is deliberately the only surface carrying these verbs: it exists for
   // every session view (desktop and mobile, alive and dead), and a promoted
   // session — no longer a family member — has no family panel to demote from.
-  const promotion = promotionAction(session, sessions.value)
+  const promotion = promotionAction(session, sessions.value, projects.value)
   // In-flight guard: the menu closes on activation, but reopening it before
   // the authoritative snapshot lands would offer the same verb again — a
-  // second POST per click (reproduced in e2e). Pending sticks until the
-  // snapshot flips the offered action (kind change / ineligibility) or the
-  // request fails; the item meanwhile shows the busy label, disabled, the
-  // same convention as the resuming lifecycle action.
-  const [promotionPending, setPromotionPending] = useState<'promote' | 'demote' | null>(null)
+  // second POST per click (reproduced in e2e). The entry lives in the
+  // module-level map (survives navigation), is keyed by session, and speaks
+  // only for the action kind it started: once the snapshot flips the offered
+  // action, the entry is spent. Failures settle their own generation — and
+  // nobody else's — re-arming the item beside the failure toast.
+  const pendingEntry = promotionPending.value.get(session.id)
+  const promotionInFlight = !!promotion && pendingEntry?.kind === promotion.kind
+  const promotionBlocked = promotion?.kind === 'promote' && promotion.blocked !== undefined
+  const promotionWords = promotion ? promotionCopy(promotion, promotionInFlight) : null
+
+  // Screen-reader status for the in-flight window and its success: on
+  // activation the dropdown (and the only visible "Promoting…" text)
+  // unmounts, so a live status region carries the state instead. Success is
+  // observed as the snapshot flipping the offered action while this menu is
+  // still on the same session; failures say nothing here — the error toast's
+  // own live region announces them, and doubling it would be noise.
+  const [promotionOutcome, setPromotionOutcome] = useState<string | null>(null)
+  const announcedSessionRef = useRef(session.id)
   useEffect(() => {
-    setPromotionPending(null)
-  }, [session.id, promotion?.kind])
-  const promotionWords = promotion ? promotionCopy(promotion, promotionPending !== null) : null
+    const sameSession = announcedSessionRef.current === session.id
+    announcedSessionRef.current = session.id
+    if (!sameSession) setPromotionOutcome(null)
+    const entry = promotionPending.peek().get(session.id)
+    if (!entry) return
+    if (!promotion || promotion.kind !== entry.kind) {
+      const reachedTarget = session.promoted_to_root === entry.targetPromoted
+      settlePromotion(session.id, entry.seq)
+      // A parent disappearing can make the action unavailable without the
+      // request having succeeded. Only announce success when the authoritative
+      // flag reached this request's target; otherwise leave failure/repair to
+      // the ordinary daemon/error surfaces.
+      if (sameSession && reachedTarget) {
+        setPromotionOutcome(entry.kind === 'promote' ? 'Promoted to root.' : 'Returned to family.')
+      }
+    }
+  }, [
+    session.id,
+    session.parent_session_id,
+    session.promoted_to_root,
+    promotion?.kind,
+    promotion?.kind === 'promote' ? promotion.blocked : undefined,
+    promotion?.parent.id,
+  ])
 
   return (
     <div class="session-menu" ref={menuRef}>
@@ -442,12 +483,23 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
         // button in the app carries its name the same way).
         aria-label="Session actions"
         aria-expanded={open}
+        aria-controls="session-menu-dropdown"
       >
         <span class="session-menu-icon">⋮</span>
         {staleKind && <span class="session-menu-badge" />}
       </button>
+      {/* Pending/success status for promote/demote. Lives outside the
+        * dropdown so it survives the close-on-activation, and is sr-only:
+        * sighted feedback is the sidebar row moving / the reopened item's
+        * busy label. Failures are deliberately absent — the error toast's
+        * live region already announces those once. */}
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {promotionInFlight && pendingEntry
+          ? (pendingEntry.kind === 'promote' ? 'Promoting to root…' : 'Returning to family…')
+          : promotionOutcome ?? ''}
+      </span>
       {open && (
-        <div class="session-menu-dropdown">
+        <div class="session-menu-dropdown" id="session-menu-dropdown">
           {canFind && (
             <button
               class="session-menu-action"
@@ -469,20 +521,24 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
           {promotion && promotionWords && (
             <button
               class="session-menu-action session-menu-promotion"
-              disabled={promotionPending !== null}
+              disabled={promotionInFlight || promotionBlocked}
               onClick={() => {
+                if (promotionInFlight || promotionBlocked) return
                 setOpen(false)
                 // Focus back to the trigger: the activated item unmounts with
                 // the dropdown, and a keyboard user shouldn't land on <body>.
                 triggerRef.current?.focus()
-                setPromotionPending(promotion.kind)
+                setPromotionOutcome(null)
+                const id = session.id
+                const seq = beginPromotion(id, promotion.kind)
                 void (promotion.kind === 'promote'
-                  ? promoteSession(session.id)
-                  : demoteSession(session.id)
+                  ? promoteSession(id)
+                  : demoteSession(id)
                 ).then(ok => {
-                  // Rejection re-arms the item beside its failure toast; on
-                  // success the snapshot's kind flip clears it instead.
-                  if (!ok) setPromotionPending(null)
+                  // Rejection re-arms exactly the entry this request created
+                  // (generation-checked), beside its failure toast; success
+                  // leaves the entry until the snapshot's kind flip spends it.
+                  if (!ok) settlePromotion(id, seq)
                 })
               }}
             >
