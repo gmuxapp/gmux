@@ -2264,20 +2264,6 @@ body {
   flex: 0 1 auto;
 }
 
-.main-header-status {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  flex-shrink: 0;
-  color: var(--text-secondary);
-}
-
-.main-header-status.working { color: var(--accent); }
-.main-header-status.error   { color: var(--status-error); }
-
 /* Family trigger: a ghost icon button in the header's one control
  * language (borderless, bg-hover, sized to match .session-menu-trigger).
  * The corner badge repeats the family's aggregated dot state so
@@ -3202,8 +3188,7 @@ body {
     min-height: var(--header-height);
     padding-top: 4px;
     padding-bottom: 4px;
-    /* Two-row left column: the status chip and ⋮ belong on the title row,
-     * not floating half a row above it. */
+    /* The ⋮ belongs on the title row, not floating half a row above it. */
     align-items: flex-end;
   }
   .main-header:has(.header-crumbs) .main-header-left {
@@ -3232,10 +3217,6 @@ body {
     border-right: 0;
     border-top: 0;
     border-radius: 0;
-  }
-
-  .main-header-status {
-    font-size: 11px;
   }
 
   .terminal-container .xterm {
