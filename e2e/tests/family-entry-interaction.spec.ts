@@ -24,36 +24,36 @@ const familyEntry = (page: import('@playwright/test').Page, title: string) =>
   page.locator('.session-family').filter({ hasText: title })
 
 test.describe('sidebar family entry', () => {
-  test('the slack around the rows selects the root, but declines link gestures', async ({ page }) => {
+  test('the indicator is a nested button that opens the family panel', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
     const entry = familyEntry(page, 'build watcher agent')
-    const slack = entry.locator('.family-activity')
+    const indicator = entry.locator('.family-activity')
 
-    // 1. An ordinary click on the counts line lands on the root: the
-    //    whole group is the root's hit area.
-    await slack.click()
+    await expect(indicator).toHaveJSProperty('tagName', 'BUTTON')
+    await expect(indicator).toHaveAttribute('aria-controls', 'agent-family-drawer')
+
+    // It remains inside the family's broad hit area, but hovering the
+    // nested target gives it the header button's pill treatment.
+    await indicator.hover()
+    const sidebarPill = await indicator.evaluate(el => {
+      const s = getComputedStyle(el)
+      return { borderRadius: s.borderRadius, borderColor: s.borderColor, background: s.backgroundColor }
+    })
+    expect(sidebarPill.borderRadius).toBe('999px')
+    expect(sidebarPill.borderColor).not.toBe('rgba(0, 0, 0, 0)')
+    expect(sidebarPill.background).not.toBe('rgba(0, 0, 0, 0)')
+
+    await indicator.click()
     await expect(page).toHaveURL(/~famBroot/)
+    await expect(page.locator('#agent-family-drawer')).toBeVisible()
 
-    // 2. A modified click is a link gesture (new tab, download, range
-    //    select). The slack is not a link, so it declines rather than
-    //    quietly doing something else.
-    await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    await familyEntry(page, 'build watcher agent').locator('.family-activity').click({ modifiers: ['Control'] })
-    await expect(page).toHaveURL(/~fam2kid/)
-
-    // 3. A click that ends a text selection wants the text, not a
-    //    navigation.
-    const line = familyEntry(page, 'build watcher agent').locator('.family-activity')
-    const box = (await line.boundingBox())!
-    await page.mouse.move(box.x + 4, box.y + box.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(box.x + box.width - 8, box.y + box.height / 2, { steps: 10 })
-    await page.mouse.up()
-    await expect(page).toHaveURL(/~fam2kid/)
-
-    // 4. The rows themselves still own their own clicks.
-    await familyEntry(page, 'orchestrator').locator('.family-slot').click()
-    await expect(page).toHaveURL(/~fam2kid/)
+    // It is a real button rather than a clickable div: keyboard users
+    // can close the panel, return to it, and open it with Enter.
+    await page.locator('.family-trigger').click()
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
+    await indicator.focus()
+    await page.keyboard.press('Enter')
+    await expect(page.locator('#agent-family-drawer')).toBeVisible()
   })
 
   test('a drop anywhere on the entry reorders exactly once', async ({ page }) => {
@@ -145,7 +145,7 @@ test.describe('the family line and the panel tally', () => {
 
   test("the panel's tally names states in the turn model's words", async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    await page.locator('.family-trigger').click()
     const counts = page.locator('.family-counts')
     await counts.waitFor()
 
@@ -190,7 +190,7 @@ test.describe('the family line and the panel tally', () => {
     // Standing on an `active` member, so the `error` filter excludes the
     // very row you're on — the case that has to keep working.
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    await page.locator('.family-trigger').click()
     const counts = page.locator('.family-counts')
     await counts.waitFor()
     const rows = page.locator('.family-row')
@@ -230,7 +230,7 @@ test.describe('the family line and the panel tally', () => {
 
   test('each filter offers its own bulk action, and none is ambient', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    await page.locator('.family-trigger').click()
     const counts = page.locator('.family-counts')
     await counts.waitFor()
     const tally = (label: string) => counts.locator('.family-count').filter({ hasText: label })
@@ -298,7 +298,7 @@ test.describe('the family line and the panel tally', () => {
     // filter, not the viewport — so the count in the label is the only
     // honest statement of what the click will touch.
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    await page.locator('.family-trigger').click()
     const counts = page.locator('.family-counts')
     await counts.waitFor()
     const tally = (label: string) => counts.locator('.family-count').filter({ hasText: label })
@@ -359,7 +359,7 @@ test.describe('the family line and the panel tally', () => {
     // member the tally counts — and the `waiting` filter shows —
     // unmarked on screen.
     await openMockSidebar(page, '/my-project/claude/~famBroot')
-    await page.locator('[aria-controls="agent-family-drawer"]').first().click()
+    await page.locator('.family-trigger').click()
     const glyphs = await page.locator('.family-row').evaluateAll(rows => rows.map(row => ({
       title: row.querySelector('.family-row-title')?.textContent ?? '',
       glyph: row.querySelector('.family-proc')?.className ?? null,

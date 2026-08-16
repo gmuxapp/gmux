@@ -15,6 +15,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
+import { familyDrawerRequest } from './family-drawer-state'
 import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyIcon } from './family-icon'
 
@@ -187,9 +188,16 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   const familyTriggerRef = useRef<HTMLButtonElement>(null)
   const closeFamily = useCallback(() => { setFamilyOpen(false) }, [])
   const showFamily = session ? hasFamily(session, sessions.value) : false
+  const requestedFamily = familyDrawerRequest.value
   useEffect(() => {
     if (!showFamily) setFamilyOpen(false)
   }, [showFamily])
+  useEffect(() => {
+    if (!session || !requestedFamily) return
+    if (familyRoot(session, sessions.value).id !== requestedFamily) return
+    setFamilyOpen(true)
+    familyDrawerRequest.value = null
+  }, [session?.id, requestedFamily])
 
   if (!session) {
     return (

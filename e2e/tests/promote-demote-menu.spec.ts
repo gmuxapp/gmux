@@ -350,7 +350,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     // one derived from the standard family numbers, and the promoted member
     // is out of the tree (it starts its own family).
     await openMock(page, '/my-project/claude/~famAkid')
-    await page.locator('[aria-controls="agent-family-drawer"]').click()
+    await page.locator('.family-trigger').click()
     await page.locator('.family-counts').waitFor()
     const titles = await page.locator('.family-row .family-row-title').allTextContents()
     expect(titles.some(t => t.includes('promoted research spike'))).toBe(false)
