@@ -26,6 +26,7 @@ import { installCopySession } from './mock-data/export-session'
 import { installVersionWatch } from './version-watch'
 import { ToastHost } from './toast-host'
 import { pushError } from './toasts'
+import { copyText } from './clipboard'
 
 import {
   sessions, connState, selected, selectedId, view, health, peers, projects,
@@ -130,19 +131,7 @@ class ErrorBoundary extends Component<
   }
 
   copyReport = async () => {
-    // Clipboard-then-textarea fallback, matching input-diagnostics so the
-    // copy works in non-secure contexts / older browsers too.
-    try {
-      await navigator.clipboard.writeText(this.state.report)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = this.state.report
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-    }
-    this.setState({ copied: true })
+    if (await copyText(this.state.report)) this.setState({ copied: true })
   }
 
   render() {
@@ -326,6 +315,9 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   resuming?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  // Copy feedback for the ID row; the trigger resets it on open, so a
+  // reopened menu offers the copy fresh instead of a stale check.
+  const [copied, setCopied] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const healthVal = health.value
@@ -417,7 +409,7 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
       <button
         ref={triggerRef}
         class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
-        onClick={() => setOpen(!open)}
+        onClick={() => { if (!open) setCopied(false); setOpen(!open) }}
         title="Session actions"
         // The visible content is a bare "⋮" glyph, which is also what a
         // screen reader would announce without this (every other icon
@@ -444,22 +436,12 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
               Find in terminal
             </button>
           )}
-          {action && actionHandler && (
-            <button
-              class={`session-menu-action${showStale ? ' stale' : ''}`}
-              disabled={action.disabled}
-              onClick={() => { setOpen(false); actionHandler() }}
-            >
-              {action.label}
-              {showStale && <span class="session-menu-action-tag">outdated</span>}
-            </button>
-          )}
           {promotion && promotionWords && (
             <button
               class="session-menu-action session-menu-promotion"
               disabled={promotionInFlight}
               aria-disabled={promotionBlocked ? 'true' : undefined}
-              aria-describedby="session-promotion-note"
+              aria-describedby={promotionWords.note ? 'session-promotion-note' : undefined}
               onClick={e => {
                 if (promotionInFlight || promotionBlocked) {
                   e.preventDefault()
@@ -483,11 +465,45 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
               }}
             >
               {promotionWords.label}
-              <span id="session-promotion-note" class="session-menu-action-note">{promotionWords.note}</span>
+              {promotionWords.note && (
+                <span id="session-promotion-note" class="session-menu-action-note">{promotionWords.note}</span>
+              )}
+            </button>
+          )}
+          {/* Lifecycle last: Restart/Resume is the heaviest verb here, and a
+            * fixed bottom slot keeps it out of the muscle-memory path of the
+            * lighter actions above. */
+          }
+          {action && actionHandler && (
+            <button
+              class={`session-menu-action${showStale ? ' stale' : ''}`}
+              disabled={action.disabled}
+              onClick={() => { setOpen(false); actionHandler() }}
+            >
+              {action.label}
+              {showStale && <span class="session-menu-action-tag">outdated</span>}
             </button>
           )}
           {(canFind || (action && actionHandler) || promotion) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
+          <div class="session-menu-row">
+            <span class="session-menu-label">ID</span>
+            <span class="session-menu-value session-menu-id">
+              {session.id}
+              <button
+                class="session-menu-copy"
+                aria-label="Copy session ID"
+                title="Copy session ID"
+                onClick={() => {
+                  // The check reports the write, not the wish: over plain
+                  // http the async API is missing entirely.
+                  void copyText(session.id).then(ok => { if (ok) setCopied(true) })
+                }}
+              >
+                {copied ? <IconCheck /> : <IconCopy />}
+              </button>
+            </span>
+          </div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
             <span class="session-menu-value">
@@ -512,6 +528,18 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
     </div>
   )
 }
+
+const IconCopy = () => (
+  <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+    <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" />
+    <path d="M9.5 3V2.5A1.5 1.5 0 0 0 8 1H3.5A1.5 1.5 0 0 0 2 2.5V8a1.5 1.5 0 0 0 1.5 1.5H3" />
+  </svg>
+)
+const IconCheck = () => (
+  <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 7.5 5.5 10.5 11.5 3.5" />
+  </svg>
+)
 
 // ── Mobile nav icons ─────────────────────────────────────────────────────────
 

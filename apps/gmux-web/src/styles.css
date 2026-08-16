@@ -2697,6 +2697,31 @@ body {
   color: var(--text-secondary);
 }
 
+/* The ID row: monospace value with a minimal inline copy button — icon
+   only, ghost until hovered, sized to disappear into the row. */
+.session-menu-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-menu-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.session-menu-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .session-menu-value.stale {
   color: oklch(80% 0.15 65);
 }
