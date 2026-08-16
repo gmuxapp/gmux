@@ -1,7 +1,7 @@
 import type { ProjectItem, Session } from './types'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
-import { matchSession } from './projects'
+import { sidebarProjectForSession } from './projects'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -170,39 +170,31 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
  *    alike) get nothing: the daemon refuses promote/demote for sessions it
  *    doesn't own (`local_only`), so offering the verb would be a lie;
  *  - a family child (cycle-safe, parent local and a semantic agent, not
- *    already promoted) can be promoted — but only if the promoted row
- *    would exist somewhere: a session no project places (no stamp, no
- *    matching rule) renders nowhere once it stops presenting under its
- *    root, and its URL stops resolving. The daemon deliberately has no
- *    placement for such a row (parentage never overrides project
- *    matching, ADR 0026 §8), so instead of promoting into nowhere the
- *    action is offered `blocked`, with the reason — not hidden, so the
- *    limitation is discoverable and fixable (add a project);
- *  - a promoted session can return to its family only while that family
- *    still exists: the current parent resolves locally and is a semantic
- *    agent. A deleted parent (deletion repair cleared the edge) or a
- *    non-agent parent leaves the flag inert and the action hidden —
- *    demoting would visibly do nothing. Demote is never blocked on
- *    placement: it restores the presentation that made the session
- *    reachable in the first place.
+ *    already promoted) can be promoted — but only if the promoted row has
+ *    the same real stamp-backed placement the sidebar uses. A matching rule
+ *    alone is not enough: `buildProjectFolders` buckets only stamped rows,
+ *    including retained-dead sessions. The daemon deliberately has no
+ *    parentage fallback for project placement (ADR 0026 §8), so an unstamped
+ *    or unknown-project child gets a visible blocked action instead of a
+ *    mutation that strands it;
+ *  - a promoted session can return to its family only while that family still
+ *    exists and the *post-demotion presentation root* has that same placement.
+ *    A parent outside every project is not a safe demote target, even if the
+ *    promoted child itself is placed. Deleted/non-agent parents leave the flag
+ *    inert and hidden; an existing but unplaced family root is blocked with a
+ *    reason.
  *
  * `parent` is the session the copy names: the owner that keeps the child
  * after a promote, the family a demote rejoins. */
 export type PromotionAction =
   | { readonly kind: 'promote'; readonly parent: Session; readonly blocked?: 'no-project' }
-  | { readonly kind: 'demote'; readonly parent: Session }
+  | { readonly kind: 'demote'; readonly parent: Session; readonly blocked?: 'no-project' }
 
-/** Whether the session would remain addressable after it becomes its own
- * presentation root. Stamps are only useful when this viewer has the matching
- * local project; otherwise resolveViewFromPath accepts no such folder and the
- * sidebar cannot render it. A disclaimed session may be adopted by a local
- * match rule, after which the daemon's normal reconciliation supplies the
- * stamp. */
-function hasRootPlacement(session: Session, projects: ProjectItem[]): boolean {
-  if (session.project_slug) {
-    return projects.some(project => !project.peer && project.slug === session.project_slug)
-  }
-  return matchSession(session, projects) !== null
+/** The exact stamp-backed predicate used by `buildProjectFolders` for local
+ * rows. Routing can serialize a disclaimed match, but that is not enough for
+ * this menu: after a promotion/demotion the user must have a sidebar row too. */
+function hasSidebarPlacement(session: Session, projects: ProjectItem[]): boolean {
+  return sidebarProjectForSession(session, projects) !== null
 }
 
 export function promotionAction(
@@ -215,9 +207,7 @@ export function promotionAction(
   if (index.childIds.has(session.id)) {
     const parent = index.byId.get(session.parent_session_id!)
     if (!parent) return null
-    // Same placement question the router asks (`viewToPath`): a stamp from
-    // the daemon, or a viewer match rule adopting the disclaimed session.
-    const placeable = hasRootPlacement(session, projects)
+    const placeable = hasSidebarPlacement(session, projects)
     return placeable
       ? { kind: 'promote', parent }
       : { kind: 'promote', parent, blocked: 'no-project' }
@@ -226,7 +216,17 @@ export function promotionAction(
   if (!session.parent_session_id || session.parent_session_id === session.id) return null
   const parent = index.byId.get(session.parent_session_id)
   if (!parent || parent.semantic_agent !== true || parent.peer) return null
-  return { kind: 'demote', parent }
+
+  // Test the projection that the daemon will produce after clearing this
+  // session's sticky root flag. The current presentation root is necessarily
+  // the session itself, so checking only the promoted child's stamp misses the
+  // symmetric failure where its organizational parent is unplaced.
+  const demotedSessions = Array.from(index.byId.values(), candidate =>
+    candidate.id === session.id ? { ...candidate, promoted_to_root: false } : candidate)
+  const returnedRoot = familyRoot(session, demotedSessions)
+  return hasSidebarPlacement(returnedRoot, projects)
+    ? { kind: 'demote', parent }
+    : { kind: 'demote', parent, blocked: 'no-project' }
 }
 
 /** The words the menu says for a promotion action. Centralized so every
@@ -236,10 +236,12 @@ export function promotionAction(
  * resuming labels): the request left, the authoritative snapshot hasn't
  * flipped the projection yet, and the item is busy rather than offerable. */
 export function promotionCopy(action: PromotionAction, pending = false): { label: string; note: string } {
-  if (action.kind === 'promote' && action.blocked === 'no-project') {
+  if (action.blocked === 'no-project') {
     return {
-      label: 'Promote to root',
-      note: 'Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.',
+      label: action.kind === 'promote' ? 'Promote to root' : 'Return to family',
+      note: action.kind === 'promote'
+        ? 'Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.'
+        : 'Unavailable: the family root has no project-backed sidebar row. Add one in Settings → Projects before returning this session to its family.',
     }
   }
   if (pending) {

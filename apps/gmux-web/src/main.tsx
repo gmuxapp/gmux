@@ -33,7 +33,8 @@ import {
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession, promoteSession, demoteSession,
-  promotionPending, beginPromotion, settlePromotion,
+  promotionPending, beginPromotion, settlePromotion, promotionAnnouncements,
+  acknowledgePromotionAnnouncement, isPromotionAnnouncementDelivered,
   sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
@@ -434,42 +435,8 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // nobody else's — re-arming the item beside the failure toast.
   const pendingEntry = promotionPending.value.get(session.id)
   const promotionInFlight = !!promotion && pendingEntry?.kind === promotion.kind
-  const promotionBlocked = promotion?.kind === 'promote' && promotion.blocked !== undefined
+  const promotionBlocked = promotion?.blocked !== undefined
   const promotionWords = promotion ? promotionCopy(promotion, promotionInFlight) : null
-
-  // Screen-reader status for the in-flight window and its success: on
-  // activation the dropdown (and the only visible "Promoting…" text)
-  // unmounts, so a live status region carries the state instead. Success is
-  // observed as the snapshot flipping the offered action while this menu is
-  // still on the same session; failures say nothing here — the error toast's
-  // own live region announces them, and doubling it would be noise.
-  const [promotionOutcome, setPromotionOutcome] = useState<string | null>(null)
-  const announcedSessionRef = useRef(session.id)
-  useEffect(() => {
-    const sameSession = announcedSessionRef.current === session.id
-    announcedSessionRef.current = session.id
-    if (!sameSession) setPromotionOutcome(null)
-    const entry = promotionPending.peek().get(session.id)
-    if (!entry) return
-    if (!promotion || promotion.kind !== entry.kind) {
-      const reachedTarget = session.promoted_to_root === entry.targetPromoted
-      settlePromotion(session.id, entry.seq)
-      // A parent disappearing can make the action unavailable without the
-      // request having succeeded. Only announce success when the authoritative
-      // flag reached this request's target; otherwise leave failure/repair to
-      // the ordinary daemon/error surfaces.
-      if (sameSession && reachedTarget) {
-        setPromotionOutcome(entry.kind === 'promote' ? 'Promoted to root.' : 'Returned to family.')
-      }
-    }
-  }, [
-    session.id,
-    session.parent_session_id,
-    session.promoted_to_root,
-    promotion?.kind,
-    promotion?.kind === 'promote' ? promotion.blocked : undefined,
-    promotion?.parent.id,
-  ])
 
   return (
     <div class="session-menu" ref={menuRef}>
@@ -493,11 +460,6 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
         * sighted feedback is the sidebar row moving / the reopened item's
         * busy label. Failures are deliberately absent — the error toast's
         * live region already announces those once. */}
-      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {promotionInFlight && pendingEntry
-          ? (pendingEntry.kind === 'promote' ? 'Promoting to root…' : 'Returning to family…')
-          : promotionOutcome ?? ''}
-      </span>
       {open && (
         <div class="session-menu-dropdown" id="session-menu-dropdown">
           {canFind && (
@@ -521,14 +483,18 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
           {promotion && promotionWords && (
             <button
               class="session-menu-action session-menu-promotion"
-              disabled={promotionInFlight || promotionBlocked}
-              onClick={() => {
-                if (promotionInFlight || promotionBlocked) return
+              disabled={promotionInFlight}
+              aria-disabled={promotionBlocked ? 'true' : undefined}
+              aria-describedby="session-promotion-note"
+              onClick={e => {
+                if (promotionInFlight || promotionBlocked) {
+                  e.preventDefault()
+                  return
+                }
                 setOpen(false)
                 // Focus back to the trigger: the activated item unmounts with
                 // the dropdown, and a keyboard user shouldn't land on <body>.
                 triggerRef.current?.focus()
-                setPromotionOutcome(null)
                 const id = session.id
                 const seq = beginPromotion(id, promotion.kind)
                 void (promotion.kind === 'promote'
@@ -543,7 +509,7 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
               }}
             >
               {promotionWords.label}
-              <span class="session-menu-action-note">{promotionWords.note}</span>
+              <span id="session-promotion-note" class="session-menu-action-note">{promotionWords.note}</span>
             </button>
           )}
           {(canFind || (action && actionHandler) || promotion) && <div class="session-menu-divider" />}
@@ -701,6 +667,49 @@ function MobileTerminalBar({
       )}
       <button class="mobile-bottom-action send-btn mk-send" disabled={!canSend} onClick={() => sendKey('\r')} title={altArmed ? 'Send Alt+Enter' : 'Send'}><span class="mkey-face"><IconSend /></span></button>
     </div>
+  )
+}
+
+// ── Promotion status ──
+
+/** Stable announcement host: unlike SessionMenu, this survives the selected
+ * session's route/header remount during a promote or demote snapshot. The
+ * store owns reconciliation; this component owns only one screen-reader
+ * delivery, keyed by session and request token. */
+function PromotionAnnouncementHost() {
+  const id = selectedId.value
+  const pending = id ? promotionPending.value.get(id) : undefined
+  const announcement = id ? promotionAnnouncements.value.get(id) : undefined
+  const [message, setMessage] = useState('')
+  const lastSessionIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!id) {
+      // URL replacement can transiently clear selectedId while the session
+      // remains the same. Keep that identity so its already-delivered result
+      // can survive the route remount without being re-announced.
+      setMessage('')
+      return
+    }
+    const sameSession = lastSessionIdRef.current === id
+    lastSessionIdRef.current = id
+    if (pending) {
+      setMessage(pending.kind === 'promote' ? 'Promoting to root…' : 'Returning to family…')
+      return
+    }
+    if (announcement) {
+      const delivered = isPromotionAnnouncementDelivered(id, announcement.seq)
+      if (!delivered || sameSession) setMessage(announcement.message)
+      if (!delivered) acknowledgePromotionAnnouncement(id, announcement.seq)
+      return
+    }
+    setMessage('')
+  }, [id, pending?.kind, pending?.seq, announcement?.seq])
+
+  return (
+    <span class="sr-only" data-promotion-status role="status" aria-live="polite" aria-atomic="true">
+      {message}
+    </span>
   )
 }
 
@@ -1059,6 +1068,7 @@ render(
       </LocationProvider>
     </ErrorBoundary>
     <ToastHost />
+    <PromotionAnnouncementHost />
   </Fragment>,
   document.getElementById('app')!,
 )

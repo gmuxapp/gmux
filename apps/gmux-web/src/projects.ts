@@ -59,6 +59,19 @@ export function isSessionVisibleInProject(session: Session, _project: ProjectIte
  * (~/... form), so string comparison works without $HOME expansion.
  * Does not check rule.hosts (host scoping is server-side only).
  */
+/** Return the local catalog entry that can bucket a stamped session into a
+ * sidebar folder. This deliberately follows `buildProjectFolders`: a
+ * disclaimed session may be URL-matchable, but it has no sidebar row until the
+ * daemon stamps it. Promotion eligibility must use this predicate rather than
+ * a looser routing-only match. */
+export function sidebarProjectForSession(
+  session: Session,
+  projects: ProjectItem[],
+): ProjectItem | null {
+  if (!session.project_slug || session.peer) return null
+  return projects.find(project => !project.peer && project.slug === session.project_slug) ?? null
+}
+
 export function matchSession(
   session: Session,
   projects: ProjectItem[],

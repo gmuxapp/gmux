@@ -2599,9 +2599,15 @@ body {
   opacity: 0.6;
   cursor: progress;
 }
-.session-menu-action:disabled:hover {
+.session-menu-action:disabled:hover,
+.session-menu-action[aria-disabled='true']:hover {
   background: none;
   color: var(--text-secondary);
+}
+
+.session-menu-action[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .session-menu-action.stale {
