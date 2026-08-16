@@ -15,7 +15,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyAncestors, familyRoot, familySegments, hasFamily } from './family'
+import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyIcon } from './family-icon'
 
 import type { Session } from './types'
@@ -32,7 +32,9 @@ import {
   keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch, urlHash,
   initStore, setNavigate, navigate, navigateToSession,
-  dismissSession, resumeSession, restartSession,
+  dismissSession, resumeSession, restartSession, promoteSession, demoteSession,
+  promotionPending, beginPromotion, settlePromotion, promotionAnnouncements,
+  acknowledgePromotionAnnouncement, isPromotionAnnouncementDelivered,
   sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
 } from './store'
 import { viewToPath } from './routing'
@@ -317,6 +319,7 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const healthVal = health.value
 
   // For remote sessions, compare against the peer's version (not the local
@@ -334,9 +337,22 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // the terminal cancels the synthesized mouse cascade on its touch
   // gestures, so a tap into the terminal would otherwise leave this menu
   // open on top of it (see FamilyDrawer for the same fix).
-  useEffect(() => {
+  //
+  // useLayoutEffect, not useEffect: a passive effect is deferred to a later
+  // task, so a fast keyboard user's very first Escape after opening could
+  // arrive before the listener existed and leave the menu stranded open.
+  // The layout effect attaches synchronously with the commit that mounts
+  // the dropdown, so no keystroke can slip through the gap.
+  useLayoutEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setOpen(false)
+      // A keyboard user may have tabbed into the dropdown; closing unmounts
+      // the focused item and would strand focus on <body>. Same convention
+      // as FamilyDrawer's Escape: hand focus back to the trigger.
+      triggerRef.current?.focus()
+    }
     const onPointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false)
     }
@@ -369,19 +385,49 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
     : undefined
   const showStale = action?.id === 'restart' && !!staleKind
 
+  // Presentation promotion (ADR 0026 §8). Eligibility mirrors the family
+  // projection's own edge rule and is null for peer-projected sessions, so
+  // the menu never offers a mutation the daemon would refuse. The `⋮` menu
+  // is deliberately the only surface carrying these verbs: it exists for
+  // every session view (desktop and mobile, alive and dead), and a promoted
+  // session — no longer a family member — has no family panel to demote from.
+  const promotion = promotionAction(session, sessions.value, projects.value)
+  // In-flight guard: the menu closes on activation, but reopening it before
+  // the authoritative snapshot lands would offer the same verb again — a
+  // second POST per click (reproduced in e2e). The entry lives in the
+  // module-level map (survives navigation), is keyed by session, and speaks
+  // only for the action kind it started: once the snapshot flips the offered
+  // action, the entry is spent. Failures settle their own generation — and
+  // nobody else's — re-arming the item beside the failure toast.
+  const pendingEntry = promotionPending.value.get(session.id)
+  const promotionInFlight = !!promotion && pendingEntry?.kind === promotion.kind
+  const promotionBlocked = promotion?.blocked !== undefined
+  const promotionWords = promotion ? promotionCopy(promotion, promotionInFlight) : null
+
   return (
     <div class="session-menu" ref={menuRef}>
       <button
+        ref={triggerRef}
         class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
         onClick={() => setOpen(!open)}
         title="Session actions"
+        // The visible content is a bare "⋮" glyph, which is also what a
+        // screen reader would announce without this (every other icon
+        // button in the app carries its name the same way).
+        aria-label="Session actions"
         aria-expanded={open}
+        aria-controls="session-menu-dropdown"
       >
         <span class="session-menu-icon">⋮</span>
         {staleKind && <span class="session-menu-badge" />}
       </button>
+      {/* Pending/success status for promote/demote. Lives outside the
+        * dropdown so it survives the close-on-activation, and is sr-only:
+        * sighted feedback is the sidebar row moving / the reopened item's
+        * busy label. Failures are deliberately absent — the error toast's
+        * live region already announces those once. */}
       {open && (
-        <div class="session-menu-dropdown">
+        <div class="session-menu-dropdown" id="session-menu-dropdown">
           {canFind && (
             <button
               class="session-menu-action"
@@ -400,7 +446,39 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
               {showStale && <span class="session-menu-action-tag">outdated</span>}
             </button>
           )}
-          {(canFind || (action && actionHandler)) && <div class="session-menu-divider" />}
+          {promotion && promotionWords && (
+            <button
+              class="session-menu-action session-menu-promotion"
+              disabled={promotionInFlight}
+              aria-disabled={promotionBlocked ? 'true' : undefined}
+              aria-describedby="session-promotion-note"
+              onClick={e => {
+                if (promotionInFlight || promotionBlocked) {
+                  e.preventDefault()
+                  return
+                }
+                setOpen(false)
+                // Focus back to the trigger: the activated item unmounts with
+                // the dropdown, and a keyboard user shouldn't land on <body>.
+                triggerRef.current?.focus()
+                const id = session.id
+                const seq = beginPromotion(id, promotion.kind)
+                void (promotion.kind === 'promote'
+                  ? promoteSession(id)
+                  : demoteSession(id)
+                ).then(ok => {
+                  // Rejection re-arms exactly the entry this request created
+                  // (generation-checked), beside its failure toast; success
+                  // leaves the entry until the snapshot's kind flip spends it.
+                  if (!ok) settlePromotion(id, seq)
+                })
+              }}
+            >
+              {promotionWords.label}
+              <span id="session-promotion-note" class="session-menu-action-note">{promotionWords.note}</span>
+            </button>
+          )}
+          {(canFind || (action && actionHandler) || promotion) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
@@ -555,6 +633,49 @@ function MobileTerminalBar({
       )}
       <button class="mobile-bottom-action send-btn mk-send" disabled={!canSend} onClick={() => sendKey('\r')} title={altArmed ? 'Send Alt+Enter' : 'Send'}><span class="mkey-face"><IconSend /></span></button>
     </div>
+  )
+}
+
+// ── Promotion status ──
+
+/** Stable announcement host: unlike SessionMenu, this survives the selected
+ * session's route/header remount during a promote or demote snapshot. The
+ * store owns reconciliation; this component owns only one screen-reader
+ * delivery, keyed by session and request token. */
+function PromotionAnnouncementHost() {
+  const id = selectedId.value
+  const pending = id ? promotionPending.value.get(id) : undefined
+  const announcement = id ? promotionAnnouncements.value.get(id) : undefined
+  const [message, setMessage] = useState('')
+  const lastSessionIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!id) {
+      // URL replacement can transiently clear selectedId while the session
+      // remains the same. Keep that identity so its already-delivered result
+      // can survive the route remount without being re-announced.
+      setMessage('')
+      return
+    }
+    const sameSession = lastSessionIdRef.current === id
+    lastSessionIdRef.current = id
+    if (pending) {
+      setMessage(pending.kind === 'promote' ? 'Promoting to root…' : 'Returning to family…')
+      return
+    }
+    if (announcement) {
+      const delivered = isPromotionAnnouncementDelivered(id, announcement.seq)
+      if (!delivered || sameSession) setMessage(announcement.message)
+      if (!delivered) acknowledgePromotionAnnouncement(id, announcement.seq)
+      return
+    }
+    setMessage('')
+  }, [id, pending?.kind, pending?.seq, announcement?.seq])
+
+  return (
+    <span class="sr-only" data-promotion-status role="status" aria-live="polite" aria-atomic="true">
+      {message}
+    </span>
   )
 }
 
@@ -913,6 +1034,7 @@ render(
       </LocationProvider>
     </ErrorBoundary>
     <ToastHost />
+    <PromotionAnnouncementHost />
   </Fragment>,
   document.getElementById('app')!,
 )

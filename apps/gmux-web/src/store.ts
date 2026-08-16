@@ -20,7 +20,7 @@ import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
 import {
-  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild,
+  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild, promotionAction,
   type FamilyActivity,
 } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
@@ -1453,12 +1453,14 @@ export function applySessionsSnapshot(list: Session[]): void {
   const rewritten = commitWithSlugRewrite(list, () => {
     sessionsLoaded.value = true
     connState.value = 'connected'
+    reconcilePromotionPending(list)
   })
   if (!rewritten) {
     batch(() => {
       _rawSessions.value = list
       sessionsLoaded.value = true
       connState.value = 'connected'
+      reconcilePromotionPending(list)
     })
   }
 
@@ -1478,17 +1480,25 @@ export function upsertSession(raw: ProtocolSession): boolean {
   if (idx >= 0) {
     const next = [...prev]
     next[idx] = updated
-    if (commitWithSlugRewrite(next)) return isNew
+    if (commitWithSlugRewrite(next)) {
+      reconcilePromotionPending(next)
+      return isNew
+    }
     _rawSessions.value = next
+    reconcilePromotionPending(next)
   } else {
     isNew = true
-    _rawSessions.value = [...prev, updated]
+    const next = [...prev, updated]
+    _rawSessions.value = next
+    reconcilePromotionPending(next)
   }
   return isNew
 }
 
 export function removeSession(id: string) {
-  _rawSessions.value = _rawSessions.value.filter(s => s.id !== id)
+  const next = _rawSessions.value.filter(s => s.id !== id)
+  _rawSessions.value = next
+  reconcilePromotionPending(next)
 }
 
 export function markSessionRead(id: string, observedToken?: string) {
@@ -1832,6 +1842,156 @@ export function resumeSession(sessionId: string): Promise<boolean> {
 
 export function restartSession(sessionId: string): Promise<boolean> {
   return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart')
+}
+
+// Promote/demote flip the server-owned `promoted_to_root` presentation flag
+// (ADR 0026 §8, endpoints from #475). Deliberately no optimistic overlay,
+// for the same reason as `reorderSessions`: the projection *and the URL*
+// derive from the presentation root, and the snapshot commit path
+// (`commitWithSlugRewrite`) rewrites the selected session's URL atomically
+// with the session data — an optimistic flag flip without that coupled
+// rewrite would leave the old URL unresolvable for a beat and bounce the
+// router home. The mutation is local-only (the daemon refuses it for peer
+// sessions), so the authoritative snapshot echoes in the same beat anyway.
+export function promoteSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/promote`, 'Promote')
+}
+
+export function demoteSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/demote`, 'Return to family')
+}
+
+// In-flight promote/demote requests, keyed by session id. Module scope, not
+// menu component state: reconciliation must run for every authoritative
+// snapshot even while this session's menu is unmounted. Each request carries
+// its action, target flag, and generation so stale A cannot settle B.
+export type PromotionPendingEntry = {
+  kind: 'promote' | 'demote'
+  /** The authoritative flag value this request is waiting to observe. */
+  targetPromoted: boolean
+  seq: number
+}
+
+export type PromotionAnnouncement = {
+  kind: PromotionPendingEntry['kind']
+  seq: number
+  message: string
+}
+
+export const promotionPending = signal<ReadonlyMap<string, PromotionPendingEntry>>(new Map())
+export const promotionAnnouncements = signal<ReadonlyMap<string, PromotionAnnouncement>>(new Map())
+const deliveredPromotionAnnouncements = new Set<string>()
+let _promotionSeq = 0
+
+const promotionAnnouncementKey = (id: string, seq: number): string => `${id}:${seq}`
+const promotionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Final safety valve only: a hung request cannot wedge the menu forever. */
+export const PROMOTION_PENDING_TTL_MS = 30_000
+
+function clearPromotionTimer(id: string): void {
+  const timer = promotionTimers.get(id)
+  if (!timer) return
+  clearTimeout(timer)
+  promotionTimers.delete(id)
+}
+
+export function beginPromotion(id: string, kind: 'promote' | 'demote'): number {
+  clearPromotionTimer(id)
+  const seq = ++_promotionSeq
+  const next = new Map(promotionPending.value)
+  next.set(id, { kind, targetPromoted: kind === 'promote', seq })
+  promotionPending.value = next
+  if (promotionAnnouncements.value.has(id)) {
+    const announcements = new Map(promotionAnnouncements.value)
+    const old = announcements.get(id)
+    announcements.delete(id)
+    if (old) deliveredPromotionAnnouncements.delete(promotionAnnouncementKey(id, old.seq))
+    promotionAnnouncements.value = announcements
+  }
+  const timer = setTimeout(() => {
+    const entry = promotionPending.peek().get(id)
+    if (entry?.seq === seq) settlePromotion(id, seq)
+  }, PROMOTION_PENDING_TTL_MS)
+  promotionTimers.set(id, timer)
+  return seq
+}
+
+/** Drop the entry, but only if it is still the one this request created. */
+export function settlePromotion(id: string, seq: number): void {
+  const entry = promotionPending.value.get(id)
+  if (!entry || entry.seq !== seq) return
+  clearPromotionTimer(id)
+  const next = new Map(promotionPending.value)
+  next.delete(id)
+  promotionPending.value = next
+}
+
+/** Called at the store boundary for every full/individual authoritative
+ * session update. It consumes target transitions for *all* sessions, not just
+ * the selected mounted menu. A target can be observed while away and then
+ * reversed externally without leaving a stale guard behind. */
+export function reconcilePromotionPending(nextSessions: readonly Session[]): void {
+  const pending = promotionPending.peek()
+  if (pending.size === 0) return
+  const byId = new Map(nextSessions.map(session => [session.id, session]))
+  const nextPending = new Map(pending)
+  const nextAnnouncements = new Map(promotionAnnouncements.peek())
+  let pendingChanged = false
+  let announcementsChanged = false
+
+  for (const [id, entry] of pending) {
+    const session = byId.get(id)
+    if (!session) {
+      nextPending.delete(id)
+      clearPromotionTimer(id)
+      const old = nextAnnouncements.get(id)
+      nextAnnouncements.delete(id)
+      if (old) deliveredPromotionAnnouncements.delete(promotionAnnouncementKey(id, old.seq))
+      announcementsChanged = true
+      pendingChanged = true
+      continue
+    }
+
+    if ((session.promoted_to_root === true) === entry.targetPromoted) {
+      nextPending.delete(id)
+      clearPromotionTimer(id)
+      nextAnnouncements.set(id, {
+        kind: entry.kind,
+        seq: entry.seq,
+        message: entry.kind === 'promote' ? 'Promoted to root.' : 'Returned to family.',
+      })
+      pendingChanged = true
+      announcementsChanged = true
+      continue
+    }
+
+    // A parent deletion/reparent/peer transition can make the requested
+    // action terminal without reaching its target. Re-arm is not honest here,
+    // and no success announcement is emitted; the ordinary snapshot is truth.
+    const action = promotionAction(session, nextSessions, projects.value)
+    if (!action || action.kind !== entry.kind) {
+      nextPending.delete(id)
+      clearPromotionTimer(id)
+      pendingChanged = true
+    }
+  }
+
+  if (pendingChanged) promotionPending.value = nextPending
+  if (announcementsChanged) promotionAnnouncements.value = nextAnnouncements
+}
+
+/** Mark one announcement delivered after the mounted status region has
+ * copied it into local rendered state. The central text remains available
+ * through a route/remount race, while this token prevents duplicate speech
+ * after revisiting the session. A later request replaces the token. */
+export function acknowledgePromotionAnnouncement(id: string, seq: number): void {
+  const announcement = promotionAnnouncements.value.get(id)
+  if (!announcement || announcement.seq !== seq) return
+  deliveredPromotionAnnouncements.add(promotionAnnouncementKey(id, seq))
+}
+
+export function isPromotionAnnouncementDelivered(id: string, seq: number): boolean {
+  return deliveredPromotionAnnouncements.has(promotionAnnouncementKey(id, seq))
 }
 
 // ── Launch ───────────────────────────────────────────────────────────────────

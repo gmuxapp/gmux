@@ -1,6 +1,7 @@
-import type { Session } from './types'
+import type { ProjectItem, Session } from './types'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
+import { sidebarProjectForSession } from './projects'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -151,6 +152,106 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
     cursor = parent
   }
   return reverse.reverse()
+}
+
+/** The one promotion mutation this session admits right now, or null.
+ *
+ * Presentation promotion is sticky, user-authored state on the session
+ * (ADR 0026 §8): promoting breaks the presentation edge — the
+ * organizational parent keeps owning the session — and demoting rejoins
+ * the *current* organizational parent's presentation family. (Not *only*
+ * presentation: the daemon also re-roots the active-subagent budget under
+ * the promoted session, and notification suppression stays with the
+ * immutable launch parent either way — see the docs.) Eligibility
+ * mirrors the projection's own edge rule (`familyIndex`), so the
+ * menu can never offer a mutation whose result the sidebar wouldn't show:
+ *
+ *  - peer-projected sessions (network peers and Local/devcontainer peers
+ *    alike) get nothing: the daemon refuses promote/demote for sessions it
+ *    doesn't own (`local_only`), so offering the verb would be a lie;
+ *  - a family child (cycle-safe, parent local and a semantic agent, not
+ *    already promoted) can be promoted — but only if the promoted row has
+ *    the same real stamp-backed placement the sidebar uses. A matching rule
+ *    alone is not enough: `buildProjectFolders` buckets only stamped rows,
+ *    including retained-dead sessions. The daemon deliberately has no
+ *    parentage fallback for project placement (ADR 0026 §8), so an unstamped
+ *    or unknown-project child gets a visible blocked action instead of a
+ *    mutation that strands it;
+ *  - a promoted session can return to its family only while that family still
+ *    exists and the *post-demotion presentation root* has that same placement.
+ *    A parent outside every project is not a safe demote target, even if the
+ *    promoted child itself is placed. Deleted/non-agent parents leave the flag
+ *    inert and hidden; an existing but unplaced family root is blocked with a
+ *    reason.
+ *
+ * `parent` is the session the copy names: the owner that keeps the child
+ * after a promote, the family a demote rejoins. */
+export type PromotionAction =
+  | { readonly kind: 'promote'; readonly parent: Session; readonly blocked?: 'no-project' }
+  | { readonly kind: 'demote'; readonly parent: Session; readonly blocked?: 'no-project' }
+
+/** The exact stamp-backed predicate used by `buildProjectFolders` for local
+ * rows. Routing can serialize a disclaimed match, but that is not enough for
+ * this menu: after a promotion/demotion the user must have a sidebar row too. */
+function hasSidebarPlacement(session: Session, projects: ProjectItem[]): boolean {
+  return sidebarProjectForSession(session, projects) !== null
+}
+
+export function promotionAction(
+  session: Session,
+  source: FamilySource,
+  projects: ProjectItem[],
+): PromotionAction | null {
+  if (session.peer) return null
+  const index = indexFor(source)
+  if (index.childIds.has(session.id)) {
+    const parent = index.byId.get(session.parent_session_id!)
+    if (!parent) return null
+    const placeable = hasSidebarPlacement(session, projects)
+    return placeable
+      ? { kind: 'promote', parent }
+      : { kind: 'promote', parent, blocked: 'no-project' }
+  }
+  if (session.promoted_to_root !== true) return null
+  if (!session.parent_session_id || session.parent_session_id === session.id) return null
+  const parent = index.byId.get(session.parent_session_id)
+  if (!parent || parent.semantic_agent !== true || parent.peer) return null
+
+  // Test the projection that the daemon will produce after clearing this
+  // session's sticky root flag. The current presentation root is necessarily
+  // the session itself, so checking only the promoted child's stamp misses the
+  // symmetric failure where its organizational parent is unplaced.
+  const demotedSessions = Array.from(index.byId.values(), candidate =>
+    candidate.id === session.id ? { ...candidate, promoted_to_root: false } : candidate)
+  const returnedRoot = familyRoot(session, demotedSessions)
+  return hasSidebarPlacement(returnedRoot, projects)
+    ? { kind: 'demote', parent }
+    : { kind: 'demote', parent, blocked: 'no-project' }
+}
+
+/** The words the menu says for a promotion action. Centralized so every
+ * surface (and its tests) quotes one copy: promotion must say that
+ * ownership is not severed, and demotion must name the current parent.
+ * `pending` is the in-flight state (same convention as `lifecycleAction`'s
+ * resuming labels): the request left, the authoritative snapshot hasn't
+ * flipped the projection yet, and the item is busy rather than offerable. */
+export function promotionCopy(action: PromotionAction, pending = false): { label: string; note: string } {
+  if (action.blocked === 'no-project') {
+    return {
+      label: action.kind === 'promote' ? 'Promote to root' : 'Return to family',
+      note: action.kind === 'promote'
+        ? 'Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.'
+        : 'Unavailable: the family root has no project-backed sidebar row. Add one in Settings → Projects before returning this session to its family.',
+    }
+  }
+  if (pending) {
+    return action.kind === 'promote'
+      ? { label: 'Promoting…', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
+      : { label: 'Returning…', note: `Groups back under ${action.parent.title}` }
+  }
+  return action.kind === 'promote'
+    ? { label: 'Promote to root', note: `Shows as its own top-level session — ${action.parent.title} still owns it` }
+    : { label: 'Return to family', note: `Groups back under ${action.parent.title}` }
 }
 
 export interface FamilyNode {

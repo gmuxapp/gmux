@@ -4,7 +4,7 @@
 // no side effects or signal dependencies.
 
 import { familyRoot } from './family'
-import { matchSession } from './projects'
+import { matchSession, sidebarProjectForSession } from './projects'
 import type { ProjectItem, Session } from './types'
 
 // --- URL parsing ---
@@ -268,9 +268,12 @@ export function viewToPath(
       if (presentation.project_slug && presentation.peer) {
         return sessionPath(presentation.project_slug, sess, presentation.peer, hasSessionSlugCollision(sess, sessions, projects))
       }
-      // Local-claimed: project owner is the viewer.
-      if (presentation.project_slug && !presentation.peer) {
-        return sessionPath(presentation.project_slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+      // Local-claimed: project owner is the viewer. Use the same stamp-backed
+      // catalog predicate as sidebar bucketing; an unknown stamp is not a
+      // recoverable URL even if it looks serializable.
+      const placedProject = sidebarProjectForSession(presentation, projects)
+      if (placedProject) {
+        return sessionPath(placedProject.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
       }
       // Disclaimed: viewer's match rules decide the local folder.
       const project = matchSession(presentation, projects)
