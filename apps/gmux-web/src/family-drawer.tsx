@@ -302,7 +302,12 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node
       if (panelRef.current?.contains(target)) return
-      if (triggerRef.current?.contains(target)) return // trigger's own click toggles
+      // Anything that declares itself a control of this drawer (the
+      // header trigger, the sidebar indicator) toggles on its own
+      // click — closing here on the pointerdown would flip the drawer
+      // shut a beat early, and the control's click would reopen it.
+      const el = target instanceof Element ? target : target.parentElement
+      if (el?.closest('[aria-controls="agent-family-drawer"]')) return
       onClose()
     }
     document.addEventListener('keydown', onKey)

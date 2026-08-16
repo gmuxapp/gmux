@@ -1053,14 +1053,22 @@ body {
 /* Sub-rows share one fixed indent: a glyph column under the root title
    (14px pad + 7px dot + 8px gap), then content. The member row puts
    its status there and the activity line its branch, so the two rows
-   line up on both columns. */
+   line up on both columns. The indent is a variable because the
+   activity button reaches the same column by a different route —
+   see `.family-activity`. */
+.session-family {
+  --family-indent: 29px;
+  /* The activity button's own inner padding, subtracted from the
+     indent so its glyph still lands on the column. */
+  --family-pill-pad: 8px;
+}
 .family-sub {
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 3px 8px 3px 29px;
+  padding: 3px 8px 3px var(--family-indent);
 }
 
 /* Every glyph in that column occupies the same width, whatever it is,
@@ -1143,12 +1151,15 @@ body {
    the entry's slack. Numbers sit a touch under the title size. */
 .family-activity {
   width: fit-content;
+  /* The row's indent, split: the part before the hit area is margin,
+     the rest is the button's own padding, so the glyph lands on the
+     shared column and the gutter left of it still belongs to the root.
+     Derived, so the two rows cannot drift apart. */
+  --family-pill-inset: calc(var(--family-indent) - var(--family-pill-pad));
   /* Clip, not spill, at the sidebar's narrowest. */
-  max-width: calc(100% - 21px);
-  /* `.family-sub` puts the glyph column at 29px; reach it with margin
-     + padding (21 + 8) so the gutter stays outside the hit area. */
-  margin: 0 0 2px 21px;
-  padding: 1px 8px 2px 8px;
+  max-width: calc(100% - var(--family-pill-inset));
+  margin: 0 0 2px var(--family-pill-inset);
+  padding: 1px var(--family-pill-pad) 2px var(--family-pill-pad);
   border: 0;
   border-radius: 3px;
   background: transparent;
