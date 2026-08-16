@@ -9,6 +9,7 @@ import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { needsReveal } from './sidebar-reveal'
 import { hasSessionSlugCollision, sessionPath, viewToPath } from './routing'
 import { FamilyIcon } from './family-icon'
+import { requestFamilyDrawer } from './family-drawer-state'
 import { selectorLabel, folderMatchesFilter, type Selector } from './tab-filter'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -236,7 +237,17 @@ function SessionItem({
  *  running process — each segment dropped at zero. It's a count, not a
  *  destination, so it has no target of its own; like the rest of the
  *  entry's slack it belongs to the group, which selects the root. */
-function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined }) {
+function FamilyActivityLine({
+  activity,
+  rootId,
+  rootHref,
+  onClick,
+}: {
+  activity: FamilyActivity | undefined
+  rootId: string
+  rootHref: string
+  onClick?: () => void
+}) {
   // `familyActivityById` holds an entry only when something is non-zero,
   // so absence is the whole of "nothing to report" — one spelling of
   // the question, here, instead of one per call site.
@@ -244,7 +255,18 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined
   const segments = familySegments(activity)
   const label = familyActivityLabel(activity)
   return (
-    <div class="family-sub family-activity" title={label}>
+    <button
+      type="button"
+      class="family-sub family-activity"
+      title={label}
+      aria-label={`${label}. Open family panel`}
+      aria-controls="agent-family-drawer"
+      onClick={() => {
+        navigate(rootHref)
+        requestFamilyDrawer(rootId)
+        onClick?.()
+      }}
+    >
       {/* The family mark, same as the header's trigger: this line is
         * the standard family numbers — everyone beneath the root — not
         * "the others", so it anchors to the root's glyph column rather
@@ -262,7 +284,7 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined
         ))}
       </span>
       <span class="sr-only">{label}</span>
-    </div>
+    </button>
   )
 }
 
@@ -273,10 +295,10 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined
  *  Selection and hit areas nest, the way the sessions do:
  *   - the group is the root's area. Hovering anywhere in it highlights
  *     the whole group, and any click that doesn't land on the member
- *     row selects the root — including the counts line and the slack
- *     around it, which have nothing better to do;
- *   - the member row is its own area inside that one, with its own
- *     highlight a tone above the group's;
+ *     row selects the root — including the slack around its nested
+ *     targets, which has nothing better to do;
+ *   - the member row and family-indicator button are their own areas
+ *     inside that one, each with its own hover treatment;
  *   - the background says *which family* you're in, the accent bar says
  *     *which row*, so selecting a member keeps the group lit and moves
  *     the bar down to it.
@@ -291,6 +313,7 @@ function FamilyActivityLine({ activity }: { activity: FamilyActivity | undefined
  */
 function FamilyEntry({
   selected,
+  rootId,
   rootHref,
   slot,
   slotHref,
@@ -303,6 +326,7 @@ function FamilyEntry({
 }: {
   /** Something in this family is selected — root or member. */
   selected: boolean
+  rootId: string
   rootHref: string
   slot?: FamilySlot
   slotHref?: string
@@ -375,7 +399,7 @@ function FamilyEntry({
           <span class="family-slot-title">{member.title}</span>
         </a>
       )}
-      <FamilyActivityLine activity={activity} />
+      <FamilyActivityLine activity={activity} rootId={rootId} rootHref={rootHref} onClick={onClick} />
     </div>
   )
 }
@@ -551,6 +575,7 @@ function FolderGroup({
             <FamilyEntry
               key={s.id}
               selected={selId === s.id}
+              rootId={s.id}
               rootHref={href}
               onDragOver={dragDisabled ? undefined : () => handleDragOver(i)}
               onDragEnd={dragDisabled ? undefined : () => handleDragEnd(visible)}
