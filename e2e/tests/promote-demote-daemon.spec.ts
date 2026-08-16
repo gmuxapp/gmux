@@ -54,17 +54,37 @@ async function post(pathname: string): Promise<number> {
   return resp.status
 }
 
+async function putProjects(items: unknown[]): Promise<number> {
+  const { base, headers } = api()
+  const resp = await fetch(`${base}/v1/projects`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  })
+  return resp.status
+}
+
+function spawnGmux(args: string[], cwd: string, extraEnv: Record<string, string> = {}): ChildProcess {
+  return spawn(GMUX, args, {
+    env: { ...env, ...extraEnv }, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+  })
+}
+
 let parentProc: ChildProcess | undefined
 let childProc: ChildProcess | undefined
 let parentId = ''
 let childId = ''
 let childTitle = ''
 let env: Record<string, string>
+let tmpDir = ''
+const extraProcs: ChildProcess[] = []
+const extraIds: string[] = []
 
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(async () => {
   const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8')) as { tmpDir: string }
+  tmpDir = state.tmpDir
   const workspace = process.env.GMUX_TEST_WORKSPACE!
   const home = process.env.GMUX_TEST_HOME!
 
@@ -111,18 +131,22 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  // Leave the shared daemon exactly as the other specs expect it: kill and
-  // dismiss both spawned sessions, then reap the runner processes.
-  for (const id of [childId, parentId]) {
+  // Leave the shared daemon exactly as the other specs expect it: restore
+  // the seeded single-project catalog, kill and dismiss every spawned
+  // session, then reap the runner processes.
+  await putProjects([
+    { slug: 'test-project', match: [{ path: process.env.GMUX_TEST_WORKSPACE! }] },
+  ]).catch(() => {})
+  for (const id of [...extraIds, childId, parentId]) {
     if (!id) continue
     await post(`/v1/sessions/${id}/kill`).catch(() => {})
   }
   await new Promise(r => setTimeout(r, 500))
-  for (const id of [childId, parentId]) {
+  for (const id of [...extraIds, childId, parentId]) {
     if (!id) continue
     await post(`/v1/sessions/${id}/dismiss`).catch(() => {})
   }
-  for (const proc of [childProc, parentProc]) {
+  for (const proc of [...extraProcs, childProc, parentProc]) {
     if (proc?.pid) {
       try { process.kill(-proc.pid, 'SIGKILL') } catch { /* already dead */ }
     }
@@ -216,3 +240,92 @@ for (const [name, viewport, mobile] of [
     })
   })
 }
+
+test.describe('promotion placement edges (real daemon, desktop)', () => {
+  test('a child outside every project offers Promote blocked and never strands', async ({ page }) => {
+    // The daemon leaves a session unplaced when no project claims its cwd,
+    // and promotion cannot invent a placement (parentage never overrides
+    // matching). Promoting would therefore strand the session: no sidebar
+    // row, dead URL, no menu to demote from. The UI refuses with the reason.
+    const outsideDir = path.join(tmpDir, 'outside')
+    fs.mkdirSync(outsideDir, { recursive: true })
+    extraProcs.push(spawnGmux(['--', 'sh', '-c', 'echo outside ready; sleep 600'], outsideDir, { GMUX_SESSION_ID: parentId }))
+    const outside = await pollUntil(async () =>
+      (await listSessions()).find(s => s.alive && s.parent_session_id === parentId && s.cwd === outsideDir),
+    { timeoutMs: 15_000, description: 'outside child registered' })
+    extraIds.push(outside.id)
+
+    await openApp(page)
+    await gotoSession(page, outside.id)
+    expect(page.url()).toContain('/test-project/') // presents under its family root
+
+    await page.locator('.session-menu-trigger').click()
+    const item = page.locator('.session-menu-promotion')
+    await expect(item).toBeDisabled()
+    await expect(item).toContainText('Promote to root')
+    await expect(item.locator('.session-menu-action-note')).toContainText('Needs a project')
+    await item.click({ force: true })
+    await page.waitForTimeout(300)
+    // No mutation left the browser; the daemon still reports it unpromoted,
+    // and the session is exactly where it was.
+    expect((await listSessions()).find(s => s.id === outside.id)?.promoted_to_root ?? false).toBe(false)
+    expect(page.url()).toContain('/test-project/')
+    await expect(page.locator('.xterm')).toBeVisible()
+
+    // The CLI/API can still promote such a session. Pin the documented
+    // consequence — an unplaced promoted root renders nowhere, like any
+    // unplaced session — and the recovery: demote restores the family route.
+    expect(await post(`/v1/sessions/${outside.id}/promote`)).toBe(200)
+    await pollUntil(async () =>
+      (await listSessions()).find(s => s.id === outside.id)?.promoted_to_root === true,
+    { timeoutMs: 10_000, description: 'promoted via API' })
+    await expect.poll(
+      () => page.evaluate(id => (window as any).__gmuxNavigateToSession(id), outside.id),
+      { timeout: 10_000 },
+    ).toBe(false) // unroutable while promoted and unplaced
+    expect(await post(`/v1/sessions/${outside.id}/demote`)).toBe(200)
+    await expect.poll(
+      () => page.evaluate(id => (window as any).__gmuxNavigateToSession(id), outside.id),
+      { timeout: 10_000 },
+    ).toBe(true) // demote makes it reachable again
+    await expect(page.locator('.xterm')).toBeVisible()
+  })
+
+  test('cross-project promote moves the URL and sidebar row; demote returns them', async ({ page }) => {
+    const workspaceB = path.join(tmpDir, 'workspace-b')
+    fs.mkdirSync(workspaceB, { recursive: true })
+    expect(await putProjects([
+      { slug: 'test-project', match: [{ path: process.env.GMUX_TEST_WORKSPACE! }] },
+      { slug: 'project-b', match: [{ path: workspaceB }] },
+    ])).toBe(200)
+    extraProcs.push(spawnGmux(['--', 'sh', '-c', 'echo crosser ready; sleep 600'], workspaceB, { GMUX_SESSION_ID: parentId }))
+    const crosser = await pollUntil(async () =>
+      (await listSessions()).find(s => s.alive && s.parent_session_id === parentId && s.cwd === workspaceB),
+    { timeoutMs: 15_000, description: 'cross-project child registered' })
+    extraIds.push(crosser.id)
+
+    await openApp(page)
+    await gotoSession(page, crosser.id)
+    // Unpromoted: presents through its family root's project.
+    expect(page.url()).toContain('/test-project/')
+
+    await page.locator('.session-menu-trigger').click()
+    const item = page.locator('.session-menu-promotion')
+    await expect(item).toContainText('Promote to root')
+    await item.click()
+    // The authoritative snapshot moves the URL to the child's own project in
+    // the same commit; the view never leaves the session.
+    await expect(page).toHaveURL(/\/project-b\//)
+    await expect(page.locator('.xterm')).toBeVisible()
+    const folderB = page.locator('.folder').filter({ hasText: 'project-b' })
+    await expect(folderB.locator('.session-item.selected')).toHaveCount(1)
+
+    // Return to family: URL and folder revert.
+    await page.locator('.session-menu-trigger').click()
+    await expect(page.locator('.session-menu-promotion')).toContainText('Return to family')
+    await page.locator('.session-menu-promotion').click()
+    await expect(page).toHaveURL(/\/test-project\//)
+    await expect(folderB.locator('.session-item')).toHaveCount(0)
+    await expect(page.locator('.family-slot.selected')).toHaveCount(1)
+  })
+})

@@ -3,7 +3,7 @@ import { toasts } from './toasts'
 import {
   sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
-  promoteSession, demoteSession,
+  promoteSession, demoteSession, promotionPending, beginPromotion, settlePromotion,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, familySelectedId, folders,
@@ -49,6 +49,7 @@ beforeEach(() => {
   _rawSessions.value = []
   _setRawWorld({ projects: [], peers: [] })
   _pendingMutations.value = []
+  promotionPending.value = new Map()
   sessionsLoaded.value = false
   worldLoaded.value = false
   urlPath.value = '/'
@@ -685,6 +686,31 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
   })
 })
 
+describe('promote/demote pending request ownership', () => {
+  it('settles only the matching request token, including across sessions', () => {
+    const sessionA = beginPromotion('session-a', 'promote')
+    const sessionB = beginPromotion('session-b', 'demote')
+
+    settlePromotion('session-a', sessionB)
+    expect(promotionPending.value.get('session-a')?.seq).toBe(sessionA)
+    expect(promotionPending.value.get('session-b')?.seq).toBe(sessionB)
+
+    settlePromotion('session-a', sessionA)
+    expect(promotionPending.value.has('session-a')).toBe(false)
+    expect(promotionPending.value.has('session-b')).toBe(true)
+  })
+
+  it('does not let an older request clear a newer request for one session', () => {
+    const first = beginPromotion('session', 'promote')
+    const second = beginPromotion('session', 'promote')
+
+    settlePromotion('session', first)
+    expect(promotionPending.value.get('session')?.seq).toBe(second)
+    settlePromotion('session', second)
+    expect(promotionPending.value.has('session')).toBe(false)
+  })
+})
+
 describe('promote/demote: endpoint wiring and failure surfacing', () => {
   beforeEach(() => { toasts.value = [] })
   afterEach(() => { vi.unstubAllGlobals(); toasts.value = [] })
@@ -798,6 +824,42 @@ describe('promotion snapshots preserve the selected session\u2019s routing', () 
 
     expect(urlPath.value).toBe('/alpha/pi/orchestrator')
     expect(navCalls).toEqual([])
+  })
+
+  it('promote into a slug collision: the selected child switches to its ~id URL', () => {
+    // Project beta already holds a pi session slugged `worker`. Promoting the
+    // selected child (same adapter, same slug) into beta makes the plain slug
+    // ambiguous, so the canonical URL must switch to the exact-id form in the
+    // same snapshot commit — not resolve to the wrong session or fall home.
+    const squatter = makeSession({
+      id: '1ccccccc', cwd: '/dev/beta', adapter: 'pi', slug: 'worker', project_slug: 'beta',
+    })
+    _rawSessions.value = [rootSession(), childSession(false), squatter]
+    urlPath.value = '/alpha/pi/worker'
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+
+    applySessionsSnapshot([rootSession(), childSession(true), squatter])
+
+    expect(urlPath.value).toBe('/beta/pi/~1bbbbbbb')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
+    expect(navCalls).toContainEqual(['/beta/pi/~1bbbbbbb', true])
+  })
+
+  it('a NON-selected promotion that collides moves the selected session to its ~id URL', () => {
+    // Viewing the beta squatter; someone promotes the child into beta with
+    // the same adapter+slug. The squatter's plain-slug URL becomes ambiguous
+    // and must be rewritten to its exact-id form, view preserved.
+    const squatter = makeSession({
+      id: '1ccccccc', cwd: '/dev/beta', adapter: 'pi', slug: 'worker', project_slug: 'beta',
+    })
+    _rawSessions.value = [rootSession(), childSession(false), squatter]
+    urlPath.value = '/beta/pi/worker'
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1ccccccc' })
+
+    applySessionsSnapshot([rootSession(), childSession(true), squatter])
+
+    expect(urlPath.value).toBe('/beta/pi/~1ccccccc')
+    expect(view.value).toEqual({ kind: 'session', sessionId: '1ccccccc' })
   })
 
   it('promote reprojects the sidebar: the child earns its own folder row', () => {

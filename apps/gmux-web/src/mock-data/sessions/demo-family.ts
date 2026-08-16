@@ -76,4 +76,12 @@ export const DEMO_FAMILY: MockSession[] = [
     id: 'famBproc2', title: 'gofmt -l ./...', parent_session_id: 'famBroot',
     semantic_agent: false, adapter: 'shell', command: ['gofmt'], unread: true, last_output_at: ago(9),
   }),
+  // A child working outside every project (no stamp, no matching rule):
+  // promoting it would give it no sidebar row and no routable URL, so the
+  // ⋮ menu offers Promote to root blocked, with the reason.
+  fam({
+    id: 'famBoutside', title: 'scratch probe in /tmp', parent_session_id: 'famBroot',
+    cwd: '/tmp/scratch', workspace_root: '/tmp/scratch', remotes: undefined,
+    project_slug: undefined, last_output_at: ago(7),
+  }),
 ]
