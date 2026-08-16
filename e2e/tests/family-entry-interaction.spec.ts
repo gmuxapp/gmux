@@ -67,6 +67,22 @@ test.describe('sidebar family entry', () => {
     await indicator.focus()
     await page.keyboard.press('Enter')
     await expect(page.locator('#agent-family-drawer')).toBeVisible()
+
+    // With the panel open and nowhere left to navigate, a second press
+    // is a dismissal — the indicator toggles rather than insists.
+    await indicator.click()
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
+    await indicator.click()
+    await expect(page.locator('#agent-family-drawer')).toBeVisible()
+
+    // Leaving the family closes its drawer, and coming back does not
+    // pop it open again: open-ness is a statement about the present,
+    // not a preference to be remembered.
+    await familyEntry(page, 'orchestrator').locator('.family-slot').click()
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
+    await page.goBack()
+    await expect(page).toHaveURL(/~famBroot/)
+    await expect(page.locator('#agent-family-drawer')).toBeHidden()
   })
 
   test('a drop anywhere on the entry reorders exactly once', async ({ page }) => {

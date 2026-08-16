@@ -1,14 +1,12 @@
 import { signal } from '@preact/signals'
 
-/** A sidebar family button can ask the header-owned drawer to open.
- * Carry the root rather than a boolean: navigation and rendering are
- * asynchronous, so the request waits until the header belongs to the
- * family that was actually pressed instead of flashing the old one. */
-export const familyDrawerRequest = signal<string | null>(null)
-
-export function requestFamilyDrawer(rootId: string) {
-  // Clear first so pressing the same already-open family after closing
-  // it is still a new signal update.
-  familyDrawerRequest.value = null
-  familyDrawerRequest.value = rootId
-}
+/** The family whose drawer is open, by root id — null when none is.
+ *
+ * One fact with one owner: whoever wants the drawer (header trigger,
+ * sidebar indicator) writes the root here, and the header shows the
+ * drawer while the selected session belongs to that family. The
+ * comparison *is* the old "wait until navigation lands" logic — a
+ * sidebar press on another family writes the root and navigates, and
+ * the drawer appears exactly when the header catches up, with no
+ * request to deliver, consume, or re-arm. */
+export const familyDrawerRoot = signal<string | null>(null)

@@ -15,7 +15,7 @@ import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
 import { MenuButton } from './menu-button'
 import { FamilyDrawer } from './family-drawer'
-import { familyDrawerRequest } from './family-drawer-state'
+import { familyDrawerRoot } from './family-drawer-state'
 import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyIcon } from './family-icon'
 
@@ -184,20 +184,23 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
   onResume?: (id: string) => void
   resuming?: boolean
 }) {
-  const [familyOpen, setFamilyOpen] = useState(false)
   const familyTriggerRef = useRef<HTMLButtonElement>(null)
-  const closeFamily = useCallback(() => { setFamilyOpen(false) }, [])
   const showFamily = session ? hasFamily(session, sessions.value) : false
-  const requestedFamily = familyDrawerRequest.value
+  const rootId = session && showFamily ? familyRoot(session, sessions.value).id : null
+  // Open-ness is a comparison, not stored state: the drawer shows while
+  // the selected session belongs to the family named in the signal.
+  const familyOpen = rootId !== null && familyDrawerRoot.value === rootId
+  const closeFamily = useCallback(() => { familyDrawerRoot.value = null }, [])
+  // Leaving the family closes its drawer — otherwise returning later
+  // would pop it back open. Keyed to session *arrival* rather than the
+  // render loop: a sidebar press on another family writes the signal
+  // before navigating, and clearing on the pre-navigation mismatch
+  // would eat the press.
   useEffect(() => {
-    if (!showFamily) setFamilyOpen(false)
-  }, [showFamily])
-  useEffect(() => {
-    if (!session || !requestedFamily) return
-    if (familyRoot(session, sessions.value).id !== requestedFamily) return
-    setFamilyOpen(true)
-    familyDrawerRequest.value = null
-  }, [session?.id, requestedFamily])
+    if (familyDrawerRoot.value !== null && familyDrawerRoot.value !== rootId) {
+      familyDrawerRoot.value = null
+    }
+  }, [session?.id])
 
   if (!session) {
     return (
@@ -217,7 +220,7 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
             session={session}
             open={familyOpen}
             triggerRef={familyTriggerRef}
-            onToggle={() => { setFamilyOpen(v => !v) }}
+            onToggle={() => { familyDrawerRoot.value = familyOpen ? null : rootId }}
           />
         )}
         {showFamily && <HeaderCrumbs session={session} />}
