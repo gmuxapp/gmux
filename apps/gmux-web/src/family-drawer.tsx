@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
-  familySegments, familyStateOf, isProcessSession, projectFamily,
+  familySegments, familyStateOf, isProcessSession, isRunningProcess, projectFamily,
   type FamilyNode, type FamilyState,
 } from './family'
-import { splitLevel, visibleFamilyRows, type FamilyView } from './family-drawer-model'
+import {
+  FAMILY_ROW_BUDGET, splitLevel, visibleFamilyRows, type FamilyView,
+} from './family-drawer-model'
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import {
-  activityMap, cancelSession, familyActivityById, killSession, markSessionRead,
+  activityMap, cancelSession, familyActivityById, markSessionRead,
   projects, sessions, sessionDotState, tabHref,
 } from './store'
 import { pushError } from './toasts'
@@ -45,12 +47,10 @@ function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
         href={hrefFor(session)}
         aria-current={session.id === selectedId ? 'page' : undefined}
       >
-        {/* A process keeps its `$` shape and carries state as colour —
-          * the glyph column is the only place this row's state appears,
-          * so a `$` that can't say `unread` would hide a member the
-          * tally counts and the `waiting` filter shows. */}
+        {/* `$` is process identity, always cyan. Agent attention never
+          * recolors it; lifecycle is structural in the processes view. */}
         {process
-          ? <span class={`family-proc ${dot}`} aria-hidden="true">$</span>
+          ? <span class="family-proc" aria-hidden="true">$</span>
           : <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
         <span class="family-row-title">{session.title}</span>
         {/* Levels are ordered by this timestamp, so it has to be on
@@ -153,9 +153,9 @@ function membersInState(tree: FamilyNode, state: FamilyState): Session[] {
  *
  * The destructive verbs carry their target count, because the rows on
  * screen are NOT the whole story: the line budget still folds a big
- * family, so "Stop all" under a filter matching 200 processes reaches
- * every one of them, including those behind `+N more`. Acting on the
- * filter rather than the viewport is the right behaviour — a fold is
+ * family, so “Interrupt all” reaches every matching agent, including
+ * those behind `+N more`. Acting on the filter rather than the viewport
+ * is the right behaviour — a fold is
  * the panel's economy, not a selection — but then the blast radius has
  * to be in the label you are about to click.
  *
@@ -174,7 +174,6 @@ type FamilyAction = {
 const FAMILY_ACTIONS: Partial<Record<FamilyState, FamilyAction>> = {
   waiting: { label: () => 'Mark all read', run: markSessionRead },
   error: { label: () => 'Mark all read', run: markSessionRead },
-  running: { label: n => `Stop all ${n}`, run: id => killSession(id, { quiet: true }) },
   active: { label: n => `Interrupt all ${n}`, run: id => cancelSession(id, { quiet: true }) },
 }
 
@@ -198,41 +197,41 @@ async function runBulk(action: FamilyAction, targets: readonly Session[]): Promi
   if (failed > 0) pushError(`${failed} of ${targets.length} did not respond`)
 }
 
-/** The header's tally, in the turn model's own words (ADR 0023: a
- * session is active, idle, or waiting on you) and the sidebar's own
- * dots. `working` is the CSS token for the active dot; the fact behind
- * it is `status.active`, so it reads `active` here. `unread` is how the
- * wire spells "waiting on you", shortened to `waiting` because it sits
- * beside three other segments.
- *
- * Each segment names a state and shows the glyph the rows use for it, so
- * the header and the tree can be read against each other without
- * translating — including the `$`, because a family is routinely mostly
- * processes and "3 active" reads very differently depending on whether
- * that means subagents thinking or shells running. `all` gets no glyph
- * or count: it isn't a state, it's the absence of the question — and it
- * goes first because it's the position the panel opens in. The family's
- * size was the one fact the old `total` carried, and members mostly
- * accumulate; the folds' `+N more` already says how much lies below.
- *
- * Counted over the root's descendants, root excluded — the standard
- * family numbers, shared with the header pill and the sidebar line.
- * The root's own dot is on its pinned row directly beneath: it speaks
- * for itself, and counting it here would make this tally the one place
- * quoting a different number for the same dots. */
-function CountsLine({ rootId, filter, onFilter }: {
+/** Agent-state tallies plus one process-type control, all over the root's
+ * descendants with the root excluded. Agent controls filter exactly the state
+ * they count. The process control is deliberately different: its optional
+ * number counts running processes, while pressing it opens all process
+ * history. `all` is the absence of either question and carries no count. */
+type FamilyFilter = FamilyState | 'processes'
+
+function processCount(tree: FamilyNode): number {
+  let count = 0
+  const visit = (node: FamilyNode) => {
+    if (isProcessSession(node.session)) count++
+    for (const child of node.children) visit(child)
+  }
+  for (const child of tree.children) visit(child)
+  return count
+}
+
+function CountsLine({ rootId, tree, filter, onFilter }: {
   rootId: string
-  filter: FamilyState | null
-  onFilter: (state: FamilyState | null) => void
+  tree: FamilyNode
+  filter: FamilyFilter | null
+  onFilter: (state: FamilyFilter | null) => void
 }) {
   const activity = familyActivityById.value.get(rootId)
-  const tally = (state: FamilyState | null, active: boolean, children: preact.ComponentChildren) => (
+  const processes = processCount(tree)
+  const running = activity?.running ?? 0
+  const tally = (state: FamilyFilter | null, active: boolean, children: preact.ComponentChildren,
+    label?: string) => (
     <button
       key={state ?? 'all'}
       type="button"
       // A tally you can press is a filter; pressing the one that's on
       // turns it off, so the panel never traps you in a view.
       class={`family-count${state === 'error' || state === 'waiting' ? ' family-count-attention' : ''}${active ? ' active' : ''}`}
+      aria-label={label}
       aria-pressed={active}
       onClick={() => onFilter(active ? null : state)}
     >
@@ -242,17 +241,134 @@ function CountsLine({ rootId, filter, onFilter }: {
   return (
     <div class="family-counts">
       {tally(null, filter === null, 'all')}
-      {familySegments(activity).map(segment => tally(segment.state, filter === segment.state, (
+      {familySegments(activity).filter(segment => segment.state !== 'running').map(segment =>
+        tally(segment.state, filter === segment.state, (
+          <>
+            <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
+            {segment.count} {segment.state}
+          </>
+        )))}
+      {processes > 0 && tally('processes', filter === 'processes', (
         <>
-          {segment.dot
-            ? <span class={`session-dot-indicator ${segment.dot}`} aria-hidden="true" />
-            : <span class="family-proc working" aria-hidden="true">$</span>}
-          {/* The state's own name is the label: `running`, not a second
-            * `active` — one turn model (ADR 0023), but a command runs
-            * where an agent works. */}
-          {segment.count} {segment.state}
+          <span class={`family-proc family-proc-filter${running > 0 ? '' : ' quiet'}`} aria-hidden="true">$</span>
+          {running > 0 ? `${running} running` : 'processes'}
         </>
-      )))}
+      ), running > 0 ? `Processes, ${running} running` : 'Processes')}
+    </div>
+  )
+}
+
+interface ProcessEntry {
+  session: Session
+  parent: Session
+}
+
+function familyProcesses(tree: FamilyNode): ProcessEntry[] {
+  const out: ProcessEntry[] = []
+  const visit = (node: FamilyNode) => {
+    for (const child of node.children) {
+      if (isProcessSession(child.session)) out.push({ session: child.session, parent: node.session })
+      visit(child)
+    }
+  }
+  visit(tree)
+  return out.sort((a, b) => {
+    const at = a.session.last_output_at ?? a.session.created_at
+    const bt = b.session.last_output_at ?? b.session.created_at
+    return bt.localeCompare(at) || a.session.id.localeCompare(b.session.id)
+  })
+}
+
+function ProcessRow({ entry, selectedId, now }: {
+  entry: ProcessEntry
+  selectedId: string
+  now: number
+}) {
+  const { session, parent } = entry
+  return (
+    <li>
+      <a
+        class={`family-row process${session.id === selectedId ? ' selected' : ''}`}
+        href={hrefFor(session)}
+        aria-current={session.id === selectedId ? 'page' : undefined}
+      >
+        <span class="family-proc" aria-hidden="true">$</span>
+        <span class="family-row-title">{session.title}</span>
+        <span class="family-process-parent">{parent.title}</span>
+        <span class="family-row-age">{formatAge(session.last_output_at ?? session.created_at, now)}</span>
+      </a>
+    </li>
+  )
+}
+
+function processSlice(entries: readonly ProcessEntry[], limit: number, selectedId: string): ProcessEntry[] {
+  if (entries.length <= limit) return [...entries]
+  const shown = entries.slice(0, limit)
+  const selected = entries.find(entry => entry.session.id === selectedId)
+  if (!selected || shown.includes(selected) || limit === 0) return shown
+  // A selection beyond the recency slice is an explicit pin, not a row
+  // silently substituted into the tail: lead with it, then keep recency order
+  // among the remaining budget.
+  return [selected, ...entries.slice(0, limit - 1)]
+}
+
+function ProcessSection({ name, entries, limit, expanded, selectedId, now, onToggle }: {
+  name: 'Running' | 'Finished'
+  entries: readonly ProcessEntry[]
+  limit: number
+  expanded: boolean
+  selectedId: string
+  now: number
+  onToggle: () => void
+}) {
+  if (entries.length === 0) return null
+  const foldable = entries.length > limit
+  const open = expanded && foldable
+  const shown = open ? [...entries] : processSlice(entries, limit, selectedId)
+  const hidden = entries.length - shown.length
+  return (
+    <section class="family-process-section">
+      <h3>{name} <span aria-hidden="true">·</span> {entries.length}</h3>
+      <ul class="family-process-list">
+        {shown.map(entry => <ProcessRow key={entry.session.id} entry={entry} selectedId={selectedId} now={now} />)}
+        {foldable && (
+          <li>
+            <button type="button" class="family-more" aria-expanded={open} onClick={onToggle}>
+              <span class="family-more-chevron" aria-hidden="true">{open ? '▴' : '▸'}</span>
+              {open ? 'show fewer' : `+${hidden} more`}
+            </button>
+          </li>
+        )}
+      </ul>
+    </section>
+  )
+}
+
+function ProcessesView({ tree, selectedId, expanded, now, onToggle }: {
+  tree: FamilyNode
+  selectedId: string
+  expanded: ReadonlySet<string>
+  now: number
+  onToggle: (key: string) => void
+}) {
+  const processes = familyProcesses(tree)
+  const running = processes.filter(({ session }) => isRunningProcess(session))
+  const finished = processes.filter(({ session }) => !isRunningProcess(session))
+  // The selected process owns one budget line in its lifecycle section.
+  // If running work would otherwise consume the whole budget, displace one
+  // running row so a selected finished process never vanishes behind its fold.
+  const selectedFinished = finished.some(({ session }) => session.id === selectedId)
+  const runningLimit = Math.max(0, FAMILY_ROW_BUDGET - (selectedFinished ? 1 : 0))
+  const initialRunning = Math.min(running.length, runningLimit)
+  const finishedLimit = Math.max(0, FAMILY_ROW_BUDGET - initialRunning)
+  return (
+    <div class="family-processes">
+      <ProcessSection name="Running" entries={running} limit={runningLimit}
+        expanded={expanded.has('process:running')} selectedId={selectedId} now={now}
+        onToggle={() => onToggle('process:running')} />
+      <ProcessSection name="Finished" entries={finished} limit={finishedLimit}
+        expanded={expanded.has('process:finished')} selectedId={selectedId} now={now}
+        onToggle={() => onToggle('process:finished')} />
     </div>
   )
 }
@@ -275,7 +391,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   // Per-open, like the expansion state beside it: a filter is a way of
   // looking at the family right now, not a preference about it.
-  const [filter, setFilter] = useState<FamilyState | null>(null)
+  const [filter, setFilter] = useState<FamilyFilter | null>(null)
   const [busy, setBusy] = useState(false)
   const toggle = (key: string) => {
     setExpanded(prev => {
@@ -339,52 +455,66 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // Promotion intentionally defers provenance: promoted sessions present as
   // roots even though parent_session_id remains immutable on the wire.
   const projection = projectFamily(selected, sessions.value)
-  // Your own path, root to selection: the budget may fold anything but this.
-  const pinned = new Set([...projection.ancestors.map(a => a.id), selected.id])
-  const view = visibleFamilyRows(projection.tree, { pinned, filter })
-  const action = filter ? FAMILY_ACTIONS[filter] : undefined
-  const targets = filter && action ? membersInState(projection.tree, filter) : []
+  const stateFilter = filter === 'processes' ? null : filter
+  // Structural agent ancestors remain context under a state filter, but a
+  // selected process does not: error/waiting/active are agent-only views.
+  // The dedicated process view pins selected processes within its own budget.
+  const pinSelected = !(stateFilter && isProcessSession(selected))
+  const pinned = new Set([
+    ...projection.ancestors.map(a => a.id),
+    ...(pinSelected ? [selected.id] : []),
+  ])
+  const view = visibleFamilyRows(projection.tree, { pinned, filter: stateFilter })
+  const action = stateFilter ? FAMILY_ACTIONS[stateFilter] : undefined
+  const targets = stateFilter && action ? membersInState(projection.tree, stateFilter) : []
   // One clock for the whole paint, so sibling ages can't disagree.
   const now = Date.now()
   return (
     <div id="agent-family-drawer" class="family-drawer" role="dialog" aria-label="Session family" ref={panelRef}>
       <div class="family-drawer-head">
-        <CountsLine rootId={projection.root.id} filter={filter} onFilter={setFilter} />
-        {action && targets.length > 0 && (
-          <button
-            type="button"
-            class="family-mark-read"
-            // Disabled while in flight: the verbs are individually
-            // idempotent-or-tolerant, but a second click would re-run
-            // the whole family and double any toast it earns.
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              runBulk(action, targets).finally(() => { setBusy(false) })
-            }}
-          >
-            {action.label(targets.length)}
-          </button>
-        )}
+        <CountsLine rootId={projection.root.id} tree={projection.tree} filter={filter} onFilter={setFilter} />
+        {/* Reserve the verb's column even when no filter owns one. The tally
+          * then receives the same width before and after a press, so neither
+          * it nor the drawer changes height when the button appears. */}
+        <div class="family-action-slot">
+          {action && targets.length > 0 && (
+            <button
+              type="button"
+              class="family-mark-read"
+              // Disabled while in flight: the verbs are individually
+              // idempotent-or-tolerant, but a second click would re-run
+              // the whole family and double any toast it earns.
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                runBulk(action, targets).finally(() => { setBusy(false) })
+              }}
+            >
+              {action.label(targets.length)}
+            </button>
+          )}
+        </div>
       </div>
       <div class="family-drawer-scroll">
-        {/* The root is a row, not a level: wrapping it in `LevelRows`
-          * keyed the outer level by the root's own id — the same key
-          * its children's level uses — so expanding the children put a
-          * second, orphan `show fewer` under the whole tree. It could
-          * never fold anyway; the root is admitted before anything
-          * competes for the budget. */}
-        <ul class="family-tree">
-          <FamilyRow
-            node={projection.tree}
-            selectedId={selected.id}
-            depth={0}
-            expanded={expanded}
-            view={view}
-            now={now}
-            onToggle={toggle}
-          />
-        </ul>
+        {filter === 'processes'
+          ? <ProcessesView tree={projection.tree} selectedId={selected.id} expanded={expanded} now={now} onToggle={toggle} />
+          : (
+            /* The root is a row, not a level: wrapping it in `LevelRows`
+             * keyed the outer level by the root's own id — the same key
+             * its children's level uses — so expanding the children put a
+             * second, orphan `show fewer` under the whole tree. */
+            <ul class="family-tree">
+              <FamilyRow
+                node={projection.tree}
+                selectedId={selected.id}
+                depth={0}
+                expanded={expanded}
+                view={view}
+                now={now}
+                onToggle={toggle}
+              />
+            </ul>
+          )}
       </div>
     </div>
   )

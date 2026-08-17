@@ -290,7 +290,7 @@ function FamilyActivityLine({
           <span key={segment.state} class="family-activity-seg">
             {segment.dot
               ? <span class={`family-glyph session-dot-indicator ${segment.dot}`} />
-              : <span class="family-glyph family-proc working">$</span>}
+              : <span class="family-glyph family-proc">$</span>}
             {segment.count}
           </span>
         ))}
@@ -300,9 +300,10 @@ function FamilyActivityLine({
   )
 }
 
-/** The sidebar's family entry: a root row, the one family member kept
- *  beneath it — the member you're viewing, or the last one you did —
- *  and a line counting the family beneath the root.
+/** The sidebar's family entry: a root row, one member beneath it while
+ *  this family owns selection, and a line counting the family. The member is
+ *  the selection itself, or the last-viewed member while the root is selected;
+ *  it disappears as soon as selection leaves the family.
  *
  *  Selection and hit areas nest, the way the sessions do:
  *   - the group is the root's area. Hovering anywhere in it highlights
@@ -404,7 +405,7 @@ function FamilyEntry({
             * it keeps the title from sliding sideways when state
             * arrives or clears. */}
           {glyph?.kind === 'process'
-            ? <span class={`family-glyph family-proc ${glyph.state}`} aria-hidden="true">$</span>
+            ? <span class="family-glyph family-proc" aria-hidden="true">$</span>
             : glyph?.kind === 'dot'
             ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
             : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}

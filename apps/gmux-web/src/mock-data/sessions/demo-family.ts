@@ -64,8 +64,8 @@ export const DEMO_FAMILY: MockSession[] = [
     id: 'famApromoted', title: 'promoted research spike', parent_session_id: 'famAroot',
     promoted_to_root: true, last_output_at: ago(15),
   }),
-  // Process-only family: the summary line drops the empty segment and
-  // reads just "2 processes".
+  // Process-only family: summaries report the one running command; the
+  // panel's process filter also reveals the finished command.
   fam({ id: 'famBroot', title: 'build watcher agent', last_output_at: ago(90) }),
   fam({
     id: 'famBproc1', title: 'vite build --watch', parent_session_id: 'famBroot',
@@ -75,6 +75,39 @@ export const DEMO_FAMILY: MockSession[] = [
   fam({
     id: 'famBproc2', title: 'gofmt -l ./...', parent_session_id: 'famBroot',
     semantic_agent: false, adapter: 'shell', command: ['gofmt'], unread: true, last_output_at: ago(9),
+  }),
+  // Finished-only process family: no running summary outside the panel;
+  // inside it, the gray `$ processes` control opens Finished directly.
+  fam({ id: 'famQroot', title: 'quiet task runner', last_output_at: ago(150) }),
+  fam({
+    id: 'famQproc1', title: 'pnpm lint', parent_session_id: 'famQroot',
+    semantic_agent: false, adapter: 'shell', command: ['pnpm', 'lint'],
+    unread: true, last_output_at: ago(140),
+  }),
+  fam({
+    id: 'famQproc2', title: 'go test ./...', parent_session_id: 'famQroot',
+    semantic_agent: false, adapter: 'shell', command: ['go', 'test', './...'],
+    last_output_at: ago(145),
+  }),
+  // Enough history to prove the Finished section keeps its own fold.
+  ...Array.from({ length: 26 }, (_, i) => fam({
+    id: `famQhist${String(i).padStart(2, '0')}`,
+    title: `historical task ${i + 1}`,
+    parent_session_id: 'famQroot', semantic_agent: false, adapter: 'shell',
+    command: ['task', String(i + 1)], last_output_at: ago(150 + i),
+  })),
+  // A saturated running section plus one selected finished process proves
+  // that selection displaces a running row rather than vanishing at budget 0.
+  fam({ id: 'famSroot', title: 'saturated task runner', last_output_at: ago(210) }),
+  ...Array.from({ length: 25 }, (_, i) => fam({
+    id: `famSrun${String(i).padStart(2, '0')}`,
+    title: `running task ${i + 1}`,
+    parent_session_id: 'famSroot', semantic_agent: false, adapter: 'shell',
+    command: ['watch', String(i + 1)], status: { active: true }, last_output_at: ago(180 + i),
+  })),
+  fam({
+    id: 'famSfinished', title: 'selected finished task', parent_session_id: 'famSroot',
+    semantic_agent: false, adapter: 'shell', command: ['task', 'done'], last_output_at: ago(209),
   }),
   // A child working outside every project (no stamp, no matching rule):
   // promoting it would give it no sidebar row and no routable URL, so the

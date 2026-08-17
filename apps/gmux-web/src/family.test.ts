@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  descendantTree, familyAncestors, familyIndex, familySegments,
+  descendantTree, familyAncestors, familyIndex, familySegments, familyStateOf,
   childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
   familyMemberGlyph, isFamilyChild, projectFamily, promotionAction, promotionCopy,
 } from './family'
@@ -8,6 +8,21 @@ import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
   id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true, project_slug: 'p', ...extra,
+})
+
+describe('family overview state', () => {
+  it('keeps process history out of agent attention', () => {
+    const process = (extra = {}) => makeSession({ id: 'proc', cwd: '/p', adapter: 'shell', semantic_agent: false, ...extra })
+    expect(familyStateOf(process({ alive: true, status: { active: true } }))).toBe('running')
+    expect(familyStateOf(process({ alive: false, unread: true, status: { error: true } }))).toBeNull()
+    expect(familyStateOf(process({ alive: true, unread: true, status: { active: false, error: true } }))).toBeNull()
+  })
+
+  it('retains the agent turn vocabulary and precedence', () => {
+    expect(familyStateOf(agent('error', undefined, { alive: true, unread: true, status: { error: true } }))).toBe('error')
+    expect(familyStateOf(agent('active', undefined, { alive: true, unread: true, status: { active: true } }))).toBe('active')
+    expect(familyStateOf(agent('waiting', undefined, { unread: true }))).toBe('waiting')
+  })
 })
 
 describe('task-family projection', () => {
@@ -309,26 +324,19 @@ describe('member row glyph', () => {
     id: 'k', cwd: '/p', title: 'kid', semantic_agent: true, parent_session_id: 'root', ...over,
   })
 
-  it('gives a process its $ in every state', () => {
-    // Shape says "process" at a glance; state rides along as the glyph's
-    // own state rather than replacing it.
-    expect(familyMemberGlyph(proc(), 'none')).toEqual({ kind: 'process', state: 'none' })
-    expect(familyMemberGlyph(proc(), 'working')).toEqual({ kind: 'process', state: 'working' })
+  it('gives a process one stable $ in every state', () => {
+    // Shape alone says “process”; agent attention never recolors it.
+    expect(familyMemberGlyph(proc(), 'none')).toEqual({ kind: 'process' })
+    expect(familyMemberGlyph(proc(), 'working')).toEqual({ kind: 'process' })
   })
 
-  it('never drops a named member\'s attention on the floor', () => {
-    // The activity line subtracts whoever this row names, so the row is
-    // the only place its state can appear. A glyph that answered 'branch'
-    // or a stateless '$' for an unread member would report it nowhere.
-    for (const member of [proc({ unread: true }), kid({ unread: true })]) {
-      const glyph = familyMemberGlyph(member, 'unread')
-      expect(glyph.kind).not.toBe('branch')
-      expect('state' in glyph && glyph.state).toBe('unread')
+  it('keeps a named agent\'s attention on its dot', () => {
+    for (const state of ['unread', 'error'] as const) {
+      const glyph = familyMemberGlyph(kid(), state)
+      expect(glyph).toEqual({ kind: 'dot', state })
     }
-    for (const member of [proc({ status: { active: true, error: true } }), kid({ status: { active: true, error: true } })]) {
-      const glyph = familyMemberGlyph(member, 'error')
-      expect('state' in glyph && glyph.state).toBe('error')
-    }
+    expect(familyMemberGlyph(proc({ unread: true }), 'unread')).toEqual({ kind: 'process' })
+    expect(familyMemberGlyph(proc({ status: { error: true } }), 'error')).toEqual({ kind: 'process' })
   })
 
   it('falls back to the branch only for an agent with nothing to say', () => {

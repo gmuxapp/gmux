@@ -260,23 +260,16 @@ function byRecency(a: Session, b: Session): number {
   return bt.localeCompare(at) || a.id.localeCompare(b.id)
 }
 
-/** What the member row's glyph column shows, given the member and the
- *  dot state the sidebar computed for it.
- *
- *  The column is always occupied, and — this is the load-bearing part —
- *  it is the only place *this* member's state is shown: the summary
- *  line below counts it among many, which tells you something needs
- *  you but never which row. A glyph that can't express `unread` makes
- *  the named member the one you cannot see. So a process keeps its `$`
- *  shape but carries state as colour, and an agent with nothing to
- *  report falls back to the branch. */
+/** What the member row's glyph column shows. Agent state lives on its
+ * dot; `$` is stable process identity and is never recolored as agent
+ * attention. An agent with nothing to report falls back to the branch. */
 export type MemberGlyph =
-  | { readonly kind: 'process'; readonly state: DotState }
+  | { readonly kind: 'process' }
   | { readonly kind: 'dot'; readonly state: Exclude<DotState, 'none'> }
   | { readonly kind: 'branch' }
 
 export function familyMemberGlyph(member: Session, dot: DotState): MemberGlyph {
-  if (isProcessSession(member)) return { kind: 'process', state: dot }
+  if (isProcessSession(member)) return { kind: 'process' }
   return dot === 'none' ? { kind: 'branch' } : { kind: 'dot', state: dot }
 }
 
@@ -286,28 +279,33 @@ export function isProcessSession(session: Session): boolean {
   return session.semantic_agent !== true
 }
 
-/** The one state a member is counted under — and, since the panel's
- * tally doubles as its filter, the one state it can be filtered by.
- *
- * The tally and the filter must be the same rule or the panel lies:
- * pressing `3 error` and getting four rows is worse than not being able
- * to press it. So both derive from here, and the precedence is the
- * dot's own: error, then a running turn, then waiting on you. */
+/** The process lifecycle fact shared by summaries and the process view. */
+export function isRunningProcess(session: Session): boolean {
+  return isProcessSession(session) && session.alive && session.status?.active === true
+}
+
+/** The one overview state a member contributes. Agent turn state and
+ * process lifecycle are different axes: agents can need attention or be
+ * active; a process contributes only while it is running. Its unread output
+ * and exit status belong to the launching agent and terminal, not to family
+ * attention. The drawer's `processes` control is consequently a type filter,
+ * separate from these state buckets. */
 export type FamilyState = 'error' | 'active' | 'running' | 'waiting'
 
 export function familyStateOf(session: Session): FamilyState | null {
+  if (isProcessSession(session)) return isRunningProcess(session) ? 'running' : null
   if (session.alive && session.status?.error) return 'error'
-  if (session.alive && session.status?.active) return isProcessSession(session) ? 'running' : 'active'
+  if (session.alive && session.status?.active) return 'active'
   if (session.unread) return 'waiting'
   return null
 }
 
 /** The standard family numbers: what the descendants of one
  * presentation root are doing right now, one bucket per canonical
- * state, each member counted once by `familyStateOf`. Every surface
- * that summarizes a family — the sidebar line, the header pill, the
- * panel tally — quotes this shape and nothing else, so the same dots
- * can never wear different numbers. Idle members are deliberately not
+ * state, each contributing member counted once by `familyStateOf`.
+ * Sidebar and header summaries quote this shape directly. The panel quotes
+ * its agent segments directly, then uses `running` as the live count on its
+ * broader process-history control. Idle members are deliberately not
  * counted: the summaries exist to surface live work, not take a
  * census. */
 export type FamilyActivity = Readonly<Record<FamilyState, number>>

@@ -78,11 +78,26 @@ test.describe('sidebar family entry', () => {
     // Leaving the family closes its drawer, and coming back does not
     // pop it open again: open-ness is a statement about the present,
     // not a preference to be remembered.
-    await familyEntry(page, 'orchestrator').locator('.family-slot').click()
+    await familyEntry(page, 'orchestrator').locator('.session-item').first().click()
     await expect(page.locator('#agent-family-drawer')).toBeHidden()
     await page.goBack()
     await expect(page).toHaveURL(/~famBroot/)
     await expect(page.locator('#agent-family-drawer')).toBeHidden()
+  })
+
+  test('the member row exists only while its family owns selection', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    const family = familyEntry(page, 'orchestrator')
+    await expect(family.locator('.family-slot')).toHaveCount(1)
+
+    await page.locator('.session-item').filter({ hasText: 'design landing page' }).click()
+    await expect(family.locator('.family-slot')).toHaveCount(0)
+
+    // Selecting the root restores the remembered way back; leaving did not
+    // erase the memory, it only stopped rendering an inactive family's row.
+    await family.locator('.session-item').first().click()
+    await expect(family.locator('.family-slot')).toHaveCount(1)
+    await expect(family.locator('.family-slot')).toContainText('wire up the protocol adapter layer')
   })
 
   test('a drop anywhere on the entry reorders exactly once', async ({ page }) => {
@@ -240,13 +255,15 @@ test.describe('the family line and the panel tally', () => {
     await expect(page.locator('.family-row.selected')).toHaveCount(1)
     await expect(page.locator('.family-row[aria-current="page"]')).toBeVisible()
 
-    // A filter for a state nothing on your spine is in still keeps you.
+    // Processes are a type filter, not a state filter: it leaves the tree
+    // for a flat task-runner view containing both running and finished work.
     await tally('running').click()
     await expect(tally('error')).toHaveAttribute('aria-pressed', 'false')
-    const running = await titles()
-    expect(running.some(t => t.includes('pnpm test'))).toBe(true)
-    expect(running.some(t => t.startsWith('investigate a really long descendant'))).toBe(false)
-    await expect(page.locator('.family-row[aria-current="page"]')).toBeVisible()
+    const processes = await titles()
+    expect(processes.some(t => t.includes('pnpm test'))).toBe(true)
+    expect(processes.some(t => t.startsWith('investigate a really long descendant'))).toBe(false)
+    await expect(page.locator('.family-process-section h3').first()).toContainText('Running')
+    await expect(page.locator('.family-row[aria-current="page"]')).toHaveCount(0)
 
     // Pressing the live filter clears it; so does `all`.
     await tally('running').click()
@@ -266,13 +283,19 @@ test.describe('the family line and the panel tally', () => {
     const action = page.locator('.family-mark-read')
 
     // No filter, no verb: a bulk action only exists while you are
-    // looking at the complete list of what it will touch.
+    // looking at the complete list of what it will touch. Reserving one
+    // stable header height keeps the tree from jumping when the verb appears.
     await expect(action).toHaveCount(0)
+    const head = page.locator('.family-drawer-head')
+    const heightWithoutAction = await head.evaluate(node => node.getBoundingClientRect().height)
+    await tally('waiting').click()
+    await expect(action).toBeVisible()
+    expect(await head.evaluate(node => node.getBoundingClientRect().height)).toBe(heightWithoutAction)
+    await tally('all').click()
 
     const expected: [string, RegExp][] = [
       ['waiting', /^Mark all read$/],
       ['error', /^Mark all read$/],
-      ['running', /^Stop all \d+$/],
       ['active', /^Interrupt all \d+$/],
     ]
     for (const [state, verb] of expected) {
@@ -298,14 +321,12 @@ test.describe('the family line and the panel tally', () => {
     // `error`, precedence keeps it out of this verb's reach.
     expect(hits.read.every(path => path.includes('fam1kid'))).toBe(true)
 
-    // Stop all → /kill, and only the running process.
+    // Processes are history, not an attention queue; even while one is
+    // running, the type filter has no bulk verb.
     await tally('all').click()
     await tally('running').click()
-    await expect(action).toHaveText(/^Stop all \d+$/)
-    await action.click()
-    await expect.poll(() => hits.kill.length).toBe(1)
-    expect(hits.kill[0]).toContain('fam0proc')
-    expect(hits.cancel).toHaveLength(0)
+    await expect(action).toHaveCount(0)
+    expect(hits.kill).toHaveLength(0)
 
     // Interrupt all → /cancel, on the active agents and nothing else.
     await tally('all').click()
@@ -319,7 +340,7 @@ test.describe('the family line and the panel tally', () => {
     expect(hits.cancel.every(path => !path.includes('fam0root'))).toBe(true)
     expect(hits.cancel.some(path => path.includes('fam2kid'))).toBe(true)
     expect(hits.cancel.every(path => !path.includes('fam0proc'))).toBe(true)
-    expect(hits.kill).toHaveLength(1)
+    expect(hits.kill).toHaveLength(0)
   })
 
   test('a bulk verb names its blast radius, including folded members', async ({ page }) => {
@@ -381,21 +402,66 @@ test.describe('the family line and the panel tally', () => {
     expect(tallyCount('active')).toBeGreaterThan(0)
   })
 
-  test('a process row wears the state the tally counted it under', async ({ page }) => {
-    // famBroot is a process-only family: one running command, one that
-    // finished with output you have not seen. The `$` is the only place
-    // that row's state can appear, so a stateless glyph would leave the
-    // member the tally counts — and the `waiting` filter shows —
-    // unmarked on screen.
+  test('the processes filter separates running work from finished history', async ({ page }) => {
+    // famBroot is process-only: one running command and one finished with
+    // unread output. Unread completion is not agent attention, so the control
+    // names only the running count while opening both lifecycle sections.
     await openMockSidebar(page, '/my-project/claude/~famBroot')
     await page.locator('.family-trigger').click()
-    const glyphs = await page.locator('.family-row').evaluateAll(rows => rows.map(row => ({
-      title: row.querySelector('.family-row-title')?.textContent ?? '',
-      glyph: row.querySelector('.family-proc')?.className ?? null,
-    })))
-    const gofmt = glyphs.find(g => g.title.startsWith('gofmt'))
-    expect(gofmt?.glyph, 'the waiting process is marked as waiting').toContain('unread')
-    const build = glyphs.find(g => g.title.startsWith('vite build'))
-    expect(build?.glyph, 'and the running one as running').toContain('working')
+    const counts = page.locator('.family-counts')
+    await expect(counts).not.toContainText('waiting')
+    const processes = counts.locator('.family-count').filter({ hasText: 'running' })
+    await expect(processes).toHaveAccessibleName('Processes, 1 running')
+    await processes.click()
+    await expect(page.locator('.family-process-section h3')).toHaveText(['Running · 1', 'Finished · 1'])
+    const glyphs = page.locator('.family-process-list .family-proc')
+    await expect(glyphs).toHaveCount(2)
+    const colors = await glyphs.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color))
+    expect(new Set(colors).size, 'every process row uses one identity colour').toBe(1)
+  })
+
+  test('agent-state filters do not pin the selected process into their rows', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/shell/~fam0proc')
+    await page.locator('.family-trigger').click()
+    const error = page.locator('.family-count').filter({ hasText: 'error' })
+    await error.click()
+    await expect(page.locator('.family-row.process')).toHaveCount(0)
+    await expect(page.locator('.family-row[aria-current="page"]')).toHaveCount(0)
+  })
+
+  test('a selected finished process keeps one line when running fills the budget', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/shell/~famSfinished')
+    await page.locator('.family-trigger').click()
+    await page.locator('.family-count').filter({ hasText: 'running' }).click()
+    const running = page.locator('.family-process-section').filter({ hasText: 'Running' })
+    const finished = page.locator('.family-process-section').filter({ hasText: 'Finished' })
+    await expect(running.locator('.family-row')).toHaveCount(24)
+    await expect(running.locator('.family-more')).toHaveText(/\+1 more/)
+    await expect(finished.locator('.family-row')).toHaveCount(1)
+    await expect(finished.locator('.family-row')).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('.family-process-list .family-row')).toHaveCount(25)
+  })
+
+  test('a finished-only family offers quiet process history without a summary', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~famQroot')
+    // Nothing is running, so the header remains the quiet family icon rather
+    // than advertising process activity.
+    await expect(page.locator('.family-trigger-proc')).toHaveCount(0)
+    await page.locator('.family-trigger').click()
+    const control = page.locator('.family-count').filter({ hasText: 'processes' })
+    await expect(control).toHaveAccessibleName('Processes')
+    const processColor = await control.locator('.family-proc').evaluate(node => getComputedStyle(node).color)
+    const rowColor = await page.locator('.family-row.process .family-proc').first().evaluate(node => getComputedStyle(node).color)
+    expect(processColor, 'the history control is quiet').not.toBe(rowColor)
+    await control.click()
+    await expect(page.locator('.family-process-section h3')).toHaveText(['Finished · 28'])
+    const list = page.locator('.family-process-list')
+    await expect(list.locator('.family-row')).toHaveCount(25)
+    await expect(list.locator('.family-more')).toHaveText(/\+3 more/)
+    await expect(list.locator('.family-more')).toHaveAttribute('aria-expanded', 'false')
+    await list.locator('.family-more').click()
+    await expect(list.locator('.family-row')).toHaveCount(28)
+    await expect(list.locator('.family-more')).toHaveText(/show fewer/)
+    await expect(list.locator('.family-more')).toHaveAttribute('aria-expanded', 'true')
   })
 })
