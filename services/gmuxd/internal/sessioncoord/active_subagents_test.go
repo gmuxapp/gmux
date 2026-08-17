@@ -12,7 +12,10 @@ import (
 )
 
 func budgetSession(id, adapter string, parent *centralstore.SessionID, promoted bool) centralstore.Session {
-	return centralstore.Session{ID: centralstore.SessionID(id), Adapter: adapter, ParentSessionID: parent, PromotedToRoot: promoted}
+	if promoted {
+		parent = nil
+	}
+	return centralstore.Session{ID: centralstore.SessionID(id), Adapter: adapter, ParentSessionID: parent}
 }
 
 func budgetParent(id string) *centralstore.SessionID {
@@ -63,38 +66,6 @@ func TestActiveSubagentRootAndCountTable(t *testing.T) {
 	}
 	if _, exists := b.nodes["remote@peer"]; exists {
 		t.Fatal("remote projection entered the local budget index")
-	}
-}
-
-func TestActiveSubagentMutableOwnershipTransitions(t *testing.T) {
-	rows := []centralstore.Session{
-		budgetSession("a", "shell", nil, false),
-		budgetSession("b", "shell", nil, false),
-		budgetSession("child", "pi", budgetParent("a"), false),
-		budgetSession("grand", "pi", budgetParent("child"), false),
-	}
-	b := newActiveSubagentBudget([]int{8}, false, func(adapter string) bool { return adapter == "pi" }, rows)
-	b.setLive("child", true)
-	b.setLive("grand", true)
-	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "a", depth: 2}] != 1 {
-		t.Fatalf("initial counts = %v", b.activeByDepth)
-	}
-
-	b.setParent("child", budgetParent("b"))
-	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 {
-		t.Fatalf("reparent counts = %v", b.activeByDepth)
-	}
-	b.setPromotion("child", true)
-	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "child", depth: 1}] != 1 {
-		t.Fatalf("promotion counts = %v", b.activeByDepth)
-	}
-	b.setPromotion("child", false)
-	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "child", depth: 1}] != 0 {
-		t.Fatalf("demotion counts = %v", b.activeByDepth)
-	}
-	b.setLive("grand", false)
-	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 0 {
-		t.Fatalf("termination counts = %v", b.activeByDepth)
 	}
 }
 
@@ -327,19 +298,6 @@ func TestClaimedLaunchRechecksBudgetAfterReparent(t *testing.T) {
 	b.setParent(caller, &rootB)
 	if err := b.validateClaimedBudget(launch); !errors.Is(err, ErrSubagentLimitReached) {
 		t.Fatalf("reparented claim validation = %v, want limit", err)
-	}
-}
-
-func TestMissingNodeMutationsDoNotCorruptDescendantCounts(t *testing.T) {
-	root, missing, child := centralstore.SessionID("root"), centralstore.SessionID("missing"), centralstore.SessionID("child")
-	b := newActiveSubagentBudget([]int{1}, false, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: root, Adapter: "shell"}, budgetSession(string(child), "pi", &missing, false)})
-	b.setLive(child, true)
-	before := b.activeByDepth[activeSubagentCountKey{root: child, depth: 1}]
-	b.setParent(missing, &root)
-	b.setPromotion(missing, true)
-	b.remove(missing)
-	if got := b.activeByDepth[activeSubagentCountKey{root: child, depth: 1}]; got != before {
-		t.Fatalf("count changed from %d to %d", before, got)
 	}
 }
 

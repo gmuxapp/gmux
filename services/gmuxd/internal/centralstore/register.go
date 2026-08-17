@@ -697,7 +697,7 @@ func rematchRegistration(ctx context.Context, q *db.Queries, fault func() error,
 				return ""
 			}
 			return string(*current.ParentSessionID)
-		}(), created: int64(current.CreatedAt), promoted: current.PromotedToRoot, isNew: true}
+		}(), created: int64(current.CreatedAt), isNew: true}
 		all = append(all, target)
 	} else {
 		target.project = project

@@ -166,7 +166,7 @@ func (s *Store) ReplaceProjectCatalogAndRematch(ctx context.Context, input []Pro
 					return ""
 				}
 				return string(*sess.ParentSessionID)
-			}(), created: int64(sess.CreatedAt), promoted: sess.PromotedToRoot, isNew: true}
+			}(), created: int64(sess.CreatedAt), isNew: true}
 			all = append(all, rec)
 			survivors["l:"+r.local] = rec
 			placementChanged = true

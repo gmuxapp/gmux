@@ -2,11 +2,11 @@
 // production entrypoint graph (cmd/gmuxd non-test files). It fails if
 // any entrypoint file:
 //
-//   1. Imports a deleted authority package (peerstore, storegc).
-//   2. Calls a legacy authority constructor (store.New, projects.NewManager).
-//   3. Calls a legacy sessionmeta authority method (Write, Sweep, WatchRemovals).
-//   4. Contains a literal reference to a legacy JSON file (meta.json,
-//      projects.json, peers.json) that implies direct file I/O.
+//  1. Imports a deleted authority package (peerstore, storegc).
+//  2. Calls a legacy authority constructor (store.New, projects.NewManager).
+//  3. Calls a legacy sessionmeta authority method (Write, Sweep, WatchRemovals).
+//  4. Contains a literal reference to a legacy JSON file (meta.json,
+//     projects.json, peers.json) that implies direct file I/O.
 //
 // The guarantee is scoped to the entrypoint graph only. Retained packages
 // that the entrypoint imports (store, projects, sessionmeta, discovery)
@@ -33,14 +33,14 @@ import (
 // entrypoint import graph. These have been physically removed.
 var forbiddenImports = map[string]string{
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore": "package deleted; use centralstore peers",
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/storegc":  "package deleted; use centralstore reconciliation",
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/storegc":   "package deleted; use centralstore reconciliation",
 }
 
 // forbiddenConstructors lists constructor calls that would reconstruct
 // a legacy authority. The entrypoint may import the package for types
 // but must not call these constructors.
 var forbiddenConstructors = map[string]string{
-	"store.New":         "reconstructs legacy in-memory store; use centralstore.Open",
+	"store.New":           "reconstructs legacy in-memory store; use centralstore.Open",
 	"projects.NewManager": "reconstructs legacy projects.json authority; use Coordinator.ReplaceCatalog",
 }
 
@@ -50,9 +50,9 @@ var forbiddenConstructors = map[string]string{
 // call Write/Sweep/WatchRemovals (meta.json I/O).
 // The patterns match the actual variable name used in production (sessionDirs).
 var forbiddenMethods = map[string]string{
-	"sessionDirs.Write":          "writes meta.json; use centralstore",
-	"sessionDirs.Sweep":          "reads meta.json; use centralstore",
-	"sessionDirs.WatchRemovals":  "subscribes to store events; use Coordinator outcomes",
+	"sessionDirs.Write":         "writes meta.json; use centralstore",
+	"sessionDirs.Sweep":         "reads meta.json; use centralstore",
+	"sessionDirs.WatchRemovals": "subscribes to store events; use Coordinator outcomes",
 }
 
 // legacyJSONFiles lists JSON file names that must not appear as string

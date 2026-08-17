@@ -9,8 +9,7 @@ import type { ProjectItem, Session } from './types'
  * Unresolved provenance is not a presentation edge. Promotion breaks only the
  * presentation edge without erasing parent_session_id provenance. */
 function potentialFamilyParent(session: Session, byId: ReadonlyMap<string, Session>): Session | undefined {
-  if (session.promoted_to_root === true
-    || !session.parent_session_id
+  if (!session.parent_session_id
     || session.parent_session_id === session.id) return undefined
   const parent = byId.get(session.parent_session_id)
   return parent?.semantic_agent === true ? parent : undefined
@@ -215,7 +214,7 @@ export function promotionAction(
   }
   // During the transition, a legacy promoted flag is also a root. The return
   // target is immutable launch provenance, never the current parent edge.
-  if (session.parent_session_id && session.promoted_to_root !== true) return null
+  if (session.parent_session_id) return null
   if (!session.launched_from_session_id || session.launched_from_session_id === session.id) return null
   const parent = index.byId.get(session.launched_from_session_id)
   if (!parent || parent.semantic_agent !== true || parent.peer || !hasSidebarPlacement(parent, projects)) return null
@@ -224,7 +223,7 @@ export function promotionAction(
   // catches an unplaced ancestor even when the immediate target is placed.
   const returnedSessions = Array.from(index.byId.values(), candidate =>
     candidate.id === session.id
-      ? { ...candidate, parent_session_id: parent.id, promoted_to_root: false }
+      ? { ...candidate, parent_session_id: parent.id }
       : candidate)
   const returnedRoot = familyRoot(session, returnedSessions)
   return hasSidebarPlacement(returnedRoot, projects)

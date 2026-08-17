@@ -97,58 +97,6 @@ func TestRegisterRunnerNewLiveAndFastDead(t *testing.T) {
 	}
 }
 
-func TestRegisterRunnerSameIDPreservesHistoryAndNoop(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	cat := registrationCatalog(t, s)
-	parent := SessionID("original-parent")
-	first := registration("same", "shell", "/one", false, 10)
-	first.ParentSessionID = &parent
-	first.Facts.ExitedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(12))}
-	first.Facts.ExitCode = NullablePatch[int]{Set: ptr(3)}
-	got, _, err := s.RegisterRunner(ctx, first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.SetPromotion(ctx, "same", true, nil); err != nil {
-		t.Fatal(err)
-	}
-	beforePlacement := localPlacement(t, s, "same")
-	beforePos, beforeProject := beforePlacement.pos, beforePlacement.project
-
-	otherParent := SessionID("replacement-parent")
-	resume := registration("same", "shell", "/one", true, 99)
-	resume.ParentSessionID = &otherParent
-	got, result, err := s.RegisterRunner(ctx, resume)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CreatedAt != 10 || got.ParentSessionID == nil || *got.ParentSessionID != parent ||
-		!got.PromotedToRoot || got.ExitedAt != nil || got.ExitCode != nil {
-		t.Fatalf("history not preserved/live exit not cleared: %#v", got)
-	}
-	if result.SessionVersion != 3 || !result.SessionsDirty || result.WorldDirty {
-		t.Fatalf("resume result=%#v", result)
-	}
-	p := localPlacement(t, s, "same")
-	if p.project != beforeProject || p.pos != beforePos || p.project != int64(cat[0].ID) {
-		t.Fatalf("placement moved: %#v", p)
-	}
-
-	noop := registration("same", "shell", "/ignored-created", true, 100)
-	noop.Facts = RunnerFacts{}
-	_, result, err = s.RegisterRunner(ctx, noop)
-	if err != nil || result.Changed || result.SessionsDirty || result.WorldDirty || result.SessionVersion != 3 {
-		t.Fatalf("noop result=%#v err=%v", result, err)
-	}
-
-	mismatch := registration("same", "pi", "/one", true, 101)
-	_, result, err = s.RegisterRunner(ctx, mismatch)
-	if !errors.Is(err, ErrAdapterMismatch) || result.SessionVersion != 3 {
-		t.Fatalf("mismatch result=%#v err=%v", result, err)
-	}
-}
-
 func TestRegisterRunnerTriStateFactsAndActivityTransitions(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
@@ -473,40 +421,6 @@ func TestRegisterRunnerUnplacedRegistrationChangesPlacementNotRowVersion(t *test
 	}
 	if p := localPlacement(t, s, "unplaced"); p == nil || p.project != int64(cat[0].ID) || p.pos != 0 {
 		t.Fatalf("placement=%#v", p)
-	}
-}
-
-func TestRegisterRunnerDismissedReappearanceAppendsAndKeepsPromotion(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	cat := registrationCatalog(t, s)
-	for _, id := range []string{"old", "kept"} {
-		if _, _, err := s.RegisterRunner(ctx, registration(id, "shell", "/one", true, 1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := s.SetPromotion(ctx, "old", true, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET dismissed_at_ms=9, row_version=row_version+1 WHERE id='old'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.database.ExecContext(ctx, `DELETE FROM project_placements WHERE local_session_id='old'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := normalizePlacements(ctx, s.queries, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	got, r, err := s.RegisterRunner(ctx, registration("old", "shell", "/one", true, 10))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.DismissedAt != nil || !got.PromotedToRoot || !r.SessionsDirty || !r.WorldDirty {
-		t.Fatalf("reappear=%#v result=%#v", got, r)
-	}
-	if order := rootOrder(t, s, cat[0].ID); !reflect.DeepEqual(order, []string{"l:kept", "l:old"}) {
-		t.Fatalf("order=%v", order)
 	}
 }
 

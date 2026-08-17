@@ -79,7 +79,7 @@ func (s *Store) PlaceUnplacedSessions(ctx context.Context, ids []SessionID, at U
 				return ""
 			}
 			return string(*sess.ParentSessionID)
-		}(), created: int64(sess.CreatedAt), promoted: sess.PromotedToRoot, isNew: true}
+		}(), created: int64(sess.CreatedAt), isNew: true}
 		all = append(all, rec)
 		placed[string(sess.ID)] = true
 		appended = true

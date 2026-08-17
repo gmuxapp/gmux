@@ -105,7 +105,6 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Adapter:         v.Adapter,
 		DriveMode:       wireDriveMode(v.DriveMode),
 		SemanticAgent:   c.SemanticAgents[v.Adapter],
-		PromotedToRoot:  v.PromotedToRoot,
 		WorkspaceRoot:   v.WorkspaceRoot,
 		Remotes:         redactRemotes(v.Remotes),
 		Alive:           row.Alive,

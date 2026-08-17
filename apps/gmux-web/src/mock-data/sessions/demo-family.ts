@@ -65,8 +65,8 @@ export const DEMO_FAMILY: MockSession[] = [
   // organizational parent edge stays on the session. Exercises the ⋮ menu's
   // "Return to family" action and the sidebar's promoted projection.
   fam({
-    id: 'famApromoted', title: 'promoted research spike', parent_session_id: 'famAroot',
-    launched_from_session_id: 'famAroot', promoted_to_root: true, last_output_at: ago(15),
+    id: 'famApromoted', title: 'promoted research spike', parent_session_id: undefined,
+    launched_from_session_id: 'famAroot', last_output_at: ago(15),
   }),
   // Process-only family: summaries report the one running command; the
   // panel's process filter also reveals the finished command.

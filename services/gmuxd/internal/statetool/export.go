@@ -52,7 +52,6 @@ type ExportSession struct {
 	TerminalRows          *uint16           `json:"terminal_rows,omitempty"`
 	ParentSessionID       string            `json:"parent_session_id,omitempty"`
 	LaunchedFromSessionID string            `json:"launched_from_session_id,omitempty"`
-	PromotedToRoot        bool              `json:"promoted_to_root"`
 }
 
 // ExportProject is one catalog entry in sidebar order.
@@ -150,7 +149,6 @@ func exportSession(s centralstore.SessionExport) ExportSession {
 		DismissedAtMs:  millis(s.DismissedAt),
 		ExitCode:       s.ExitCode,
 		TerminalCols:   s.TerminalCols, TerminalRows: s.TerminalRows,
-		PromotedToRoot: s.PromotedToRoot,
 	}
 	// Remotes are URLs (git remotes may embed credentials): scrub each.
 	for name, u := range s.Remotes {

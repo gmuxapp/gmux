@@ -310,44 +310,6 @@ func TestCatalogRematchDoesNotPlaceUnplacedSessions(t *testing.T) {
 // TestCatalogRematchScopeAndPromotionRules: an unpromoted child moving with
 // its parent regroups under the parent's child scope in the new project; a
 // promoted child stays a root in its new project.
-func TestCatalogRematchScopeAndPromotionRules(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	cat, _, err := s.ReplaceProjectCatalog(ctx, []ProjectEntrySpec{owned("a", "/a"), owned("b", "/b")}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aID, bID := cat[0].ID, cat[1].ID
-	addSessionCwd(t, s, "parent", "", "/a/repo", 1)
-	addSessionCwd(t, s, "child", "parent", "/a/repo", 2)
-	addSessionCwd(t, s, "promoted", "parent", "/a/repo", 3)
-	placeLocal(t, s, "parent", aID)
-	placeLocal(t, s, "child", aID)
-	placeLocal(t, s, "promoted", aID)
-	if _, err := s.SetPromotion(ctx, "promoted", true, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	// Move /a/repo wholesale into project b.
-	specs := []ProjectEntrySpec{
-		{ID: aID, Owned: &OwnedProjectSpec{Slug: "a", Rules: []MatchRule{{Path: "/a", Exact: true}}}},
-		{ID: bID, Owned: &OwnedProjectSpec{Slug: "b", Rules: []MatchRule{{Path: "/b"}, {Path: "/a/repo"}}}},
-	}
-	_, r, err := s.ReplaceProjectCatalogAndRematch(ctx, specs, nil, 10)
-	if err != nil || !r.Changed {
-		t.Fatalf("result=%#v err=%v", r, err)
-	}
-	if got := rootOrder(t, s, bID); !reflect.DeepEqual(got, []string{"l:parent", "l:promoted"}) {
-		t.Fatalf("b roots=%v", got)
-	}
-	if got := scopeOrder(t, s, bID, "c:l:parent"); !reflect.DeepEqual(got, []string{"l:child"}) {
-		t.Fatalf("b child scope=%v", got)
-	}
-	if got := rootOrder(t, s, aID); len(got) != 0 {
-		t.Fatalf("a roots=%v", got)
-	}
-	assertKernelInvariants(t, s)
-}
 
 // TestCatalogRematchLocalPeerInputs: supplied Local-peer inputs are
 // re-derived (move/remove); placed subjects without inputs keep their

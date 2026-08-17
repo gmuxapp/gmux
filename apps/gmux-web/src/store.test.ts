@@ -859,8 +859,8 @@ describe('promotion snapshots preserve the selected session\u2019s routing', () 
   })
   const childSession = (promoted: boolean) => makeSession({
     id: '1bbbbbbb', cwd: '/dev/beta', adapter: 'pi', slug: 'worker',
-    semantic_agent: true, parent_session_id: '1aaaaaaa',
-    project_slug: 'beta', promoted_to_root: promoted,
+    semantic_agent: true, launched_from_session_id: '1aaaaaaa',
+    project_slug: 'beta', parent_session_id: promoted ? undefined : '1aaaaaaa',
   })
   beforeEach(() => {
     navCalls.length = 0
@@ -1728,7 +1728,7 @@ describe('sidebar family entry derivations', () => {
     it('gives a promoted descendant its own counts, not its old family\u2019s', () => {
       _rawSessions.value = [
         agent('root'),
-        agent('kid', { parent_session_id: 'root', promoted_to_root: true }),
+        agent('kid', { parent_session_id: undefined, launched_from_session_id: 'root' }),
         proc('p', 'kid', { status: { active: true } }),
       ]
       expect(familyActivityById.value.has('root')).toBe(false)
@@ -1847,7 +1847,7 @@ describe('sidebar family entry derivations', () => {
     it('is null for a promoted child (it owns a sidebar row of its own)', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
-        agent('kid', { slug: 'kiddo', parent_session_id: 'root', promoted_to_root: true }),
+        agent('kid', { slug: 'kiddo', parent_session_id: undefined, launched_from_session_id: 'root' }),
       ]
       urlPath.value = '/proj/pi/kiddo'
       expect(selectedId.value).toBe('kid')
@@ -2325,13 +2325,13 @@ describe('parseConnectURL', () => {
 })
 
 describe('family wire mapping', () => {
-  it('preserves parent provenance, semantic capability, and promotion', () => {
+  it('preserves current parent, launch provenance, and semantic capability', () => {
     const parsed = SessionSchema.parse({
       id: 'child', alive: true, parent_session_id: 'root',
-      semantic_agent: true, promoted_to_root: true,
+      launched_from_session_id: 'launcher', semantic_agent: true,
     })
     expect(toUISession(parsed)).toMatchObject({
-      parent_session_id: 'root', semantic_agent: true, promoted_to_root: true,
+      parent_session_id: 'root', launched_from_session_id: 'launcher', semantic_agent: true,
     })
   })
 })

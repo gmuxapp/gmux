@@ -1217,7 +1217,6 @@ export function toUISession(s: ProtocolSession): Session {
     parent_session_id: s.parent_session_id,
     launched_from_session_id: s.launched_from_session_id,
     semantic_agent: s.semantic_agent,
-    promoted_to_root: s.promoted_to_root,
     alive: s.alive,
     pid: s.pid ?? null,
     exit_code: s.exit_code ?? null,

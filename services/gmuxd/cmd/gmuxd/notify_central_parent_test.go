@@ -28,11 +28,13 @@ func newParentNotifyTestRouter(t *testing.T) *centralNotifyRouter {
 }
 
 func notifyRow(adapterName string, active bool, parent string, promoted bool) centralstore.Session {
-	row := centralstore.Session{Adapter: adapterName, Active: active, PromotedToRoot: promoted}
+	row := centralstore.Session{Adapter: adapterName, Active: active}
 	if parent != "" {
 		id := centralstore.SessionID(parent)
-		row.ParentSessionID = &id
 		row.LaunchedFromSessionID = &id
+		if !promoted {
+			row.ParentSessionID = &id
+		}
 	}
 	return row
 }

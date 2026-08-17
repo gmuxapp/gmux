@@ -22,7 +22,7 @@ import (
 // promoted bit or adapter capability map with which to produce them.
 func fdExcluded(path string) bool {
 	switch {
-	case strings.HasSuffix(path, ".semantic_agent"), strings.HasSuffix(path, ".promoted_to_root"):
+	case strings.HasSuffix(path, ".semantic_agent"):
 		return true
 	case strings.HasSuffix(path, ".project_index"):
 		return true

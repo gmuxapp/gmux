@@ -39,8 +39,6 @@ export interface Session {
   launched_from_session_id?: string
   /** Server-derived semantic agent capability; never inferred from adapter names. */
   semantic_agent?: boolean
-  /** Sticky presentation root flag. Does not erase parent_session_id provenance. */
-  promoted_to_root?: boolean
   alive: boolean
   pid: number | null
   exit_code: number | null

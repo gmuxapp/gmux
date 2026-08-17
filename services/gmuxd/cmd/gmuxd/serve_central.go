@@ -1094,7 +1094,7 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	}
 	if peerManager != nil && action != "" {
 		if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
-			if action == "promote" || action == "demote" || action == "reparent" {
+			if action == "reparent" {
 				writeError(w, http.StatusBadRequest, codeLocalOnly, fmt.Sprintf(
 					"%s is only available for sessions owned by this daemon; run gmux on the owning host", action))
 				return
@@ -1121,23 +1121,6 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	sess, ok := visibleSession(frames.Sessions, sessionID)
 	sid := centralstore.SessionID(sessionID)
 	switch action {
-	case "promote", "demote":
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
-			return
-		}
-		_, err := boot.Coordinator.SetPromotion(r.Context(), sid, action == "promote", nil)
-		if errors.Is(err, centralstore.ErrSessionNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "session not found")
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
-		}
-		// Coordinator publishes the committed mutation through the ordinary
-		// dirty bridge after updating budget ownership under the same mutex.
-		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "reparent":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
