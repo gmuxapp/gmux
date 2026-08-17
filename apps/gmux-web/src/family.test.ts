@@ -134,10 +134,11 @@ describe('task-family projection', () => {
       expect(copy.note).toBe('Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.')
     })
 
-    it('hides return when the launch parent has no sidebar placement', () => {
-      const root = agent('root', undefined, { project_slug: undefined })
+    it('blocks return when the launch parent has no sidebar placement — visible, with the reason', () => {
+      const root = agent('root', undefined, { project_slug: undefined, cwd: '/elsewhere' })
       const promoted = agent('promoted', 'root', { parent_session_id: undefined })
-      expect(promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }])).toBeNull()
+      expect(promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }]))
+        .toEqual({ kind: 'demote', parent: root, blocked: 'no-project' })
     })
 
     it('offers demote to a promoted session whose family still exists', () => {

@@ -217,7 +217,7 @@ export function promotionAction(
   if (session.parent_session_id) return null
   if (!session.launched_from_session_id || session.launched_from_session_id === session.id) return null
   const parent = index.byId.get(session.launched_from_session_id)
-  if (!parent || parent.semantic_agent !== true || parent.peer || !hasSidebarPlacement(parent, projects)) return null
+  if (!parent || parent.semantic_agent !== true || parent.peer) return null
 
   // Test the projection produced by reparenting to the launch parent. This
   // catches an unplaced ancestor even when the immediate target is placed.

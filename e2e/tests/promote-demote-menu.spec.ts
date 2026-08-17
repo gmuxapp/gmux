@@ -290,8 +290,10 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await page.evaluate(() => {
       const store = (window as any).__store
       const current = store.sessions.value as any[]
-      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: true } : s))
-      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: false } : s))
+      // Single-axis promotion: the authoritative target is the severed parent
+      // edge, and the external reversal restores the original parent.
+      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? (({ parent_session_id: _, ...rest }) => rest)(s) : s))
+      store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, parent_session_id: 'fam1kid' } : s))
     })
     await returnToFamilyMember(page)
     await expect(page).toHaveURL(/~fam2kid/)
