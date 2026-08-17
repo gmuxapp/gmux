@@ -39,32 +39,112 @@ The header speaks one control language: ghost icon buttons (borderless,
 `--bg-hover` on hover, sized to the ⋮ menu trigger). For family members
 the title row is the ancestor breadcrumb — `[family icon] ●root › ●parent
 › title` — where each crumb is a ghost link carrying that ancestor's live
-`sessionDotState` dot; the current session stays a plain bold title (its
-state lives in the status chip). Depth > 3 collapses the middle to a
-static `…`. On narrow screens the crumbs wrap onto their own row above
-the title. The family trigger (3-node tree SVG) shows the family's
-aggregated dot as a corner badge and toggles the panel; there is no cwd,
-no member count, and no separate parent/root buttons.
+`sessionDotState` dot; the current session stays a plain bold title. Depth > 3
+collapses the middle to a static `…`. On narrow screens the crumbs wrap onto
+their own row above the title. The family trigger (3-node tree SVG) toggles the
+panel; there is no cwd, member count, or separate parent/root button.
 
-The panel is a non-modal popover in the ⋮ dropdown's visual language
-(width `max-content` clamped 320–440px on desktop, full-width sheet on
-mobile). It closes on outside mousedown, Escape, or the trigger; clicking
-a row navigates without closing it. Content is a counts line (`N error ·
-N working · N unread · N total`, dot-precedence tallies) plus the family
-tree. Every children level is one flat list in sidebar activity-mode
-order: recency of `last_output_at ?? created_at`, no status buckets, no
-alive/dead distinction — state is only the row's five-state dot. The
-panel renders live; like the sidebar, a row moves only when new output
-arrives. Levels are capped at 15 rows behind a two-state `+N more` /
-`show fewer` summary keyed per parent (recency does the triage: unread
-members have recent output by definition, so they surface within the
-cap while long-dead noise sinks below the fold).
+The panel is a non-modal popover in the ⋮ dropdown's visual language. It closes
+on outside pointerdown, Escape, or its trigger; clicking a row navigates without
+closing it. The root is always present, followed by a line-budgeted family tree
+with per-level `+N more` / `show fewer` folds. Ordinary tree order is recency of
+`last_output_at ?? created_at`; state does not otherwise reorder the tree.
 
-Outside the panel a root row stands in for its whole family:
-`familyDotById` aggregates the highest-precedence member dot onto the
+Outside the panel a root row stands in for its whole family. For agent
+members, `familyDotById` aggregates the highest-precedence dot onto the
 presentation root, and `unreadCount` adds unread descendants (alive or
-retained-dead) to their folder-visible root. Processes render with a `$` glyph
-in place of the dot.
+retained-dead) to their folder-visible root. Process unread contributes to
+neither aggregation; running processes use the separate `$` summary described
+below.
+
+### Proposed process filter and glyph language
+
+Agent turn state and process lifecycle are different axes. A completed process
+may have unseen output, and it may have exited non-zero, but neither fact makes
+it an agent “waiting on you” or an overview error: the agent that launched the
+command owns its outcome. Like a task runner, the family overview presents a
+process as either **running** or **finished**. Exit codes remain available on the
+process's own terminal surface, not in family summaries or filters.
+
+The panel's filter bar has these controls when their population exists:
+
+- **all** — unchanged: show the ordinary family tree, agents and processes
+  together, subject to the panel's normal line budget and folds;
+- **N error** — agents with errors only;
+- **N waiting** — waiting agents only;
+- **N active** — active agents only;
+- **$ N running** — when one or more processes are running; or
+- **$ processes** — when process sessions exist but none is running.
+
+The root is excluded from these counts, as it is from the standard family
+numbers today; its own state remains visible on its row. “Processes exist”
+includes retained finished sessions for as long as they remain in the family
+snapshot. A process is running exactly while `alive && status.active`; every
+other process in the snapshot is finished for this overview, including a live
+shell at its prompt and a process that exited non-zero.
+
+The last two labels are two presentations of one **processes** filter. Pressing
+either shows all process sessions, not only the running subset. When present,
+the number is specifically the number currently running; it is not the number
+of rows the filter will return. The process control is never attention-styled.
+The filters do partition the descendants for overview purposes: error, waiting,
+and active contain agents only; processes contains processes only. An agent in
+error follows the existing state precedence and appears in one agent-state
+filter.
+
+The processes view is a flat task list rather than a family tree. Each row names
+its parent agent as secondary context so repeated commands from different
+agents remain distinguishable. It uses `last_output_at ?? created_at`, newest
+first, under two subheadings:
+
+1. **Running · N** — running processes;
+2. **Finished · N** — non-running processes.
+
+Omit an empty section. Thus a family with no running processes opens directly
+on **Finished**, while a family whose processes are all running has no
+**Finished** heading. The ordinary **all** tree remains structural; this flat,
+running-first rule applies only to the processes filter.
+
+The existing total member-row budget still bounds the processes view. Running
+rows are admitted first, then finished rows. Each nonempty section keeps its
+heading and, when folded, its own `+N more` control; headings do not consume the
+member-row budget. Expanding a section reveals all of that section in the same
+way as expanding a tree level today. A folded Finished section therefore
+remains visible and reachable even when running processes consume the initial
+row budget.
+
+`$` always identifies a process; a filled dot identifies agent state. Process
+error, unread, active-agent, and waiting-agent colors never recolor `$` or add a
+family-overview status marker. Its color has surface-specific presence
+semantics:
+
+- in summaries outside the filter bar, render a cyan `$` only when at least one
+  process is currently running; render no process glyph when none is running;
+- on the **processes** filter control, `$` is cyan while at least one process is
+  running and gray otherwise. The gray form says “process history is
+  available,” not “a gray process state”;
+- wherever an individual process is represented by `$`, including **all** and
+  **processes** rows, keep the glyph cyan whether the process is running or
+  finished.
+
+Accessible summary text follows the same presence rule: announce “N running
+processes” only when at least one is running. The gray control's accessible
+name is “Processes”; the cyan counting form is “Processes, N running,” so both
+lead with the population the control opens rather than implying its number is
+the result count.
+
+A process may remain unread internally for notification delivery and explicit
+consumption, but process unread never contributes to family/root attention
+presentation—even if a prior command remains unread while that process starts
+another. In particular, it contributes neither to `familyDotById` nor to the
+sidebar's `unreadCount`, and it produces no waiting count, filled waiting dot,
+process summary, unread section, or unread marker in the processes view.
+Running processes contribute only the running-process summary, not an
+agent-style aggregate dot.
+
+Bulk actions continue to follow the active filter. Waiting and error retain
+**Mark all read** for agents. The processes filter has no bulk action: it is a
+task history/type view, not an attention queue.
 
 ## Attention and consumption
 
