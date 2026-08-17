@@ -72,12 +72,12 @@ func main() {
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
 		os.Exit(cmdWait(cmd.waitRefs, cmd.timeout, cmd.forText, cmd.forRegex, cmd.quiet))
-	case modeRead:
-		os.Exit(cmdRead(cmd.readRefs, cmd.familyRef))
+	case modePromote:
+		os.Exit(cmdPromote(cmd.ref))
+	case modeReparent:
+		os.Exit(cmdReparent(cmd.ref, cmd.parentRef))
 	case modeAgent:
 		os.Exit(cmdAgent(cmd))
-	case modeSession:
-		os.Exit(cmdSession(cmd))
 	case modeEdit:
 		runEdit(cmd.editFile)
 	case modeEditChild:

@@ -25,9 +25,9 @@ const (
 	modeSend                   // gmux send <id> <text> [keys...]
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                   // gmux wait <id>...
-	modeRead                   // gmux read <id>... | --family <root-id>
+	modePromote                // gmux promote <id>
+	modeReparent               // gmux reparent <id> <parent-id>
 	modeAgent                  // gmux agent prompt|cancel|output <id>
-	modeSession                // gmux session promote|demote|reparent <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
 	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path|state ...>
@@ -52,10 +52,8 @@ type command struct {
 	initialRows int      // internal: pre-size PTY height
 
 	// session-addressing verbs (attach/tail/kill/send/send-keys/wait)
-	ref       string   // session reference; may carry an @peer suffix
-	waitRefs  []string // wait accepts one or more references, in argv order
-	readRefs  []string // read accepts one or more references, in argv order
-	familyRef string   // read --family root
+	ref      string   // session reference; may carry an @peer suffix
+	waitRefs []string // wait accepts one or more references, in argv order
 
 	// ls
 	all  bool
@@ -83,10 +81,8 @@ type command struct {
 	agentModel  string  // --new only: model selector for the launch
 	agentName   string  // --new only: session display name for the launch
 
-	// session (modeSession)
-	sessionSub  string // promote|demote|reparent
-	parentRef   string // reparent target; empty with --clear
-	clearParent bool
+	// reparent
+	parentRef string
 
 	// help
 	helpTopic string // "agent", "agent prompt", ... ("" = full usage)
@@ -118,7 +114,7 @@ type command struct {
 // under `gmux <group> <verb>` without reopening the frozen action list.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "read", "agent", "session", "edit", "daemon", "auth", "remote", "version", "help",
+	"wait", "promote", "reparent", "agent", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -182,8 +178,6 @@ func parseCLI(args []string) (*command, error) {
 			switch {
 			case rest[0] == "agent":
 				return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
-			case rest[0] == "session":
-				return &command{mode: modeHelp, helpTopic: "session"}, nil
 			case rest[0] == "daemon":
 				return &command{mode: modeDaemon, daemonArgs: []string{"help"}}, nil
 			case helpTopicExists(rest[0]):
@@ -216,20 +210,16 @@ func parseCLI(args []string) (*command, error) {
 		return dispatchVerb("send-keys", rest, parseSendKeys)
 	case "wait":
 		return dispatchVerb("wait", rest, parseWait)
-	case "read":
-		return dispatchVerb("read", rest, parseRead)
+	case "promote":
+		return dispatchVerb("promote", rest, parsePromote)
+	case "reparent":
+		return dispatchVerb("reparent", rest, parseReparent)
 	case "agent":
 		c, err := parseAgent(rest)
 		if err != nil {
 			// A mistake inside the namespace prints the namespace guide,
 			// not the top-level synopsis.
 			return nil, &usageError{topic: "agent", err: err}
-		}
-		return c, nil
-	case "session":
-		c, err := parseSession(rest)
-		if err != nil {
-			return nil, &usageError{topic: "session", err: err}
 		}
 		return c, nil
 	case "edit":
@@ -326,49 +316,6 @@ func dispatchVerb(topic string, args []string, parse func([]string) (*command, e
 	return c, nil
 }
 
-func parseSession(args []string) (*command, error) {
-	if len(args) == 0 || isHelpToken(args[0]) {
-		return &command{mode: modeHelp, helpTopic: "session"}, nil
-	}
-	cmd := &command{mode: modeSession, sessionSub: args[0]}
-	switch cmd.sessionSub {
-	case "promote", "demote":
-		if len(args) != 2 {
-			return nil, fmt.Errorf("session %s requires a session id", cmd.sessionSub)
-		}
-		cmd.ref = args[1]
-	case "reparent":
-		positional := make([]string, 0, 2)
-		for _, arg := range args[1:] {
-			switch {
-			case arg == "--clear":
-				if cmd.clearParent {
-					return nil, errors.New("session reparent: --clear specified more than once")
-				}
-				cmd.clearParent = true
-			case strings.HasPrefix(arg, "-"):
-				return nil, fmt.Errorf("session reparent: unknown flag %q", arg)
-			default:
-				positional = append(positional, arg)
-			}
-		}
-		if cmd.clearParent {
-			if len(positional) != 1 {
-				return nil, errors.New("session reparent --clear requires one session id and no parent id")
-			}
-			cmd.ref = positional[0]
-		} else {
-			if len(positional) != 2 {
-				return nil, errors.New("session reparent requires a session id and parent id (or --clear)")
-			}
-			cmd.ref, cmd.parentRef = positional[0], positional[1]
-		}
-	default:
-		return nil, fmt.Errorf("unknown session command %q (expected promote, demote, or reparent)", cmd.sessionSub)
-	}
-	return cmd, nil
-}
-
 func parseLs(args []string) (*command, error) {
 	c := &command{mode: modeList}
 	fs := newFlagSet("ls")
@@ -385,22 +332,31 @@ func parseLs(args []string) (*command, error) {
 	return c, nil
 }
 
-func parseRead(args []string) (*command, error) {
-	c := &command{mode: modeRead}
-	fs := newFlagSet("read")
-	fs.StringVar(&c.familyRef, "family", "", "mark a root and all descendants read")
-	pos, err := parseInterspersed(fs, args)
-	if err != nil {
-		return nil, err
+func parsePromote(args []string) (*command, error) {
+	return parseMutationRefs(modePromote, "promote", args, 1)
+}
+
+func parseReparent(args []string) (*command, error) {
+	cmd, err := parseMutationRefs(modeReparent, "reparent", args, 2)
+	if err == nil {
+		cmd.parentRef = args[1]
 	}
-	if c.familyRef != "" && len(pos) > 0 {
-		return nil, errors.New("read accepts either session ids or --family <root-id>, not both")
+	return cmd, err
+}
+
+func parseMutationRefs(m mode, name string, args []string, arity int) (*command, error) {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return nil, fmt.Errorf("%s: unknown flag %q", name, arg)
+		}
 	}
-	if c.familyRef == "" && len(pos) == 0 {
-		return nil, errors.New("read requires one or more session ids, or --family <root-id>")
+	if len(args) != arity {
+		if arity == 1 {
+			return nil, fmt.Errorf("%s requires a session id", name)
+		}
+		return nil, fmt.Errorf("%s requires a session id and parent id", name)
 	}
-	c.readRefs = pos
-	return c, nil
+	return &command{mode: m, ref: args[0]}, nil
 }
 
 func parseRefOnly(m mode, name string, args []string) (*command, error) {

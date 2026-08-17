@@ -32,9 +32,9 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux tail <id> [-n N]             print the last N lines of terminal output
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
   gmux wait <id>... [--timeout|-t N] block until turns end; print reports
-  gmux read <id>...                  mark retained results consumed
+  gmux promote <id>                 make a session a family root
+  gmux reparent <id> <parent-id>    move a session under a new parent
   gmux kill <id>                    terminate a session
-  gmux session --help               promote, demote, or reparent sessions
 
 Editing (usable as $EDITOR; blocks until the editor closes):
   gmux edit [file]                  open a file for the user to inspect or edit
@@ -133,7 +133,8 @@ Peer sessions (<id>@<peer>) attach transparently through the daemon.
 
 Always the raw view: the last N lines of rendered terminal output, ANSI
 stripped, for every kind of session — shell, one-shot command or agent.
-tail answers "what is on its screen".
+tail answers "what is on its screen". A successful read marks the session's
+result consumed.
 
 For an agent session you usually want a semantic view instead:
 
@@ -142,16 +143,6 @@ For an agent session you usually want a semantic view instead:
 
 ('gmux tail --raw' and its -e/-r aliases are gone: tail is raw by
 definition, and the conversation view moved to 'gmux agent logs'.)
-`,
-
-	"read": `gmux read: mark session results consumed
-
-  gmux read <id>...
-  gmux read --family <root-id>
-
-The family form marks the root and all transitive launch descendants read. Use
-it once to clear retained child-session unread piles created by older gmux
-versions whose wait command did not consume results.
 `,
 
 	"send": `gmux send: type raw text and keys into a session's terminal
@@ -221,7 +212,8 @@ Steers, follow-ups, and human instructions are additional user boundaries and
 do not end the wait. A late wait immediately reports the latest exchange.
 Timeout, interruption, and activity failure are valid stdout reports; the exit
 code is the verdict. --quiet suppresses reports. Non-agent sessions use neutral
-session-activity markers; predicate waits remain synchronization-only.
+session-activity markers; predicate waits remain synchronization-only. A
+successful read marks each session's result consumed.
 
 Exit codes: 0 completed/matched, 2 intentionally interrupted, 1 failure or
 timeout. A local signal says the observed agent or sessions remain active and exits 128+N.
@@ -236,22 +228,22 @@ then escalates to SIGKILL. The session stays listed
 ('gmux ls') with its exit code, and its output remains readable.
 `,
 
-	"session": `gmux session: change task-family ownership
+	"promote": `gmux promote: make a session a root
 
-  gmux session promote <id>                present a child as a root
-  gmux session demote <id>                 restore normal child presentation
-  gmux session reparent <id> <parent-id>   assign a new direct parent
-  gmux session reparent <id> --clear       clear the direct parent
+  gmux promote <id>
 
-Promotion is sticky presentation state: it preserves the organizational
-parent while giving the session full root visibility and its own
-active-subagent budget. Completion-notification suppression is unchanged
-either way: it follows the immutable launch parent, not presentation.
-Demotion clears that presentation override.
+Severs the current family edge. The session gets independent family grouping,
+budget ownership, and recursive dismissal. Local sessions only. Undo by
+reparenting it under its former parent.
+`,
 
-Reparenting changes the parent used by family grouping, recursive dismissal,
-and the active-subagent budget. Both sessions must exist on this daemon;
-self-parenting, cycles, and cross-peer reassignment are refused.
+	"reparent": `gmux reparent: move a session under a new parent
+
+  gmux reparent <id> <parent-id>
+
+Changes family grouping, budget ownership, and recursive dismissal. Both
+sessions must be local to this daemon; self-parenting and cycles are refused.
+Use 'gmux promote <id>' to make the session a root again.
 `,
 
 	"edit": `gmux edit: open a file in a managed editor session
