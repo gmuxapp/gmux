@@ -943,10 +943,11 @@ intentionally interrupted, and 1 means failure or timeout.
 With synchronous --new, the bare session id is printed on stderr the moment the
 session exists and stdout is the report alone. With --new --no-wait, stdout is
 the bare id only. Before creating a runner, --new reserves one live semantic-
-agent descendant slot against the caller's current behavioral root. The host
-default is max_active_subagents = 8; promoted roots and independent top-level
-launches have independent budgets. 'gmux ls' shows the sessions to inspect when
-the daemon refuses a launch. Semantic reads and delivery hide runner residency:
+agent slot at its depth below the caller's current behavioral root. The host
+default allows unlimited direct children, eight shared grandchildren, and no
+deeper descendants. Promoted roots and independent top-level launches have
+independent budgets. 'gmux ls' shows the sessions to inspect when the daemon
+refuses a launch. Semantic reads and delivery hide runner residency:
 an inactive conversation is resumed automatically when prompted.
 `)
 	case "agent cancel":

@@ -20,8 +20,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != 8790 {
 		t.Errorf("port = %d, want 8790", cfg.Port)
 	}
-	if cfg.MaxActiveSubagents != 8 {
-		t.Errorf("max_active_subagents = %d, want 8", cfg.MaxActiveSubagents)
+	if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != "[-1 8]" || cfg.MaxSubagentsByDepth.Disabled {
+		t.Errorf("max_subagents_by_depth = %+v, want [-1 8]", cfg.MaxSubagentsByDepth)
 	}
 	if cfg.Tailscale.Enabled {
 		t.Error("tailscale should be disabled by default")
@@ -39,7 +39,7 @@ func TestLoadFromFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeConfig(t, dir, `
 port = 9999
-max_active_subagents = 12
+max_subagents_by_depth = [64, 12]
 
 [tailscale]
 enabled = true
@@ -53,8 +53,8 @@ allow = ["alice@github", "bob@github"]
 	if cfg.Port != 9999 {
 		t.Errorf("port = %d, want 9999", cfg.Port)
 	}
-	if cfg.MaxActiveSubagents != 12 {
-		t.Errorf("max_active_subagents = %d, want 12", cfg.MaxActiveSubagents)
+	if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != "[64 12]" {
+		t.Errorf("max_subagents_by_depth = %v, want [64 12]", cfg.MaxSubagentsByDepth.Values)
 	}
 	if !cfg.Tailscale.Enabled {
 		t.Error("tailscale should be enabled")
@@ -64,24 +64,29 @@ allow = ["alice@github", "bob@github"]
 	}
 }
 
-func TestLoadValidatesMaxActiveSubagents(t *testing.T) {
+func TestLoadValidatesMaxSubagentsByDepth(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		value   string
-		want    int
-		wantErr bool
+		name, value string
+		want        string
+		wantOff     bool
+		wantErr     bool
 	}{
-		{name: "minimum", value: "1", want: 1},
-		{name: "reasonable maximum", value: "1024", want: 1024},
-		{name: "zero", value: "0", wantErr: true},
-		{name: "negative", value: "-1", wantErr: true},
-		{name: "unreasonably large", value: "1025", wantErr: true},
-		{name: "wrong type", value: `"eight"`, wantErr: true},
+		{name: "default shape", value: "[-1, 8]", want: "[-1 8]"},
+		{name: "finite root", value: "[64, 8, 0]", want: "[64 8 0]"},
+		{name: "strict", value: "[0]", want: "[0]"},
+		{name: "disabled", value: "false", want: "[]", wantOff: true},
+		{name: "true", value: "true", wantErr: true},
+		{name: "empty", value: "[]", wantErr: true},
+		{name: "scalar", value: "8", wantErr: true},
+		{name: "negative after first", value: "[8, -1]", wantErr: true},
+		{name: "too large", value: "[-1, 1025]", wantErr: true},
+		{name: "too deep", value: "[1,2,3,4,5,6,7,8,9]", wantErr: true},
+		{name: "wrong entry type", value: `[-1, "eight"]`, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			writeConfig(t, dir, "max_active_subagents = "+tt.value+"\n")
+			writeConfig(t, dir, "max_subagents_by_depth = "+tt.value+"\n")
 			cfg, err := Load()
 			if tt.wantErr {
 				if err == nil {
@@ -92,8 +97,8 @@ func TestLoadValidatesMaxActiveSubagents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.MaxActiveSubagents != tt.want {
-				t.Fatalf("got %d, want %d", cfg.MaxActiveSubagents, tt.want)
+			if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != tt.want || cfg.MaxSubagentsByDepth.Disabled != tt.wantOff {
+				t.Fatalf("got %+v, want values=%s disabled=%v", cfg.MaxSubagentsByDepth, tt.want, tt.wantOff)
 			}
 		})
 	}

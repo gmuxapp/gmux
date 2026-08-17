@@ -280,9 +280,9 @@ func WithClock(now func() centralstore.UnixMillis) Option {
 // WithActiveSubagentBudget enables host-local launch admission. initial is a
 // durable ownership snapshot; runtime liveness is populated as surviving
 // runners register during startup convergence.
-func WithActiveSubagentBudget(limit int, semantic func(string) bool, initial []centralstore.Session) Option {
+func WithActiveSubagentBudget(limits []int, disabled bool, semantic func(string) bool, initial []centralstore.Session) Option {
 	return func(c *Coordinator) {
-		c.activeSubagents = newActiveSubagentBudget(limit, semantic, initial)
+		c.activeSubagents = newActiveSubagentBudget(limits, disabled, semantic, initial)
 	}
 }
 

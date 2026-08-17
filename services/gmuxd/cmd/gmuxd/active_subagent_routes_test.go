@@ -13,7 +13,7 @@ import (
 
 func routeBudgetCoordinator(limit int, rows []centralstore.Session) *sessioncoord.Coordinator {
 	return sessioncoord.New(nil, nil, nil, nil, nil,
-		sessioncoord.WithActiveSubagentBudget(limit, func(adapter string) bool { return adapter == "pi" }, rows))
+		sessioncoord.WithActiveSubagentBudget([]int{limit}, false, func(adapter string) bool { return adapter == "pi" }, rows))
 }
 
 func TestActiveSubagentReservationAPIAllowedAndRejected(t *testing.T) {
@@ -34,6 +34,7 @@ func TestActiveSubagentReservationAPIAllowedAndRejected(t *testing.T) {
 		Data struct {
 			Token  string `json:"token"`
 			Root   string `json:"root_session_id"`
+			Depth  int    `json:"depth"`
 			Active int    `json:"active"`
 			Limit  int    `json:"limit"`
 		} `json:"data"`
@@ -41,7 +42,7 @@ func TestActiveSubagentReservationAPIAllowedAndRejected(t *testing.T) {
 	if err := json.Unmarshal(allowed.Body.Bytes(), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Data.Token == "" || receipt.Data.Root != "root" || receipt.Data.Active != 0 || receipt.Data.Limit != 1 {
+	if receipt.Data.Token == "" || receipt.Data.Root != "root" || receipt.Data.Depth != 1 || receipt.Data.Active != 0 || receipt.Data.Limit != 1 {
 		t.Fatalf("receipt = %+v", receipt.Data)
 	}
 
@@ -55,7 +56,7 @@ func TestActiveSubagentReservationAPIAllowedAndRejected(t *testing.T) {
 	if err := json.Unmarshal(rejected.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Error.Code != codeSubagentLimitReached || !strings.Contains(envelope.Error.Message, "subagent limit reached for root root: 1 of 1 active subagents") || !strings.Contains(envelope.Error.Message, "gmux ls") {
+	if envelope.Error.Code != codeSubagentLimitReached || !strings.Contains(envelope.Error.Message, "subagent limit reached at depth 1 for root root: 1 of 1 autonomous subagents") || !strings.Contains(envelope.Error.Message, "gmux ls") {
 		t.Fatalf("error = %+v", envelope.Error)
 	}
 
@@ -66,6 +67,15 @@ func TestActiveSubagentReservationAPIAllowedAndRejected(t *testing.T) {
 	}
 	if again := request(); again.Code != http.StatusOK {
 		t.Fatalf("slot not released: %d %s", again.Code, again.Body.String())
+	}
+}
+
+func TestFormatSubagentLimitMessageAtBlockedDepth(t *testing.T) {
+	message := formatSubagentLimitMessage(&sessioncoord.SubagentLimitError{Root: "root", Depth: 3, Limit: 0})
+	for _, want := range []string{"depth 3", "root root", "may not spawn subagents", "ask a human"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message %q missing %q", message, want)
+		}
 	}
 }
 

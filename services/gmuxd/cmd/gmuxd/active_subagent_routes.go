@@ -63,8 +63,7 @@ func handleActiveSubagentReservation(w http.ResponseWriter, r *http.Request, coo
 	if err != nil {
 		var limit *sessioncoord.SubagentLimitError
 		if errors.As(err, &limit) {
-			message := fmt.Sprintf("subagent limit reached for root %s: %d of %d active subagents; run 'gmux ls' to inspect this host's sessions", limit.Root, limit.Active, limit.Limit)
-			writeError(w, http.StatusTooManyRequests, codeSubagentLimitReached, message)
+			writeError(w, http.StatusTooManyRequests, codeSubagentLimitReached, formatSubagentLimitMessage(limit))
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -72,9 +71,16 @@ func handleActiveSubagentReservation(w http.ResponseWriter, r *http.Request, coo
 	}
 	writeJSON(w, map[string]any{"ok": true, "data": map[string]any{
 		"token": reservation.Token, "root_session_id": reservation.Root,
-		"active": reservation.Active, "limit": reservation.Limit,
+		"depth": reservation.Depth, "active": reservation.Active, "limit": reservation.Limit,
 		"expires_at": reservation.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}})
+}
+
+func formatSubagentLimitMessage(limit *sessioncoord.SubagentLimitError) string {
+	if limit.Limit == 0 {
+		return fmt.Sprintf("subagent limit reached at depth %d for root %s: sessions at this depth may not spawn subagents on this host; ask a human to extend the limit or promote this subtree to its own root", limit.Depth, limit.Root)
+	}
+	return fmt.Sprintf("subagent limit reached at depth %d for root %s: %d of %d autonomous subagents at this depth; run 'gmux ls' to see who holds the slots, dismiss finished sessions, or ask a human to raise this host's limit or promote this subtree to its own root", limit.Depth, limit.Root, limit.Active, limit.Limit)
 }
 
 func handleActiveSubagentReservationRelease(w http.ResponseWriter, r *http.Request, coord *sessioncoord.Coordinator, token string) {

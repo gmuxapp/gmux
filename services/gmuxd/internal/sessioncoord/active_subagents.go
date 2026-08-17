@@ -30,11 +30,12 @@ const activeSubagentReservationTTL = 2 * time.Minute
 // ErrSubagentLimitReached.
 type SubagentLimitError struct {
 	Root          centralstore.SessionID
+	Depth         int
 	Active, Limit int
 }
 
 func (e *SubagentLimitError) Error() string {
-	return fmt.Sprintf("%v for root %s: %d of %d active subagents", ErrSubagentLimitReached, e.Root, e.Active, e.Limit)
+	return fmt.Sprintf("%v at depth %d for root %s: %d of %d autonomous subagents", ErrSubagentLimitReached, e.Depth, e.Root, e.Active, e.Limit)
 }
 func (e *SubagentLimitError) Unwrap() error { return ErrSubagentLimitReached }
 
@@ -44,6 +45,7 @@ func (e *SubagentLimitError) Unwrap() error { return ErrSubagentLimitReached }
 type ActiveSubagentReservation struct {
 	Token         string
 	Root          centralstore.SessionID
+	Depth         int
 	Active, Limit int
 	ExpiresAt     time.Time
 }
@@ -67,25 +69,36 @@ type activeSubagentLaunch struct {
 // maintained projection of durable mutable ownership plus runtime liveness.
 // Durable rows provide parent/promotion/adapter facts; only installed local
 // registry generations set live. Remote projections never enter this index.
-type activeSubagentBudget struct {
-	limit        int
-	semantic     func(string) bool
-	nodes        map[centralstore.SessionID]activeSubagentNode
-	children     map[centralstore.SessionID]map[centralstore.SessionID]struct{}
-	roots        map[centralstore.SessionID]centralstore.SessionID
-	activeByRoot map[centralstore.SessionID]int
-	launches     map[string]activeSubagentLaunch
-	now          func() time.Time
+type activeSubagentPlacement struct {
+	root  centralstore.SessionID
+	depth int
 }
 
-func newActiveSubagentBudget(limit int, semantic func(string) bool, rows []centralstore.Session) *activeSubagentBudget {
+type activeSubagentCountKey struct {
+	root  centralstore.SessionID
+	depth int
+}
+
+type activeSubagentBudget struct {
+	limits        []int
+	disabled      bool
+	semantic      func(string) bool
+	nodes         map[centralstore.SessionID]activeSubagentNode
+	children      map[centralstore.SessionID]map[centralstore.SessionID]struct{}
+	placements    map[centralstore.SessionID]activeSubagentPlacement
+	activeByDepth map[activeSubagentCountKey]int
+	launches      map[string]activeSubagentLaunch
+	now           func() time.Time
+}
+
+func newActiveSubagentBudget(limits []int, disabled bool, semantic func(string) bool, rows []centralstore.Session) *activeSubagentBudget {
 	b := &activeSubagentBudget{
-		limit: limit, semantic: semantic,
-		nodes:        make(map[centralstore.SessionID]activeSubagentNode, len(rows)),
-		children:     make(map[centralstore.SessionID]map[centralstore.SessionID]struct{}),
-		roots:        make(map[centralstore.SessionID]centralstore.SessionID, len(rows)),
-		activeByRoot: make(map[centralstore.SessionID]int),
-		launches:     make(map[string]activeSubagentLaunch), now: time.Now,
+		limits: append([]int(nil), limits...), disabled: disabled, semantic: semantic,
+		nodes:         make(map[centralstore.SessionID]activeSubagentNode, len(rows)),
+		children:      make(map[centralstore.SessionID]map[centralstore.SessionID]struct{}),
+		placements:    make(map[centralstore.SessionID]activeSubagentPlacement, len(rows)),
+		activeByDepth: make(map[activeSubagentCountKey]int),
+		launches:      make(map[string]activeSubagentLaunch), now: time.Now,
 	}
 	if b.semantic == nil {
 		b.semantic = func(string) bool { return false }
@@ -99,7 +112,7 @@ func newActiveSubagentBudget(limit int, semantic func(string) bool, rows []centr
 		b.nodes[row.ID] = n
 	}
 	for id := range b.nodes {
-		b.roots[id] = b.resolveRoot(id)
+		b.placements[id] = b.resolvePlacement(id)
 	}
 	return b
 }
@@ -155,6 +168,36 @@ func (b *activeSubagentBudget) resolveRoot(start centralstore.SessionID) central
 	}
 }
 
+func (b *activeSubagentBudget) resolvePlacement(start centralstore.SessionID) activeSubagentPlacement {
+	root := b.resolveRoot(start)
+	if root == "" {
+		return activeSubagentPlacement{}
+	}
+	depth := 0
+	cur := start
+	seen := make(map[centralstore.SessionID]bool)
+	for cur != root {
+		if seen[cur] {
+			return activeSubagentPlacement{root: root}
+		}
+		seen[cur] = true
+		n, ok := b.nodes[cur]
+		if !ok || !n.hasParent {
+			return activeSubagentPlacement{root: root}
+		}
+		cur = n.parent
+		depth++
+	}
+	return activeSubagentPlacement{root: root, depth: depth}
+}
+
+func (b *activeSubagentBudget) cap(depth int) int {
+	if depth < 1 || depth > len(b.limits) {
+		return 0
+	}
+	return b.limits[depth-1]
+}
+
 func (b *activeSubagentBudget) subtree(start centralstore.SessionID) []centralstore.SessionID {
 	out := make([]centralstore.SessionID, 0, 1)
 	seen := map[centralstore.SessionID]bool{}
@@ -179,22 +222,23 @@ func (b *activeSubagentBudget) subtree(start centralstore.SessionID) []centralst
 func (b *activeSubagentBudget) subtract(ids []centralstore.SessionID) {
 	for _, id := range ids {
 		n := b.nodes[id]
-		root := b.roots[id]
-		if n.live && n.semantic && root != "" && root != id {
-			b.activeByRoot[root]--
-			if b.activeByRoot[root] == 0 {
-				delete(b.activeByRoot, root)
+		p := b.placements[id]
+		if n.live && n.semantic && p.root != "" && p.depth >= 1 {
+			key := activeSubagentCountKey{root: p.root, depth: p.depth}
+			b.activeByDepth[key]--
+			if b.activeByDepth[key] == 0 {
+				delete(b.activeByDepth, key)
 			}
 		}
 	}
 }
 func (b *activeSubagentBudget) add(ids []centralstore.SessionID) {
 	for _, id := range ids {
-		root := b.resolveRoot(id)
-		b.roots[id] = root
+		p := b.resolvePlacement(id)
+		b.placements[id] = p
 		n := b.nodes[id]
-		if n.live && n.semantic && root != "" && root != id {
-			b.activeByRoot[root]++
+		if n.live && n.semantic && p.root != "" && p.depth >= 1 {
+			b.activeByDepth[activeSubagentCountKey{root: p.root, depth: p.depth}]++
 		}
 	}
 }
@@ -233,17 +277,18 @@ func (b *activeSubagentBudget) setLive(id centralstore.SessionID, live bool) {
 	if !ok || n.live == live {
 		return
 	}
-	root := b.roots[id]
-	if n.live && n.semantic && root != "" && root != id {
-		b.activeByRoot[root]--
-		if b.activeByRoot[root] == 0 {
-			delete(b.activeByRoot, root)
+	p := b.placements[id]
+	key := activeSubagentCountKey{root: p.root, depth: p.depth}
+	if n.live && n.semantic && p.root != "" && p.depth >= 1 {
+		b.activeByDepth[key]--
+		if b.activeByDepth[key] == 0 {
+			delete(b.activeByDepth, key)
 		}
 	}
 	n.live = live
 	b.nodes[id] = n
-	if n.live && n.semantic && root != "" && root != id {
-		b.activeByRoot[root]++
+	if n.live && n.semantic && p.root != "" && p.depth >= 1 {
+		b.activeByDepth[key]++
 	}
 }
 
@@ -297,7 +342,7 @@ func (b *activeSubagentBudget) remove(id centralstore.SessionID) {
 	}
 	delete(b.children, id)
 	delete(b.nodes, id)
-	delete(b.roots, id)
+	delete(b.placements, id)
 	var survivors []centralstore.SessionID
 	for _, member := range affected {
 		if member != id {
@@ -314,19 +359,20 @@ func (b *activeSubagentBudget) cleanupExpired(now time.Time) {
 		}
 	}
 }
-func (b *activeSubagentBudget) launchRoot(launch activeSubagentLaunch) centralstore.SessionID {
+func (b *activeSubagentBudget) launchPlacement(launch activeSubagentLaunch) activeSubagentPlacement {
 	if !launch.hasParent {
-		return ""
+		return activeSubagentPlacement{}
 	}
-	if _, ok := b.nodes[launch.parent]; !ok {
-		return ""
+	p, ok := b.placements[launch.parent]
+	if !ok {
+		return activeSubagentPlacement{}
 	}
-	return b.roots[launch.parent]
+	return activeSubagentPlacement{root: p.root, depth: p.depth + 1}
 }
-func (b *activeSubagentBudget) reservedAt(root centralstore.SessionID) int {
+func (b *activeSubagentBudget) reservedAt(want activeSubagentPlacement) int {
 	n := 0
 	for _, launch := range b.launches {
-		if b.launchRoot(launch) == root {
+		if b.launchPlacement(launch) == want {
 			n++
 		}
 	}
@@ -340,12 +386,16 @@ func (b *activeSubagentBudget) reserve(parent *centralstore.SessionID) (ActiveSu
 	if parent != nil {
 		launch.parent, launch.hasParent = *parent, true
 	}
-	root := b.launchRoot(launch)
-	active := 0
-	if root != "" {
-		active = b.activeByRoot[root] + b.reservedAt(root)
-		if active >= b.limit {
-			return ActiveSubagentReservation{}, &SubagentLimitError{Root: root, Active: active, Limit: b.limit}
+	placement := b.launchPlacement(launch)
+	active, limit := 0, 0
+	if placement.root != "" {
+		limit = b.cap(placement.depth)
+		active = b.activeByDepth[activeSubagentCountKey{root: placement.root, depth: placement.depth}] + b.reservedAt(placement)
+		if b.disabled {
+			limit = -1
+		}
+		if limit != -1 && active >= limit {
+			return ActiveSubagentReservation{}, &SubagentLimitError{Root: placement.root, Depth: placement.depth, Active: active, Limit: limit}
 		}
 	}
 	var raw [16]byte
@@ -354,7 +404,7 @@ func (b *activeSubagentBudget) reserve(parent *centralstore.SessionID) (ActiveSu
 	}
 	token := hex.EncodeToString(raw[:])
 	b.launches[token] = launch
-	return ActiveSubagentReservation{Token: token, Root: root, Active: active, Limit: b.limit, ExpiresAt: launch.expires}, nil
+	return ActiveSubagentReservation{Token: token, Root: placement.root, Depth: placement.depth, Active: active, Limit: limit, ExpiresAt: launch.expires}, nil
 }
 
 func (b *activeSubagentBudget) claim(token string, id centralstore.SessionID) (activeSubagentLaunch, error) {
@@ -383,16 +433,24 @@ func (b *activeSubagentBudget) validateParent(launch activeSubagentLaunch, paren
 // this receipt, so equality with limit is valid; anything greater means its
 // parent moved into a root that was already full after admission.
 func (b *activeSubagentBudget) validateClaimedBudget(launch activeSubagentLaunch) error {
-	root := b.launchRoot(launch)
-	if root == "" {
+	if b.disabled {
 		return nil
 	}
-	active := b.activeByRoot[root] + b.reservedAt(root)
-	if active > b.limit {
-		return &SubagentLimitError{Root: root, Active: active - 1, Limit: b.limit}
+	placement := b.launchPlacement(launch)
+	if placement.root == "" {
+		return nil
+	}
+	limit := b.cap(placement.depth)
+	if limit == -1 {
+		return nil
+	}
+	active := b.activeByDepth[activeSubagentCountKey{root: placement.root, depth: placement.depth}] + b.reservedAt(placement)
+	if active > limit {
+		return &SubagentLimitError{Root: placement.root, Depth: placement.depth, Active: active - 1, Limit: limit}
 	}
 	return nil
 }
+
 func (b *activeSubagentBudget) release(token string, claimed bool) {
 	launch, ok := b.launches[token]
 	if !ok {

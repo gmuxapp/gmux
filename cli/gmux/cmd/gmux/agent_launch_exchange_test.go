@@ -100,7 +100,7 @@ func TestAgentPromptNewAdmissionAPIAndExitCode(t *testing.T) {
 			if r.URL.Path != "/v1/agent-launch-reservations" {
 				t.Fatalf("path = %s", r.URL.Path)
 			}
-			writeErrEnvelope(w, http.StatusTooManyRequests, "subagent_limit_reached", "subagent limit reached for root root: 8 of 8 active subagents; run 'gmux ls' to inspect this host's sessions")
+			writeErrEnvelope(w, http.StatusTooManyRequests, "subagent_limit_reached", "subagent limit reached at depth 2 for root root: 8 of 8 autonomous subagents at this depth; run 'gmux ls' to see who holds the slots")
 		})
 		oldLaunch, oldReserve, oldRelease := agentLaunchSession, agentReserveActiveSubagent, agentReleaseActiveSubagent
 		agentReserveActiveSubagent, agentReleaseActiveSubagent = reserveActiveSubagent, releaseActiveSubagent
@@ -116,7 +116,7 @@ func TestAgentPromptNewAdmissionAPIAndExitCode(t *testing.T) {
 		if code != waitExitError || launched {
 			t.Fatalf("exit=%d launched=%v", code, launched)
 		}
-		if !strings.Contains(stderr, "subagent_limit_reached: subagent limit reached for root root: 8 of 8 active subagents") || !strings.Contains(stderr, "gmux ls") {
+		if !strings.Contains(stderr, "subagent_limit_reached: subagent limit reached at depth 2 for root root: 8 of 8 autonomous subagents") || !strings.Contains(stderr, "gmux ls") {
 			t.Fatalf("stderr = %q", stderr)
 		}
 	})
@@ -174,7 +174,7 @@ func TestAgentPromptHelpDocumentsActiveSubagentBudget(t *testing.T) {
 	var out strings.Builder
 	printAgentUsage(&out, "agent prompt")
 	text := out.String()
-	for _, want := range []string{"max_active_subagents = 8", "behavioral root", "gmux ls"} {
+	for _, want := range []string{"unlimited direct children", "shared grandchildren", "behavioral root", "gmux ls"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help missing %q:\n%s", want, text)
 		}

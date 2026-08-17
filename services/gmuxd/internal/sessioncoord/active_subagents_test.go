@@ -35,7 +35,7 @@ func TestActiveSubagentRootAndCountTable(t *testing.T) {
 		budgetSession("cycle-b", "pi", budgetParent("cycle-a"), false),
 		budgetSession("cycle-child", "pi", budgetParent("cycle-b"), false),
 	}
-	b := newActiveSubagentBudget(8, func(adapter string) bool { return adapter == "pi" }, rows)
+	b := newActiveSubagentBudget([]int{8}, false, func(adapter string) bool { return adapter == "pi" }, rows)
 	for _, id := range []centralstore.SessionID{"agent", "nested", "process", "promoted", "promoted-child", "orphan", "orphan-child", "cycle-a", "cycle-b", "cycle-child"} {
 		b.setLive(id, true)
 	}
@@ -47,14 +47,18 @@ func TestActiveSubagentRootAndCountTable(t *testing.T) {
 		"cycle-a": "cycle-a", "cycle-b": "cycle-a", "cycle-child": "cycle-a",
 	}
 	for id, want := range roots {
-		if got := b.roots[id]; got != want {
+		if got := b.placements[id].root; got != want {
 			t.Errorf("root(%s) = %s, want %s", id, got, want)
 		}
 	}
-	wantCounts := map[centralstore.SessionID]int{"root": 2, "promoted": 1, "orphan": 1, "cycle-a": 2}
-	for root, want := range wantCounts {
-		if got := b.activeByRoot[root]; got != want {
-			t.Errorf("active[%s] = %d, want %d", root, got, want)
+	wantCounts := map[activeSubagentCountKey]int{
+		{root: "root", depth: 1}: 1, {root: "root", depth: 2}: 1,
+		{root: "promoted", depth: 1}: 1, {root: "orphan", depth: 1}: 1,
+		{root: "cycle-a", depth: 1}: 1, {root: "cycle-a", depth: 2}: 1,
+	}
+	for key, want := range wantCounts {
+		if got := b.activeByDepth[key]; got != want {
+			t.Errorf("active[%s,%d] = %d, want %d", key.root, key.depth, got, want)
 		}
 	}
 	if _, exists := b.nodes["remote@peer"]; exists {
@@ -69,28 +73,69 @@ func TestActiveSubagentMutableOwnershipTransitions(t *testing.T) {
 		budgetSession("child", "pi", budgetParent("a"), false),
 		budgetSession("grand", "pi", budgetParent("child"), false),
 	}
-	b := newActiveSubagentBudget(8, func(adapter string) bool { return adapter == "pi" }, rows)
+	b := newActiveSubagentBudget([]int{8}, false, func(adapter string) bool { return adapter == "pi" }, rows)
 	b.setLive("child", true)
 	b.setLive("grand", true)
-	if b.activeByRoot["a"] != 2 {
-		t.Fatalf("initial counts = %v", b.activeByRoot)
+	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "a", depth: 2}] != 1 {
+		t.Fatalf("initial counts = %v", b.activeByDepth)
 	}
 
 	b.setParent("child", budgetParent("b"))
-	if b.activeByRoot["a"] != 0 || b.activeByRoot["b"] != 2 {
-		t.Fatalf("reparent counts = %v", b.activeByRoot)
+	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 {
+		t.Fatalf("reparent counts = %v", b.activeByDepth)
 	}
 	b.setPromotion("child", true)
-	if b.activeByRoot["b"] != 0 || b.activeByRoot["child"] != 1 {
-		t.Fatalf("promotion counts = %v", b.activeByRoot)
+	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "child", depth: 1}] != 1 {
+		t.Fatalf("promotion counts = %v", b.activeByDepth)
 	}
 	b.setPromotion("child", false)
-	if b.activeByRoot["b"] != 2 || b.activeByRoot["child"] != 0 {
-		t.Fatalf("demotion counts = %v", b.activeByRoot)
+	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "child", depth: 1}] != 0 {
+		t.Fatalf("demotion counts = %v", b.activeByDepth)
 	}
 	b.setLive("grand", false)
-	if b.activeByRoot["b"] != 1 {
-		t.Fatalf("termination counts = %v", b.activeByRoot)
+	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 0 {
+		t.Fatalf("termination counts = %v", b.activeByDepth)
+	}
+}
+
+func TestDepthBudgetDefaultShapeAndOptOut(t *testing.T) {
+	root := centralstore.SessionID("root")
+	rows := []centralstore.Session{{ID: root, Adapter: "shell"}}
+	for i := 0; i < 50; i++ {
+		rows = append(rows, budgetSession(fmt.Sprintf("child-%d", i), "pi", &root, false))
+	}
+	b := newActiveSubagentBudget([]int{-1, 8}, false, func(a string) bool { return a == "pi" }, rows)
+	for i := 0; i < 50; i++ {
+		b.setLive(centralstore.SessionID(fmt.Sprintf("child-%d", i)), true)
+	}
+	if _, err := b.reserve(&root); err != nil {
+		t.Fatalf("direct child should be unlimited: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		parent := centralstore.SessionID(fmt.Sprintf("child-%d", i))
+		if _, err := b.reserve(&parent); err != nil {
+			t.Fatalf("grandchild %d: %v", i, err)
+		}
+	}
+	parent := centralstore.SessionID("child-8")
+	if _, err := b.reserve(&parent); !errors.Is(err, ErrSubagentLimitReached) {
+		t.Fatalf("ninth shared grandchild = %v, want limit", err)
+	}
+
+	grandchild := budgetSession("grandchild", "pi", budgetParent("child-0"), false)
+	b.upsert(grandchild, true)
+	grandchildID := centralstore.SessionID("grandchild")
+	if _, err := b.reserve(&grandchildID); !errors.Is(err, ErrSubagentLimitReached) {
+		t.Fatalf("implicit trailing zero = %v, want limit", err)
+	}
+
+	off := newActiveSubagentBudget([]int{-1, 8}, true, func(a string) bool { return a == "pi" }, append(rows, grandchild))
+	disabledReservation, err := off.reserve(&grandchildID)
+	if err != nil {
+		t.Fatalf("disabled budget refused launch: %v", err)
+	}
+	if disabledReservation.Limit != -1 {
+		t.Fatalf("disabled reservation limit = %d, want -1", disabledReservation.Limit)
 	}
 }
 
@@ -100,7 +145,7 @@ func coordinatorAtSeven(t *testing.T) *Coordinator {
 	for i := 0; i < 7; i++ {
 		rows = append(rows, budgetSession(fmt.Sprintf("agent-%d", i), "pi", budgetParent("root"), false))
 	}
-	c := New(nil, nil, nil, nil, nil, WithActiveSubagentBudget(8, func(adapter string) bool { return adapter == "pi" }, rows))
+	c := New(nil, nil, nil, nil, nil, WithActiveSubagentBudget([]int{8}, false, func(adapter string) bool { return adapter == "pi" }, rows))
 	c.mu.Lock()
 	for i := 0; i < 7; i++ {
 		c.activeSubagents.setLive(centralstore.SessionID(fmt.Sprintf("agent-%d", i)), true)
@@ -150,13 +195,56 @@ func TestConcurrentActiveSubagentAdmissionAtSevenOfEight(t *testing.T) {
 	child := budgetSession("agent-7", "pi", &parent, false)
 	c.activeSubagents.upsert(child, true)
 	c.activeSubagents.release(successes[0].Token, false)
-	if got := c.activeSubagents.activeByRoot[parent]; got != 8 {
+	if got := c.activeSubagents.activeByDepth[activeSubagentCountKey{root: parent, depth: 1}]; got != 8 {
 		t.Fatalf("live descendants = %d, want 8", got)
 	}
 	if got := len(c.activeSubagents.launches); got != 0 {
 		t.Fatalf("leaked launch state = %d", got)
 	}
 	c.mu.Unlock()
+}
+
+func TestConcurrentSiblingAdmissionSharesGrandchildPool(t *testing.T) {
+	root := centralstore.SessionID("root")
+	rows := []centralstore.Session{{ID: root, Adapter: "shell"}}
+	for i := 0; i < 32; i++ {
+		parent := centralstore.SessionID(fmt.Sprintf("parent-%d", i))
+		rows = append(rows, budgetSession(string(parent), "pi", &root, false))
+		if i < 7 {
+			rows = append(rows, budgetSession(fmt.Sprintf("grand-%d", i), "pi", &parent, false))
+		}
+	}
+	c := New(nil, nil, nil, nil, nil, WithActiveSubagentBudget([]int{-1, 8}, false, func(a string) bool { return a == "pi" }, rows))
+	c.mu.Lock()
+	for i := 0; i < 7; i++ {
+		c.activeSubagents.setLive(centralstore.SessionID(fmt.Sprintf("grand-%d", i)), true)
+	}
+	c.mu.Unlock()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	for i := 0; i < 32; i++ {
+		parent := centralstore.SessionID(fmt.Sprintf("parent-%d", i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := c.ReserveActiveSubagent(context.Background(), &parent); err == nil {
+				successes.Add(1)
+			} else {
+				var limit *SubagentLimitError
+				if !errors.As(err, &limit) || limit.Depth != 2 {
+					t.Errorf("admission error = %v", err)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if successes.Load() != 1 {
+		t.Fatalf("successes = %d, want 1 shared slot", successes.Load())
+	}
 }
 
 func TestConcurrentActiveSubagentAdmissionAtEightOfEight(t *testing.T) {
@@ -193,14 +281,16 @@ func TestConcurrentActiveSubagentAdmissionAtEightOfEight(t *testing.T) {
 }
 
 func TestReservedLaunchFollowsReparentAndBlocksDismiss(t *testing.T) {
-	rootA, rootB, caller := centralstore.SessionID("root-a"), centralstore.SessionID("root-b"), centralstore.SessionID("caller")
+	rootA, rootB := centralstore.SessionID("root-a"), centralstore.SessionID("root-b")
+	caller, callerA := centralstore.SessionID("caller"), centralstore.SessionID("caller-a")
 	rows := []centralstore.Session{
 		{ID: rootA, Adapter: "shell"}, {ID: rootB, Adapter: "shell"},
 		{ID: caller, Adapter: "shell", ParentSessionID: &rootA},
+		{ID: callerA, Adapter: "shell", ParentSessionID: &rootA},
 	}
 	durable := newFakeDurable(0)
 	durable.listSessions = func() ([]centralstore.Session, error) { return rows, nil }
-	coord := New(nil, nil, durable, nil, nil, WithActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, rows))
+	coord := New(nil, nil, durable, nil, nil, WithActiveSubagentBudget([]int{-1, 1}, false, func(a string) bool { return a == "pi" }, rows))
 	first, err := coord.ReserveActiveSubagent(context.Background(), &caller)
 	if err != nil {
 		t.Fatal(err)
@@ -208,10 +298,10 @@ func TestReservedLaunchFollowsReparentAndBlocksDismiss(t *testing.T) {
 	coord.mu.Lock()
 	coord.activeSubagents.setParent(caller, &rootB)
 	coord.mu.Unlock()
-	if _, err := coord.ReserveActiveSubagent(context.Background(), &rootB); !errors.Is(err, ErrSubagentLimitReached) {
+	if _, err := coord.ReserveActiveSubagent(context.Background(), &caller); !errors.Is(err, ErrSubagentLimitReached) {
 		t.Fatalf("reservation did not move with caller: %v", err)
 	}
-	if _, err := coord.ReserveActiveSubagent(context.Background(), &rootA); err != nil {
+	if _, err := coord.ReserveActiveSubagent(context.Background(), &callerA); err != nil {
 		t.Fatalf("old root did not regain slot: %v", err)
 	}
 	if _, err := coord.Dismiss(context.Background(), caller); !errors.Is(err, ErrSubtreeBusy) {
@@ -222,8 +312,9 @@ func TestReservedLaunchFollowsReparentAndBlocksDismiss(t *testing.T) {
 
 func TestClaimedLaunchRechecksBudgetAfterReparent(t *testing.T) {
 	rootA, rootB, caller := centralstore.SessionID("root-a"), centralstore.SessionID("root-b"), centralstore.SessionID("caller")
-	rows := []centralstore.Session{{ID: rootA, Adapter: "shell"}, {ID: rootB, Adapter: "shell"}, {ID: caller, Adapter: "shell", ParentSessionID: &rootA}, budgetSession("full", "pi", &rootB, false)}
-	b := newActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, rows)
+	coordinator := centralstore.SessionID("coordinator")
+	rows := []centralstore.Session{{ID: rootA, Adapter: "shell"}, {ID: rootB, Adapter: "shell"}, {ID: caller, Adapter: "shell", ParentSessionID: &rootA}, {ID: coordinator, Adapter: "shell", ParentSessionID: &rootB}, budgetSession("full", "pi", &coordinator, false)}
+	b := newActiveSubagentBudget([]int{-1, 1}, false, func(a string) bool { return a == "pi" }, rows)
 	b.setLive("full", true)
 	reservation, err := b.reserve(&caller)
 	if err != nil {
@@ -241,13 +332,13 @@ func TestClaimedLaunchRechecksBudgetAfterReparent(t *testing.T) {
 
 func TestMissingNodeMutationsDoNotCorruptDescendantCounts(t *testing.T) {
 	root, missing, child := centralstore.SessionID("root"), centralstore.SessionID("missing"), centralstore.SessionID("child")
-	b := newActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: root, Adapter: "shell"}, budgetSession(string(child), "pi", &missing, false)})
+	b := newActiveSubagentBudget([]int{1}, false, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: root, Adapter: "shell"}, budgetSession(string(child), "pi", &missing, false)})
 	b.setLive(child, true)
-	before := b.activeByRoot[child]
+	before := b.activeByDepth[activeSubagentCountKey{root: child, depth: 1}]
 	b.setParent(missing, &root)
 	b.setPromotion(missing, true)
 	b.remove(missing)
-	if got := b.activeByRoot[child]; got != before {
+	if got := b.activeByDepth[activeSubagentCountKey{root: child, depth: 1}]; got != before {
 		t.Fatalf("count changed from %d to %d", before, got)
 	}
 }
@@ -282,7 +373,7 @@ func TestActiveSubagentRegistrationConsumesAndTerminationReleasesSlot(t *testing
 	durable.applyResult = func(centralstore.RunnerObservation) (centralstore.MutationResult, error) {
 		return centralstore.MutationResult{Changed: true, SessionsDirty: true, SessionVersion: 2}, nil
 	}
-	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget(8, func(a string) bool { return a == "pi" }, rows))
+	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget([]int{8}, false, func(a string) bool { return a == "pi" }, rows))
 	coord.mu.Lock()
 	for i := 0; i < 7; i++ {
 		coord.activeSubagents.setLive(centralstore.SessionID(fmt.Sprintf("live%04d", i)), true)
@@ -297,7 +388,7 @@ func TestActiveSubagentRegistrationConsumesAndTerminationReleasesSlot(t *testing
 		t.Fatal(err)
 	}
 	coord.mu.Lock()
-	if got := coord.activeSubagents.activeByRoot[parent]; got != 8 {
+	if got := coord.activeSubagents.activeByDepth[activeSubagentCountKey{root: parent, depth: 1}]; got != 8 {
 		t.Fatalf("after register active=%d", got)
 	}
 	if len(coord.activeSubagents.launches) != 0 {
@@ -309,7 +400,7 @@ func TestActiveSubagentRegistrationConsumesAndTerminationReleasesSlot(t *testing
 	alive := false
 	coord.apply(context.Background(), childID, runtime.Generation, RunnerEvent{ObservedAt: exit, Alive: &alive, Facts: centralstore.RunnerFacts{ExitedAt: centralstore.NullablePatch[centralstore.UnixMillis]{Set: &exit}}})
 	coord.mu.Lock()
-	if got := coord.activeSubagents.activeByRoot[parent]; got != 7 {
+	if got := coord.activeSubagents.activeByDepth[activeSubagentCountKey{root: parent, depth: 1}]; got != 7 {
 		t.Fatalf("after termination active=%d", got)
 	}
 	coord.mu.Unlock()
@@ -324,7 +415,7 @@ func TestActiveSubagentRegistrationPanicUnlocksAndPreservesReceipt(t *testing.T)
 	durable.registerResult = func(centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error) {
 		panic("boom")
 	}
-	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: parent, Adapter: "shell"}}))
+	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget([]int{1}, false, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: parent, Adapter: "shell"}}))
 	reservation, err := coord.ReserveActiveSubagent(context.Background(), &parent)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +450,7 @@ func TestActiveSubagentRegistrationFailureReleasesClaimedReceipt(t *testing.T) {
 	client := newFakeClient(meta)
 	client.metaErr = errors.New("startup meta failed")
 	coord := New(nil, client, newFakeDurable(0), nil, nil,
-		WithActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: parent, Adapter: "shell"}}))
+		WithActiveSubagentBudget([]int{1}, false, func(a string) bool { return a == "pi" }, []centralstore.Session{{ID: parent, Adapter: "shell"}}))
 	reservation, err := coord.ReserveActiveSubagent(context.Background(), &parent)
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +481,7 @@ func TestActiveSubagentRestartReconstructsOwnershipFromDurableRows(t *testing.T)
 	durable.registerResult = func(centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error) {
 		return centralstore.Session{ID: child, Version: 1, Adapter: "pi", ParentSessionID: &parent}, centralstore.MutationResult{Changed: true, SessionVersion: 1}, nil
 	}
-	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget(1, func(a string) bool { return a == "pi" }, rows))
+	coord := New(nil, client, durable, nil, nil, WithActiveSubagentBudget([]int{1}, false, func(a string) bool { return a == "pi" }, rows))
 	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "surviving-runner"}); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +499,7 @@ func BenchmarkActiveSubagentAdmission1000Sessions(b *testing.B) {
 		rows = append(rows, budgetSession(id, "shell", &parent, false))
 		parent = centralstore.SessionID(id)
 	}
-	budget := newActiveSubagentBudget(8, func(string) bool { return false }, rows)
+	budget := newActiveSubagentBudget([]int{8}, false, func(string) bool { return false }, rows)
 	launchParent := parent
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -16,9 +16,9 @@ Daemon behavior. gmuxd reads this file once at startup. Create or edit it manual
 # Default: 8790
 port = 8790
 
-# Per behavioral root, cap live semantic-agent descendants launched by gmux.
-# Default: 8
-max_active_subagents = 8
+# Per behavioral root, cap live semantic agents at each descendant depth.
+# Direct children are unlimited, grandchildren share 8 slots, deeper spawning is blocked.
+max_subagents_by_depth = [-1, 8]
 
 # Optional Tailscale remote access.
 # See the Remote Access guide for setup.
@@ -59,29 +59,37 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
 | `port` | `number` | `8790` | 1–65535 | TCP port for the HTTP listener. |
-| `max_active_subagents` | `number` | `8` | 1–1024 | Maximum live semantic-agent descendants per local behavioral root for `gmux agent prompt --new`. |
+| `max_subagents_by_depth` | `number[]` or `false` | `[-1, 8]` | 1–8 entries; each -1 or 0–1024 | Shared live semantic-agent budget per behavioral root and descendant depth. Only the first entry may be `-1` (unlimited). |
 
-`max_active_subagents` is a host default read once at daemon startup. A value in
-`host.toml` overrides the built-in default; there is currently no environment,
-CLI, UI, or per-root override. The daemon is the authority only for sessions it
-owns. It does not coordinate a distributed quota with network peers.
+`max_subagents_by_depth` is read once at daemon startup. Array element zero
+caps the root's direct children, element one caps grandchildren, and so on.
+Depths omitted from the array have a limit of zero, so `[-1, 8]` is equivalent
+to `[-1, 8, 0]`: direct children are unlimited, all children collectively
+share eight grandchild slots, and grandchildren cannot spawn agents. Set the
+field to `false` to disable admission protection while retaining launch
+accounting. There is no environment, CLI, UI, or per-root override.
+
+The limits are **shared per behavioral root at each depth**, not repeated for
+every parent. This gives the root's whole swarm an absolute budget for
+autonomous hiring: a recursive instruction propagated to 500 children can
+create at most eight grandchildren under the default, rather than 4,000.
 
 The budget follows current family ownership (`parent_session_id` and
-promotion), not immutable launch provenance. Reparenting immediately moves a
-live semantic-agent subtree to its new root's budget. Promoting a session makes
-it a root with an independent budget; demoting it rejoins its containing root.
-The root session itself is never counted. Neither are shell/process children,
-dead retained sessions, or remote projections. Independent top-level `--new`
-launches create independent roots and therefore do not consume another root's
-slots.
+promotion), not immutable launch provenance. Depth counts every family edge,
+including an intervening shell/process session; only live semantic-agent
+sessions consume slots at the resulting depth. Reparenting moves a live subtree
+and its depth counts immediately. Promoting a session makes it a root with a
+fresh depth budget; demoting it rejoins its containing root. Dead retained
+sessions and remote projections do not consume slots. Independent top-level
+`--new` launches create independent roots.
 
 A slot is reserved atomically before gmux creates the runner, PTY, or durable
-session row. It becomes a live slot when registration succeeds. A pre-start or
-registration failure releases the reservation; a normal exit or killed runner
-releases the live slot when that generation leaves the daemon's runtime
-registry. "Active" therefore means **live/resident semantic-agent descendant**,
-not merely an agent turn currently producing output. A refusal exits non-zero
-with the stable code `subagent_limit_reached` and suggests `gmux ls`.
+session row. It becomes a live slot when registration succeeds. Failures and
+runner exits release it. "Active" means **live/resident semantic-agent
+session**, not merely a turn producing output. A refusal exits non-zero with
+the stable code `subagent_limit_reached`, identifies the root and depth, and
+suggests `gmux ls`. The daemon owns only local admission; it does not coordinate
+a distributed quota with network peers.
 
 The bind address is not configurable here — it is the `GMUXD_LISTEN` environment variable (default `127.0.0.1`). See [Environment variables](/reference/environment/#bind-address).
 
@@ -156,7 +164,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
 - **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
-- **`max_active_subagents` is zero, negative, or above 1024**
+- **`max_subagents_by_depth` is `true`, is not an integer array or `false`, is empty, has over eight entries, has an entry above 1024, or uses `-1` after the first entry**
 - **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
 - **ntfy settings are unsafe or malformed** — including a missing/invalid topic, unsupported URL, mixed authentication modes, credentials over plaintext HTTP, priority/tag/timeout violations, or an enabled config file with group/other permissions
 - **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid
