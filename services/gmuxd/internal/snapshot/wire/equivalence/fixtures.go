@@ -175,7 +175,7 @@ func RenderProduction(w *World) (snapshot.SessionsPayload, snapshot.WorldPayload
 		sess := store.Session{
 			ID: f.ID, Peer: f.Peer, CreatedAt: rfc3339(f.Created), Command: f.Command,
 			Cwd: f.Cwd, Adapter: f.Adapter, WorkspaceRoot: f.WorkspaceRoot, Remotes: f.Remotes,
-			ParentSessionID: f.Parent, Alive: f.Alive, ExitCode: f.ExitCode,
+			ParentSessionID: f.Parent, LaunchedFromSessionID: f.Parent, Alive: f.Alive, ExitCode: f.ExitCode,
 			StartedAt: rfc3339(f.Started), ExitedAt: rfc3339(f.Exited),
 			Subtitle: f.Subtitle, Status: fixtureStatus(f),
 			Unread: f.Unread, TerminalCols: f.TerminalCols, TerminalRows: f.TerminalRows,
@@ -447,7 +447,7 @@ func peerFixtureRow(w *World, f FixtureSession) wire.Session {
 	row := wire.Session{
 		ID: f.ID, Peer: f.Peer, CreatedAt: rfc3339(f.Created), Command: f.Command,
 		Cwd: f.Cwd, Adapter: f.Adapter, WorkspaceRoot: f.WorkspaceRoot, Remotes: f.Remotes,
-		ParentSessionID: f.Parent, Alive: f.Alive, ExitCode: f.ExitCode,
+		ParentSessionID: f.Parent, LaunchedFromSessionID: f.Parent, Alive: f.Alive, ExitCode: f.ExitCode,
 		StartedAt: rfc3339(f.Started), ExitedAt: rfc3339(f.Exited),
 		Title: deriveFixtureTitle(f), Subtitle: f.Subtitle,
 		Status: &wire.Status{Active: f.Active, Error: f.Error, Interrupted: f.Interrupted}, Unread: f.Unread,

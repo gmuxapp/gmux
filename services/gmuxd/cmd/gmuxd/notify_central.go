@@ -131,8 +131,8 @@ func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 		snap.Title = o.Session.Title
 		snap.Adapter = o.Session.Adapter
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
-		if o.Session.LaunchedFromSessionID != nil {
-			snap.ParentID = string(*o.Session.LaunchedFromSessionID)
+		if o.Session.ParentSessionID != nil {
+			snap.ParentID = string(*o.Session.ParentSessionID)
 		}
 	}
 	return snap

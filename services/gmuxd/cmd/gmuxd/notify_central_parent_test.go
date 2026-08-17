@@ -109,13 +109,18 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 			wantPending: true,
 		},
 		{
-			name: "promoted presentation still has launcher contract",
+			name: "promoted root does not use launch parent",
 			seed: []struct {
 				id  string
 				row centralstore.Session
 			}{{"parent", notifyRow("pi", true, "", false)}},
-			child:       notifyRow("pi", true, "parent", true),
-			wantPending: false,
+			child: func() centralstore.Session {
+				row := notifyRow("pi", true, "", true)
+				parent := centralstore.SessionID("parent")
+				row.LaunchedFromSessionID = &parent
+				return row
+			}(),
+			wantPending: true,
 		},
 		{
 			name:        "missing parent",
@@ -138,6 +143,22 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 				t.Fatalf("pending child notification = %v, want %v", got, tc.wantPending)
 			}
 		})
+	}
+}
+
+func TestCentralNotifyReparentChangesSuppressor(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
+	r.handleOutcome(upsertOutcome("old", notifyRow("pi", true, "", false)))
+	r.handleOutcome(upsertOutcome("new", notifyRow("pi", false, "", false)))
+	child := notifyRow("pi", true, "old", false)
+	r.handleOutcome(upsertOutcome("child", child))
+	newParent := centralstore.SessionID("new")
+	child.ParentSessionID = &newParent
+	r.handleOutcome(upsertOutcome("child", child))
+	child.Active = false
+	r.handleOutcome(upsertOutcome("child", child))
+	if !hasPendingNotification(r, "child") {
+		t.Fatal("completion must follow the inactive current parent after reparenting")
 	}
 }
 

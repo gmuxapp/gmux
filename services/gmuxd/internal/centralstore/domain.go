@@ -119,8 +119,8 @@ var (
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
 	ErrSessionNotFound    = errors.New("centralstore: session not found")
-	ErrSessionParentSelf  = errors.New("centralstore: session cannot parent itself")
-	ErrSessionParentCycle = errors.New("centralstore: session parent cycle")
+	ErrSessionParentSelf  = errors.New("session cannot parent itself")
+	ErrSessionParentCycle = errors.New("session parent cycle")
 	// ErrCatalogHasPlacements marks the bootstrap-only catalog boundary. This
 	// primitive cannot authoritatively rematch subjects once placement exists.
 	ErrCatalogHasPlacements = errors.New("centralstore: catalog replacement requires zero placements")

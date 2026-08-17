@@ -83,8 +83,8 @@ func TestSessionFamilyMutationHTTPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "launched_from_session_id") {
-		t.Fatalf("historical launch provenance leaked onto snapshot/REST wire: %s", encoded)
+	if !strings.Contains(string(encoded), `"launched_from_session_id":"root"`) {
+		t.Fatalf("historical launch provenance missing from snapshot/REST wire: %s", encoded)
 	}
 
 	if response := post("/v1/sessions/child/reparent", `{"parent_session_id":null}`); response.Code != http.StatusOK {
