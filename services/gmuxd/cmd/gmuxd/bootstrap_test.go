@@ -105,8 +105,8 @@ func TestBootstrapReconstructsActiveSubagentBudgetAfterConvergence(t *testing.T)
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{"child.sock": meta}, blocked: map[string]bool{}}
 	boot, err := newBootstrap(BootstrapConfig{
 		Store: store, Runners: runners, Converter: &wire.Converter{},
-		Endpoints:          EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"child.sock"}, nil }),
-		MaxActiveSubagents: 1, SemanticAgent: func(adapter string) bool { return adapter == "pi" },
+		Endpoints:           EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"child.sock"}, nil }),
+		MaxSubagentsByDepth: []int{1}, SemanticAgent: func(adapter string) bool { return adapter == "pi" },
 	})
 	if err != nil {
 		t.Fatal(err)

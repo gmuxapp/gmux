@@ -148,7 +148,8 @@ type BootstrapConfig struct {
 	Notices                        func(context.Context, string)
 	Frames                         func(context.Context, wire.Frames)
 	Clock                          func() centralstore.UnixMillis
-	MaxActiveSubagents             int
+	MaxSubagentsByDepth            []int
+	SubagentBudgetDisabled         bool
 	SemanticAgent                  func(string) bool
 	RunnerBudget, ConvergeDeadline time.Duration
 	RetryInitial, RetryMaximum     time.Duration
@@ -201,12 +202,12 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	registry := sessioncoord.NewRegistry()
 	bridge := &composerDirtyBridge{}
 	opts := []sessioncoord.Option{sessioncoord.WithClock(cfg.Clock), sessioncoord.WithRunnerControl(cfg.Control), sessioncoord.WithRunnerSpawner(cfg.Spawner), sessioncoord.WithConversationTakeover(cfg.Resolver), sessioncoord.WithAdapterReconciler(cfg.Reconciler)}
-	if cfg.MaxActiveSubagents > 0 {
+	if len(cfg.MaxSubagentsByDepth) > 0 || cfg.SubagentBudgetDisabled {
 		rows, err := cfg.Store.ListSessions(context.Background())
 		if err != nil {
 			return nil, fmt.Errorf("bootstrap: initialize active-subagent ownership: %w", err)
 		}
-		opts = append(opts, sessioncoord.WithActiveSubagentBudget(cfg.MaxActiveSubagents, cfg.SemanticAgent, rows))
+		opts = append(opts, sessioncoord.WithActiveSubagentBudget(cfg.MaxSubagentsByDepth, cfg.SubagentBudgetDisabled, cfg.SemanticAgent, rows))
 	}
 	if cfg.LocalPeers != nil {
 		opts = append(opts, sessioncoord.WithLocalPeerMatchInputs(cfg.LocalPeers))

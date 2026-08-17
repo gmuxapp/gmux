@@ -28,9 +28,9 @@ type Config struct {
 	// Port is the TCP port for the HTTP listener (default 8790).
 	Port int `toml:"port"`
 
-	// MaxActiveSubagents is the host-default per behavioral-root limit for
-	// live semantic-agent descendants launched through gmux (default 8).
-	MaxActiveSubagents int `toml:"max_active_subagents"`
+	// MaxSubagentsByDepth is the per-behavioral-root budget at each descendant
+	// depth. False disables admission checks while retaining accounting.
+	MaxSubagentsByDepth SubagentDepthLimits `toml:"max_subagents_by_depth"`
 
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
 	Discovery     DiscoveryConfig     `toml:"discovery"`
@@ -98,6 +98,36 @@ type SessionsConfig struct {
 // NotificationsConfig controls external notification sinks.
 type NotificationsConfig struct {
 	Ntfy NtfyConfig `toml:"ntfy"`
+}
+
+// SubagentDepthLimits accepts either an integer array or false in TOML.
+type SubagentDepthLimits struct {
+	Disabled bool
+	Values   []int
+}
+
+func (l *SubagentDepthLimits) UnmarshalTOML(value any) error {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return fmt.Errorf("expected an array like [-1, 8] or false")
+		}
+		l.Disabled, l.Values = true, nil
+		return nil
+	case []any:
+		values := make([]int, len(v))
+		for i, raw := range v {
+			n, ok := raw.(int64)
+			if !ok {
+				return fmt.Errorf("entry %d must be an integer", i)
+			}
+			values[i] = int(n)
+		}
+		l.Disabled, l.Values = false, values
+		return nil
+	default:
+		return fmt.Errorf("expected an array like [-1, 8] or false")
+	}
 }
 
 // Duration is a TOML string duration such as "5s".
@@ -223,8 +253,19 @@ func validate(cfg Config) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
-	if cfg.MaxActiveSubagents < 1 || cfg.MaxActiveSubagents > 1024 {
-		return fmt.Errorf("max_active_subagents must be between 1 and 1024")
+	if !cfg.MaxSubagentsByDepth.Disabled {
+		limits := cfg.MaxSubagentsByDepth.Values
+		if len(limits) == 0 || len(limits) > 8 {
+			return fmt.Errorf("max_subagents_by_depth must contain between 1 and 8 entries")
+		}
+		for i, limit := range limits {
+			if limit == -1 && i == 0 {
+				continue
+			}
+			if limit < 0 || limit > 1024 {
+				return fmt.Errorf("max_subagents_by_depth entry %d must be between 0 and 1024; only the first entry may be -1", i)
+			}
+		}
 	}
 
 	maxRetentionDays := effectiveIntMax(math.MaxInt64 / int64(24*time.Hour))
@@ -396,8 +437,10 @@ func isPrivateOrCGNAT(ip net.IP) bool {
 
 func defaults() Config {
 	return Config{
-		Port:               8790,
-		MaxActiveSubagents: 8,
+		Port: 8790,
+		MaxSubagentsByDepth: SubagentDepthLimits{
+			Values: []int{-1, 8},
+		},
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
 		},

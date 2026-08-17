@@ -271,7 +271,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}}
 
-	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, MaxActiveSubagents: cfg.MaxActiveSubagents, SemanticAgent: func(name string) bool { return converter.SemanticAgents[name] }, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
+	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, MaxSubagentsByDepth: cfg.MaxSubagentsByDepth.Values, SubagentBudgetDisabled: cfg.MaxSubagentsByDepth.Disabled, SemanticAgent: func(name string) bool { return converter.SemanticAgents[name] }, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
 		// The converter builds world.health.launchers but not the top-level
 		// world.launchers/default_launcher that the web UI's "+" menu reads
 		// (parity with the legacy composeWorld). Inject the static launch
@@ -654,8 +654,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath, AssertedID: centralstore.SessionID(req.SessionID), ActiveSubagentReservation: req.ActiveSubagentReservation}); err != nil {
 				var limit *sessioncoord.SubagentLimitError
 				if errors.As(err, &limit) {
-					message := fmt.Sprintf("subagent limit reached for root %s: %d of %d active subagents; run 'gmux ls' to inspect this host's sessions", limit.Root, limit.Active, limit.Limit)
-					writeError(w, http.StatusTooManyRequests, codeSubagentLimitReached, message)
+					writeError(w, http.StatusTooManyRequests, codeSubagentLimitReached, formatSubagentLimitMessage(limit))
 					return
 				}
 				if errors.Is(err, sessioncoord.ErrActiveSubagentReservationInvalid) {
