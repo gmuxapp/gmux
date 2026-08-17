@@ -1199,10 +1199,9 @@ body {
   gap: 5px;
   flex: 0 0 auto;
 }
-/* The `$`: a process where an agent shows a status dot. Shape (not
-   just colour) distinguishes them, so the cue survives tiny sizes and
-   colour blindness — and it carries the same state vocabulary the dots
-   do, in the glyph's own colour, wherever it appears.
+/* The `$`: process identity, always cyan on a process itself. Agent
+   attention and command exit status never recolor it; running versus
+   finished is expressed by summaries and the process view's sections.
 
    Vocabulary only: no box. The sidebar pairs it with `.family-glyph`,
    which owns the fixed column there, and repeating those properties
@@ -1212,7 +1211,7 @@ body {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1;
-  color: var(--text-muted);
+  color: var(--accent);
 }
 /* The panel has no glyph-column class of its own, so it gives the `$`
    the same box its status dots occupy. */
@@ -1221,9 +1220,7 @@ body {
   width: 7px; /* match .session-dot-indicator for title alignment */
   text-align: center;
 }
-.family-proc.working { color: var(--accent); }
-.family-proc.unread { color: var(--unread); }
-.family-proc.error { color: var(--status-error); }
+.family-proc-filter.quiet { color: var(--text-muted); }
 
 /* States that belong to the root row are the whole entry's states —
    it's one entry, so it dims, drags and takes a drop line as a unit. */
@@ -2343,7 +2340,7 @@ body {
 
 .family-trigger-proc {
   font: 600 11px/1 'Source Sans 3', sans-serif;
-  color: var(--active);
+  color: var(--accent);
 }
 
 /* Ancestor breadcrumbs in the title row: quiet path prefix, each crumb a
@@ -2419,16 +2416,11 @@ body {
    * not 4px shy of it. */
   left: 16px;
   z-index: 100;
-  width: max-content;
-  /* Wide enough that filtering doesn't reflow the panel underneath the
-     buttons you're pressing: a filter narrows the content (fewer, often
-     shorter rows), and with `max-content` the panel used to lurch with
-     it. One min-width absorbs most of that, and gives the head room so
-     the action button isn't shoulder-to-shoulder with the tally. */
-  min-width: 440px;
-  /* Wider than it was: the panel now shows the whole family from the
-     root, so deep rows pay for their indentation out of this budget. */
-  max-width: min(560px, calc(100vw - 24px));
+  /* One constrained width: filtering must not shrink the card beneath the
+     control being pressed, and the whole-family tree needs room for depth. */
+  width: min(560px, calc(100vw - 24px));
+  min-width: 0;
+  max-width: none;
   max-height: min(65vh, 520px);
   display: flex;
   flex-direction: column;
@@ -2441,12 +2433,18 @@ body {
 .family-drawer-head {
   flex: 0 0 auto;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 18px;
-  padding: 10px 14px 8px;
+  min-height: 43px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border);
 }
 .family-drawer-head .family-counts { flex: 1 1 auto; }
+.family-action-slot {
+  flex: 0 0 96px;
+  display: flex;
+  justify-content: flex-end;
+}
 /* Quiet until wanted: it sits beside a counts line that is itself the
    reason to press it, so it needs to be findable, not loud. */
 .family-mark-read {
@@ -2458,6 +2456,7 @@ body {
   color: var(--text-muted);
   font: 400 11px/1.4 'Source Sans 3', sans-serif;
   cursor: pointer;
+  white-space: nowrap;
 }
 .family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
 .family-drawer-scroll { flex: 1 1 auto; overflow: auto; padding: 6px 8px 8px; }
@@ -2479,6 +2478,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 24px;
   padding: 2px 7px;
   margin: -2px 0;
   border: 1px solid transparent;
@@ -2497,6 +2497,26 @@ body {
 }
 .family-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .family-count-attention { color: var(--unread); font-weight: 600; }
+.family-process-section + .family-process-section { margin-top: 8px; }
+.family-process-section h3 {
+  margin: 0;
+  padding: 6px 10px 3px;
+  color: var(--text-muted);
+  font: 600 11px/1.4 'Source Sans 3', sans-serif;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.family-process-list { list-style: none; margin: 0; padding: 0; }
+.family-process-parent {
+  min-width: 0;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.family-process-parent::before { content: 'from '; }
 .family-tree,
 .family-tree ul { list-style: none; margin: 0; padding: 0; }
 .family-row { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 5px; color: var(--text-secondary); text-decoration: none; }

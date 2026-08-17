@@ -50,9 +50,14 @@ closing it. The root is always present, followed by a line-budgeted family tree
 with per-level `+N more` / `show fewer` folds. Ordinary tree order is recency of
 `last_output_at ?? created_at`; state does not otherwise reorder the tree.
 
-Outside the panel a root row stands in for its whole family. For agent
-members, `familyDotById` aggregates the highest-precedence dot onto the
-presentation root, and `unreadCount` adds unread descendants (alive or
+Outside the panel a root row stands in for its whole family. One member row is
+shown beneath it only while that family owns selection: the selected member, or
+the family's last-viewed member while its root is selected. It disappears as
+soon as selection leaves the family; a member that needs a persistent row can
+be promoted to a root.
+
+For agent members, `familyDotById` aggregates the highest-precedence dot onto
+the presentation root, and `unreadCount` adds unread descendants (alive or
 retained-dead) to their folder-visible root. Process unread contributes to
 neither aggregation; running processes use the separate `$` summary described
 below.
@@ -95,7 +100,9 @@ filter.
 The processes view is a flat task list rather than a family tree. Each row names
 its parent agent as secondary context so repeated commands from different
 agents remain distinguishable. It uses `last_output_at ?? created_at`, newest
-first, under two subheadings:
+first, under two subheadings. The selected process is pinned before the row
+budget; if it falls outside its section's recency slice, it leads that section
+and the remaining admitted rows retain recency order:
 
 1. **Running · N** — running processes;
 2. **Finished · N** — non-running processes.
@@ -133,13 +140,15 @@ name is “Processes”; the cyan counting form is “Processes, N running,” s
 lead with the population the control opens rather than implying its number is
 the result count.
 
-A process may remain unread internally for notification delivery and explicit
-consumption, but process unread never contributes to family/root attention
-presentation—even if a prior command remains unread while that process starts
-another. In particular, it contributes neither to `familyDotById` nor to the
-sidebar's `unreadCount`, and it produces no waiting count, filled waiting dot,
-process summary, unread section, or unread marker in the processes view.
-Running processes contribute only the running-process summary, not an
+An agent-owned family process may remain unread internally for notification
+delivery and explicit consumption, but its unread state never contributes to
+family/root attention presentation—even if a prior command remains unread
+while that process starts another. In particular, it contributes neither to
+`familyDotById` nor to the family's roll-up in the sidebar's `unreadCount`, and
+it produces no waiting count, filled waiting dot, process summary, unread
+section, or unread marker in the processes view. A standalone process still
+owns a visible sidebar row and badges its own unread output normally. Running
+family processes contribute only the running-process summary, not an
 agent-style aggregate dot.
 
 Bulk actions continue to follow the active filter. Waiting and error retain

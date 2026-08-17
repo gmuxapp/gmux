@@ -1446,20 +1446,27 @@ describe('unreadCount (sidebar-only attention blip)', () => {
 
   it('counts live and retained-dead unread sessions stamped into a folder', () => {
     _rawSessions.value = [
-      makeSession({ id: 'a', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
-      makeSession({ id: 'b', cwd: '/work', alive: true, unread: false, project_slug: 'proj' }),
-      makeSession({ id: 'c', cwd: '/work', alive: false, resumable: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'a', cwd: '/work', alive: true, unread: true, semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'b', cwd: '/work', alive: true, unread: false, semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'c', cwd: '/work', alive: false, resumable: true, unread: true, semantic_agent: true, project_slug: 'proj' }),
     ]
     expect(unreadCount.value).toBe(2)
   })
 
+  it('keeps unread on a standalone process because its row is visible', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'shell', cwd: '/work', adapter: 'shell', unread: true, project_slug: 'proj' }),
+    ]
+    expect(unreadCount.value).toBe(1)
+  })
+
   it('excludes the currently-selected session', () => {
     _rawSessions.value = [
-      makeSession({ id: 'a', cwd: '/work', adapter: 'shell', slug: 'aa', alive: true, unread: true, project_slug: 'proj' }),
-      makeSession({ id: 'b', cwd: '/work', adapter: 'shell', slug: 'bb', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'a', cwd: '/work', adapter: 'pi', slug: 'aa', alive: true, unread: true, semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'b', cwd: '/work', adapter: 'pi', slug: 'bb', alive: true, unread: true, semantic_agent: true, project_slug: 'proj' }),
     ]
     expect(unreadCount.value).toBe(2)
-    urlPath.value = '/proj/shell/aa'
+    urlPath.value = '/proj/pi/aa'
     expect(selectedId.value).toBe('a')
     expect(unreadCount.value).toBe(1)
   })
@@ -1471,9 +1478,10 @@ describe('unreadCount (sidebar-only attention blip)', () => {
       makeSession({ id: 'proc', cwd: '/work', parent_session_id: 'root', alive: true, unread: true }),
       makeSession({ id: 'dead-child', cwd: '/work', adapter: 'pi', semantic_agent: true, parent_session_id: 'root', alive: false, unread: true }),
     ]
-    // Children have no folder row of their own; the root row stands in and
-    // must ping for both live children and the retained-dead unread child.
-    expect(unreadCount.value).toBe(3)
+    // Children have no folder row of their own; the root row stands in for
+    // unread agents. Process output remains consumable but is not agent
+    // attention, so the unread process does not light the family or badge.
+    expect(unreadCount.value).toBe(2)
   })
 
   it('excludes the selected child from its root roll-up', () => {
@@ -1501,8 +1509,8 @@ describe('unreadCount (sidebar-only attention blip)', () => {
       peers: [],
     })
     _rawSessions.value = [
-      makeSession({ id: 'in', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
-      makeSession({ id: 'out', cwd: '/other', alive: true, unread: true, project_slug: 'other' }),
+      makeSession({ id: 'in', cwd: '/work', alive: true, unread: true, semantic_agent: true, project_slug: 'proj' }),
+      makeSession({ id: 'out', cwd: '/other', alive: true, unread: true, semantic_agent: true, project_slug: 'other' }),
     ]
     expect(unreadCount.value).toBe(2)
     urlSearch.value = '?filter=proj'
@@ -1533,8 +1541,9 @@ describe('familyDotById (family-aggregated row dot)', () => {
       pi('unread-child', { parent_session_id: 'root', unread: true }),
       makeSession({ id: 'proc', cwd: '/work', parent_session_id: 'root', status: { active: true, error: true } }),
     ]
-    // error (process!) > working > unread; the root row shows the max.
-    expect(familyDotById.value.get('root')).toBe('error')
+    // Process state never becomes an agent-style root dot; the active agent
+    // wins over the waiting agent, while the process gets a `$` summary.
+    expect(familyDotById.value.get('root')).toBe('working')
     expect(familyDotById.value.get('working-child')).toBeUndefined()
   })
 
@@ -1716,144 +1725,86 @@ describe('sidebar family entry derivations', () => {
     })
   })
 
-  describe('familySlotById (the one member a family entry shows)', () => {
+  describe('familySlotById (the selected family’s one member row)', () => {
     beforeEach(() => { recentFamilyChildren.value = [] })
 
     const slot = (rootId: string) => familySlotById.value.get(rootId)
-
-    it('is empty for a family you have never descended into', () => {
-      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
-      expect(familySlotById.value.size).toBe(0)
-    })
+    const family = () => [
+      agent('root', { slug: 'rooty' }),
+      agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
+      agent('elsewhere', { slug: 'far' }),
+    ]
 
     it('shows the selected member, marked as current', () => {
-      _rawSessions.value = [
-        agent('root', { slug: 'rooty' }),
-        agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
-      ]
+      _rawSessions.value = family()
       urlPath.value = '/proj/pi/kiddo'
       expect(slot('root')).toMatchObject({ selected: true })
       expect(slot('root')?.session.id).toBe('kid')
     })
 
-    it('keeps the member as a way back after you navigate to the root', () => {
-      _rawSessions.value = [
-        agent('root', { slug: 'rooty' }),
-        agent('kid', { slug: 'kiddo', parent_session_id: 'root' }),
-      ]
+    it('shows the remembered member while the root is selected', () => {
+      _rawSessions.value = family()
+      rememberFamilyChild('kid')
+      urlPath.value = '/proj/pi/rooty'
+      expect(slot('root')).toMatchObject({ selected: false })
+      expect(slot('root')?.session.id).toBe('kid')
+    })
+
+    it('drops the member immediately when selection leaves the family', () => {
+      _rawSessions.value = family()
       rememberFamilyChild('kid')
       urlPath.value = '/proj/pi/rooty'
       expect(slot('root')?.session.id).toBe('kid')
-      // No longer current: it is a memory, not the selection.
-      expect(slot('root')?.selected).toBe(false)
-    })
-
-    it('keeps it after you leave the family entirely', () => {
-      _rawSessions.value = [
-        agent('root'),
-        agent('kid', { parent_session_id: 'root' }),
-        agent('elsewhere', { slug: 'far' }),
-      ]
-      rememberFamilyChild('kid')
       urlPath.value = '/proj/pi/far'
+      expect(familySlotById.value.size).toBe(0)
+      // The memory survives so returning to the root restores its way back.
+      expect(recentFamilyChildren.value).toEqual(['kid'])
+      urlPath.value = '/proj/pi/rooty'
       expect(slot('root')?.session.id).toBe('kid')
     })
 
-    it('gives the slot to the selection over an older visit', () => {
+    it('selection wins over an older remembered sibling', () => {
       _rawSessions.value = [
-        agent('root'),
+        agent('root', { slug: 'rooty' }),
         agent('a', { slug: 'aa', parent_session_id: 'root' }),
         agent('b', { slug: 'bb', parent_session_id: 'root' }),
       ]
       rememberFamilyChild('a')
       urlPath.value = '/proj/pi/bb'
-      expect(slot('root')?.session.id).toBe('b')
-      expect(slot('root')?.selected).toBe(true)
-    })
-
-    it('keeps only the most recent visit per family (one slot)', () => {
-      _rawSessions.value = [
-        agent('root'),
-        agent('a', { parent_session_id: 'root' }),
-        agent('b', { parent_session_id: 'root' }),
-      ]
-      rememberFamilyChild('a')
-      rememberFamilyChild('b')
-      expect(familySlotById.value.size).toBe(1)
+      expect(slot('root')).toMatchObject({ selected: true })
       expect(slot('root')?.session.id).toBe('b')
     })
 
-    it('drops a member that left the family: promoted or reparented', () => {
-      _rawSessions.value = [
-        agent('root'),
-        agent('kid', { parent_session_id: 'root' }),
-        agent('other'),
-      ]
+    it('resolves validity and alive-only only while the root asks for its memory', () => {
+      _rawSessions.value = family()
       rememberFamilyChild('kid')
+      urlPath.value = '/proj/pi/rooty'
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, alive: false, resumable: true } : s)
       expect(slot('root')?.session.id).toBe('kid')
-      // Promotion gives it its own sidebar row; a duplicate would lie.
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, promoted_to_root: true } : s)
-      expect(familySlotById.value.size).toBe(0)
-      // Reparenting moves the memory to the new family, no re-keying.
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, promoted_to_root: false, parent_session_id: 'other' } : s)
-      expect(slot('other')?.session.id).toBe('kid')
-      expect(familySlotById.value.has('root')).toBe(false)
-    })
-
-    it('drops a member that is gone, or a corpse you cannot reopen', () => {
-      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
-      rememberFamilyChild('kid')
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, alive: false, resumable: false } : s)
-      expect(familySlotById.value.size).toBe(0)
-      // Resumable corpses stay: they are still a way back.
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, resumable: true } : s)
-      expect(slot('root')?.session.id).toBe('kid')
-      // …unless the alive-only toggle is hiding dead sessions.
       setAliveOnly(true)
       expect(familySlotById.value.size).toBe(0)
       setAliveOnly(false)
-    })
-
-    it('never shows a member that vanished from the snapshot', () => {
-      _rawSessions.value = [agent('root'), agent('kid', { parent_session_id: 'root' })]
-      rememberFamilyChild('kid')
-      _rawSessions.value = [agent('root')]
+      _rawSessions.value = _rawSessions.value.map(s =>
+        s.id === 'kid' ? { ...s, promoted_to_root: true } : s)
       expect(familySlotById.value.size).toBe(0)
-      // The id is still remembered; only its resolution failed. If the
-      // session comes back (peer reconnect), so does the row.
-      expect(recentFamilyChildren.value).toEqual(['kid'])
     })
 
-    it('remembers a bounded number of families, most recent first', () => {
-      const sessions: Session[] = []
+    it('keeps one bounded memory per family without rendering inactive families', () => {
+      const snapshot: Session[] = []
       for (let i = 0; i < 7; i++) {
-        sessions.push(agent(`root${i}`), agent(`kid${i}`, { parent_session_id: `root${i}` }))
+        snapshot.push(
+          agent(`root${i}`, { slug: `root-${i}` }),
+          agent(`kid${i}`, { parent_session_id: `root${i}` }),
+        )
       }
-      _rawSessions.value = sessions
+      _rawSessions.value = snapshot
       for (let i = 0; i < 7; i++) rememberFamilyChild(`kid${i}`)
-      // Cap is 5; the two oldest families lost their memory.
       expect(recentFamilyChildren.value).toEqual(['kid6', 'kid5', 'kid4', 'kid3', 'kid2'])
-      expect(familySlotById.value.size).toBe(5)
-      expect(familySlotById.value.has('root0')).toBe(false)
-    })
-
-    it('keeps one member per family, so one family cannot evict the rest', () => {
-      _rawSessions.value = [
-        agent('rootA'), agent('rootB'),
-        ...['a0', 'a1', 'a2', 'a3', 'a4'].map(id => agent(id, { parent_session_id: 'rootA' })),
-        agent('b0', { parent_session_id: 'rootB' }),
-      ]
-      rememberFamilyChild('b0')
-      for (const id of ['a0', 'a1', 'a2', 'a3', 'a4']) rememberFamilyChild(id)
-      // Family A occupies exactly one entry however many members you
-      // bounce through, so B's way back survives.
-      expect(recentFamilyChildren.value).toEqual(['a4', 'b0'])
-      expect(slot('rootA')?.session.id).toBe('a4')
-      expect(slot('rootB')?.session.id).toBe('b0')
+      expect(familySlotById.value.size).toBe(0)
+      urlPath.value = '/proj/pi/root-6'
+      expect(familySlotById.value.size).toBe(1)
+      expect(slot('root6')?.session.id).toBe('kid6')
     })
 
     it('is idempotent for the member already at the head', () => {

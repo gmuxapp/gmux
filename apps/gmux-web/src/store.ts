@@ -20,7 +20,7 @@ import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
 import {
-  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild, promotionAction,
+  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild, isProcessSession, promotionAction,
   type FamilyActivity,
 } from './family'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
@@ -898,10 +898,10 @@ export const backgroundActivity = computed((): DotState => {
  * session into at most one folder, so summing across folders needs no
  * dedup.
  *
- * Family children have no folder row of their own — their presentation
- * root stands in — so each folder-visible root also counts its unread
- * descendants, alive or retained-dead. Without this, an unread child is invisible: no
- * logo blink, no hamburger badge.
+ * Agent family children have no folder row of their own — their
+ * presentation root stands in — so each folder-visible root also counts
+ * unread agent descendants, alive or retained-dead. Process unread remains
+ * consumable but is task history, not an attention blip.
  *
  * Scoped to the tab's `?filter=` selectors: a tab pinned to a project
  * or host shouldn't blink for sessions outside its scope (another tab
@@ -912,13 +912,18 @@ export const unreadCount = computed(() => {
   const index = familyIndex(sessions.value)
   const childUnread = new Map<string, number>()
   for (const s of sessions.value) {
-    if (s.id === sel || !s.unread || !index.childIds.has(s.id)) continue
+    // Process output remains unread for explicit consumption, but command
+    // completion is not agent attention and must not light the family's row.
+    if (s.id === sel || !s.unread || isProcessSession(s) || !index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
     if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
   }
   let n = 0
   for (const f of foldersFrom(filteredSessions.value)) {
     for (const s of f.sessions) {
+      // A standalone process owns its own visible row, so its unread output
+      // still badges normally. Only agent-owned process children disappear
+      // behind a family root and are excluded by `childUnread` above.
       if (s.id !== sel && s.unread) n++
       n += childUnread.get(s.id) ?? 0
     }
@@ -930,10 +935,10 @@ const DOT_RANK: Record<DotState, number> = { none: 0, fading: 1, active: 2, unre
 
 /** Family-aggregated dot state, keyed by presentation-root session id.
  *
- * A root's sidebar/dashboard row stands in for its whole family, so the
- * row's dot must reflect the highest-precedence state among the root and
- * every descendant (agents and processes alike) — otherwise a working or
- * unread child is invisible outside the drawer.
+ * A root's sidebar/dashboard row stands in for its agent family, so the
+ * row's dot reflects the highest-precedence agent state among the root and
+ * descendants. Processes use the separate running `$` summary; their state
+ * never becomes an agent-style aggregate dot.
  *
  * Selection muting happens per member before aggregation: the selected
  * session's own error/unread is dropped ("you're already looking at it"),
@@ -947,6 +952,10 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
   const map = new Map<string, DotState>()
   for (const s of sessions.value) {
     const rootId = index.rootById.get(s.id)?.id ?? s.id
+    // A process child contributes through the separate running `$` summary,
+    // never through the agent-style aggregate dot. Standalone processes keep
+    // their own row state because no family root stands in for them.
+    if (isProcessSession(s) && rootId !== s.id) continue
     let own = sessionDotState(s, am)
     if (s.id === sel && (own === 'error' || own === 'unread')) own = 'none'
     const prev = map.get(rootId)
@@ -1028,12 +1037,12 @@ export function rememberFamilyChild(id: string): void {
   recentFamilyChildren.value = [id, ...others].slice(0, MAX_RECENT_FAMILY_CHILDREN)
 }
 
-/** The one family member a root's sidebar entry shows below itself.
+/** The one member shown beneath the selected family's root.
  *
- * Selection wins: while you're inside a family member, that member is
- * the slot (and says so). Otherwise the most recently visited member
- * that still resolves takes it — the way back to what you were doing.
- * Roots you've never descended into have no slot and stay one row. */
+ * While a member is selected, it is the slot. While the root is selected,
+ * that family's most recently visited member is the way back. The moment
+ * selection leaves the family, its member row disappears; promotion now
+ * provides the persistent root-level affordance for work that needs one. */
 export interface FamilySlot {
   readonly session: Session
   /** True when this member is the current selection. */
@@ -1047,19 +1056,28 @@ export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
   const onlyAlive = aliveOnly.value
   const map = new Map<string, FamilySlot>()
   const sel = selectedFamilyChild.value
-  if (sel) map.set(sel.rootId, { session: sel.session, ancestors: sel.ancestors, selected: true })
+  if (sel) {
+    map.set(sel.rootId, { session: sel.session, ancestors: sel.ancestors, selected: true })
+    return map
+  }
+
+  // A remembered member appears only while its own root is selected.
+  const selected = index.byId.get(selectedId.value ?? '')
+  const selectedRootId = selected ? index.rootById.get(selected.id)?.id : undefined
+  if (!selected || selectedRootId !== selected.id) return map
+
   for (const id of recentFamilyChildren.value) {
     const session = index.byId.get(id)
     // Gone, promoted to its own row, or reparented out of this family.
     if (!session || !index.childIds.has(id)) continue
     const rootId = index.rootById.get(id)?.id
     if (!rootId || rootId === id) continue
-    // Selection, or a more recent visit, already owns this family's slot.
-    if (map.has(rootId)) continue
+    if (rootId !== selected.id) continue
     // A corpse you can't reopen is not a way back; alive-only hides the
     // resumable ones too, matching the rest of the list.
     if (!session.alive && (onlyAlive || !session.resumable)) continue
     map.set(rootId, { session, ancestors: familyAncestors(session, index), selected: false })
+    break
   }
   return map
 })

@@ -230,10 +230,10 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
 }
 
 /** The family panel's trigger: a pill wearing the standard family
- * segments — `familySegments` over `familyActivityById`, the same
- * derivation and display order as the sidebar's line and the panel's
- * tally, so the same dots never wear different numbers or a different
- * order anywhere. Nothing here depends on which session you are
+ * summary segments — `familySegments` over `familyActivityById`, exactly
+ * the same derivation and display order as the sidebar's line. The panel
+ * reuses the agent segments and turns the running segment into its broader
+ * process-history control. Nothing here depends on which session you are
  * viewing: the count is a fact about the family, not the viewport. A
  * family with nothing to report shows the tree icon instead; no count
  * with it, because the segments' numbers are news and a quiet family

@@ -447,18 +447,6 @@ describe('filtering by a state the tally counts', () => {
     expect(rows.filter(r => /^root:\+\d+ more$/.test(r))).toHaveLength(1)
   })
 
-  it('shows an agent every command it is running, once you ask for commands', () => {
-    // The one-command-per-agent rule is triage too, and the filter is
-    // the question triage was guessing at.
-    const shells = Array.from({ length: 5 }, (_, i) => ago(1 + i, `sh-${i}`, 'agent', {
-      semantic_agent: undefined, adapter: 'shell', status: { active: true },
-    }))
-    const snapshot = [ago(0, 'root', undefined), ago(0.5, 'agent', 'root'), ...shells]
-    const tree = projectFamily(snapshot[0], snapshot).tree
-    const rows = renderedLines(tree, visibleFamilyRows(tree, { filter: 'running' }))
-    for (const shell of shells) expect(rows).toContain(shell.id)
-  })
-
   it('shows the whole family again with no filter', () => {
     const snapshot = family()
     const tree = projectFamily(snapshot[0], snapshot).tree

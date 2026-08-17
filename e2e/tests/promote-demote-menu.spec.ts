@@ -29,6 +29,14 @@ async function openMenu(page: Page) {
   await page.locator('.session-menu-dropdown').waitFor()
 }
 
+async function returnToFamilyMember(page: Page) {
+  const family = page.locator('.session-family').filter({ hasText: 'orchestrator' })
+  // Inactive families no longer retain a member row: select the root first,
+  // then use the remembered member that appears beneath it.
+  await family.locator('.session-item').first().click()
+  await family.locator('.family-slot').filter({ hasText: 'wire up the protocol' }).click()
+}
+
 test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
   test('a family child offers Promote to root, and the copy keeps ownership', async ({ page }) => {
     // fam2kid's organizational parent is fam1kid ("implement drawer").
@@ -231,7 +239,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     expect(posts).toEqual(['A', 'B'])
 
     // And A's own item re-armed exactly where its failure toast points.
-    await page.locator('.session-item, .family-slot').filter({ hasText: 'wire up the protocol' }).first().click()
+    await returnToFamilyMember(page)
     await expect(page).toHaveURL(/~fam2kid/)
     await openMenu(page)
     await expect(promotionItem(page)).toBeEnabled()
@@ -252,7 +260,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await expect.poll(() => posts).toHaveLength(1)
 
     await page.locator('.session-item').filter({ hasText: 'promoted research spike' }).click()
-    await page.locator('.family-slot').filter({ hasText: 'wire up the protocol' }).click()
+    await returnToFamilyMember(page)
     await expect(page).toHaveURL(/~fam2kid/)
     await openMenu(page)
     const item = promotionItem(page)
@@ -283,7 +291,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
       store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: true } : s))
       store.applySessionsSnapshot(current.map(s => s.id === 'fam2kid' ? { ...s, promoted_to_root: false } : s))
     })
-    await page.locator('.family-slot').filter({ hasText: 'wire up the protocol' }).click()
+    await returnToFamilyMember(page)
     await expect(page).toHaveURL(/~fam2kid/)
     await openMenu(page)
     await expect(promotionItem(page)).toBeEnabled()
