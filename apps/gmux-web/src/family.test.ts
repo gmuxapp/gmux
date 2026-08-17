@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
-  descendantTree, familyAncestors, familyIndex, familySegments, familyStateOf,
-  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
-  familyMemberGlyph, isFamilyChild, projectFamily, promotionAction, promotionCopy,
+  childTrailTitle, descendantTree, familyActivityLabel, familyAncestors, familyIndex,
+  familyMemberGlyph, familyRoot, familySegments, familyStateOf, hasFamily, isFamilyChild,
+  projectFamily, promotionAction, promotionCopy, type FamilyActivity,
 } from './family'
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
-  id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true, project_slug: 'p', ...extra,
+  id, cwd: '/p', title: id, parent_session_id: parent, launched_from_session_id: parent,
+  semantic_agent: true, project_slug: 'p', ...extra,
 })
 
 describe('family overview state', () => {
@@ -133,15 +134,10 @@ describe('task-family projection', () => {
       expect(copy.note).toBe('Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.')
     })
 
-    it('blocks demote when the family root has no sidebar placement', () => {
+    it('hides return when the launch parent has no sidebar placement', () => {
       const root = agent('root', undefined, { project_slug: undefined })
       const promoted = agent('promoted', 'root', { promoted_to_root: true })
-      // The promoted child is placed, but demotion would rejoin an unplaced
-      // parent and strand the selected route.
-      const action = promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }])
-      expect(action).toEqual({ kind: 'demote', parent: root, blocked: 'no-project' })
-      expect(promotionCopy(action!).label).toBe('Return to family')
-      expect(promotionCopy(action!).note).toContain('family root has no project-backed sidebar row')
+      expect(promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }])).toBeNull()
     })
 
     it('offers demote to a promoted session whose family still exists', () => {

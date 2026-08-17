@@ -60,9 +60,9 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
       return route.continue()
     })
     await item.click()
-    await expect.poll(() => posts).toContain('/v1/sessions/fam2kid/promote')
+    await expect.poll(() => posts).toContain('/v1/sessions/fam2kid/reparent')
     // Exactly one mutation per activation.
-    expect(posts.filter(p => p.endsWith('/promote'))).toHaveLength(1)
+    expect(posts.filter(p => p.endsWith('/reparent'))).toHaveLength(1)
     // Menu closed, focus back on the trigger (keyboard users don't land on
     // <body> when the activated item unmounts with the dropdown).
     await expect(page.locator('.session-menu-dropdown')).toHaveCount(0)
@@ -87,7 +87,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
       return route.continue()
     })
     await item.click()
-    await expect.poll(() => posts).toContain('/v1/sessions/famApromoted/demote')
+    await expect.poll(() => posts).toContain('/v1/sessions/famApromoted/reparent')
   })
 
   test('an in-flight promotion cannot be double-submitted from a reopened menu', async ({ page }) => {
@@ -106,7 +106,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     })
     await openMenu(page)
     await promotionItem(page).click()
-    await expect.poll(() => posts.filter(p => p.endsWith('/promote'))).toHaveLength(1)
+    await expect.poll(() => posts.filter(p => p.endsWith('/reparent'))).toHaveLength(1)
 
     await openMenu(page)
     const item = promotionItem(page)
@@ -116,7 +116,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'menu-promote-pending.png') })
     await item.click({ force: true }) // a forced click must still be inert
     await page.waitForTimeout(200)
-    expect(posts.filter(p => p.endsWith('/promote'))).toHaveLength(1)
+    expect(posts.filter(p => p.endsWith('/reparent'))).toHaveLength(1)
   })
 
   test('a failed promotion re-arms the item beside its toast', async ({ page }) => {
@@ -209,12 +209,12 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await openMock(page, '/my-project/claude/~fam2kid')
     const posts: string[] = []
     let failA: (() => void) | undefined
-    await page.route('**/v1/sessions/fam2kid/promote', async (route) => {
+    await page.route('**/v1/sessions/fam2kid/reparent', async (route) => {
       posts.push('A')
       await new Promise<void>(resolve => { failA = resolve })
       await route.fulfill({ status: 400, body: '{"ok":false,"error":{"code":"internal","message":"held A failed"}}' })
     })
-    await page.route('**/v1/sessions/famApromoted/demote', async (route) => {
+    await page.route('**/v1/sessions/famApromoted/reparent', async (route) => {
       posts.push('B')
       await new Promise(() => { /* held forever */ })
       await route.fulfill({ status: 200, body: '{}' })
@@ -253,7 +253,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     // request stays in flight regardless of where the user navigates.
     await openMock(page, '/my-project/claude/~fam2kid')
     const posts: string[] = []
-    await page.route('**/v1/sessions/fam2kid/promote', async (route) => {
+    await page.route('**/v1/sessions/fam2kid/reparent', async (route) => {
       posts.push(new URL(route.request().url()).pathname)
       await new Promise(() => { /* held forever */ })
     })
@@ -277,7 +277,7 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
     await openMock(page, '/my-project/claude/~fam2kid')
     await page.waitForFunction(() => Boolean((window as any).__store))
     const posts: string[] = []
-    await page.route('**/v1/sessions/fam2kid/promote', async route => {
+    await page.route('**/v1/sessions/fam2kid/reparent', async route => {
       posts.push('promote')
       await new Promise(() => { /* held: snapshots, not HTTP completion, settle A */ })
     })
@@ -400,7 +400,7 @@ for (const [name, viewport, mobile] of [
       })
       // A tap, not a hover-dependent affordance.
       await item.tap()
-      await expect.poll(() => posts).toContain('/v1/sessions/fam2kid/promote')
+      await expect.poll(() => posts).toContain('/v1/sessions/fam2kid/reparent')
       await expect(page.locator('.session-menu-dropdown')).toHaveCount(0)
     })
   })

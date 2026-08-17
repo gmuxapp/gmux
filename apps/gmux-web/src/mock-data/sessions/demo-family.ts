@@ -2,7 +2,7 @@
 // collapsed `…` crumb, every attention state, and a long title) plus a shallow
 // long-titled pair (crumb truncation). Without these, `?mock` has no
 // family at all and the header breadcrumbs / family panel can't be seen.
-import { type MockSession, ago } from '../types'
+import { ago, type MockSession } from '../types'
 
 const RST = '\x1b[0m'
 const DIM = '\x1b[2m'
@@ -66,7 +66,7 @@ export const DEMO_FAMILY: MockSession[] = [
   // "Return to family" action and the sidebar's promoted projection.
   fam({
     id: 'famApromoted', title: 'promoted research spike', parent_session_id: 'famAroot',
-    promoted_to_root: true, last_output_at: ago(15),
+    launched_from_session_id: 'famAroot', promoted_to_root: true, last_output_at: ago(15),
   }),
   // Process-only family: summaries report the one running command; the
   // panel's process filter also reveals the finished command.

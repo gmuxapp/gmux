@@ -1,8 +1,8 @@
-import type { ProjectItem, Session } from './types'
+import { sidebarProjectForSession } from './projects'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
-import { sidebarProjectForSession } from './projects'
 import { sessionPresentationState } from './presentation'
+import type { ProjectItem, Session } from './types'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -213,18 +213,20 @@ export function promotionAction(
       ? { kind: 'promote', parent }
       : { kind: 'promote', parent, blocked: 'no-project' }
   }
-  if (session.promoted_to_root !== true) return null
-  if (!session.parent_session_id || session.parent_session_id === session.id) return null
-  const parent = index.byId.get(session.parent_session_id)
-  if (!parent || parent.semantic_agent !== true || parent.peer) return null
+  // During the transition, a legacy promoted flag is also a root. The return
+  // target is immutable launch provenance, never the current parent edge.
+  if (session.parent_session_id && session.promoted_to_root !== true) return null
+  if (!session.launched_from_session_id || session.launched_from_session_id === session.id) return null
+  const parent = index.byId.get(session.launched_from_session_id)
+  if (!parent || parent.semantic_agent !== true || parent.peer || !hasSidebarPlacement(parent, projects)) return null
 
-  // Test the projection that the daemon will produce after clearing this
-  // session's sticky root flag. The current presentation root is necessarily
-  // the session itself, so checking only the promoted child's stamp misses the
-  // symmetric failure where its organizational parent is unplaced.
-  const demotedSessions = Array.from(index.byId.values(), candidate =>
-    candidate.id === session.id ? { ...candidate, promoted_to_root: false } : candidate)
-  const returnedRoot = familyRoot(session, demotedSessions)
+  // Test the projection produced by reparenting to the launch parent. This
+  // catches an unplaced ancestor even when the immediate target is placed.
+  const returnedSessions = Array.from(index.byId.values(), candidate =>
+    candidate.id === session.id
+      ? { ...candidate, parent_session_id: parent.id, promoted_to_root: false }
+      : candidate)
+  const returnedRoot = familyRoot(session, returnedSessions)
   return hasSidebarPlacement(returnedRoot, projects)
     ? { kind: 'demote', parent }
     : { kind: 'demote', parent, blocked: 'no-project' }

@@ -13,25 +13,25 @@
  * Call `initStore()` once from the app root to start SSE, fetch data, etc.
  */
 
-import { signal, computed, batch, effect, untracked } from '@preact/signals'
-import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
-import type { View } from './routing'
-import { resolveViewFromPath, viewToPath } from './routing'
-import { navigateWithReload } from './version-watch'
-import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
+import type { Session as ProtocolSession } from '@gmux/protocol'
+import { batch, computed, effect, signal, untracked } from '@preact/signals'
+import { buildTerminalOptions, fetchFrontendConfig, type ResolvedKeybind, resolveKeybinds } from './config'
 import {
   familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild, isProcessSession, promotionAction,
   type FamilyActivity,
 } from './family'
-import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
-import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
-import { pushError } from './toasts'
 import { isWaitingPresentation, sessionPresentationState, type SessionPresentationState } from './presentation'
 
-import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, mockWorld } from './mock-data/index'
+import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
+import { referencePresence, removeHostReferenceItems, removeReferenceItems, type UnresolvedHost, unresolvedReferences } from './references'
+import type { View } from './routing'
+import { resolveViewFromPath, viewToPath } from './routing'
 import type { ResolvedTerminalOptions } from './settings-schema'
-import type { Session as ProtocolSession } from '@gmux/protocol'
+import { formatFilterParam, parseFilterParam, type Selector, sessionMatchesFilter } from './tab-filter'
+import { pushError } from './toasts'
+import type { DiscoveredProject, Folder, LauncherDef, PeerInfo, PeerProject, ProjectItem, Session } from './types'
+import { navigateWithReload } from './version-watch'
 
 // ── HealthData type (used by both raw signal and consumers) ─────────────────
 
@@ -1215,6 +1215,7 @@ export function toUISession(s: ProtocolSession): Session {
     // Preserve launch provenance and server-owned family semantics. These were
     // previously dropped by this protocol → UI mapper.
     parent_session_id: s.parent_session_id,
+    launched_from_session_id: s.launched_from_session_id,
     semantic_agent: s.semantic_agent,
     promoted_to_root: s.promoted_to_root,
     alive: s.alive,
@@ -1759,10 +1760,17 @@ async function postAction(endpoint: string, label = 'Action', opts: {
   /** One more status to treat as success, for endpoints where a
    * rejection is the outcome the caller asked for anyway. */
   alsoOk?: number
+  body?: unknown
 } = {}): Promise<boolean> {
-  const { quiet = false, alsoOk } = opts
+  const { quiet = false, alsoOk, body } = opts
   try {
-    const resp = await fetch(endpoint, { method: 'POST' })
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      ...(body === undefined ? {} : {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    })
     if (!resp.ok && resp.status !== alsoOk) {
       // `quiet` is for bulk callers: one toast per failed member turns a
       // daemon hiccup during "Stop all" into two hundred toasts, so they
@@ -1818,21 +1826,17 @@ export function restartSession(sessionId: string): Promise<boolean> {
   return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart')
 }
 
-// Promote/demote flip the server-owned `promoted_to_root` presentation flag
-// (ADR 0026 §8, endpoints from #475). Deliberately no optimistic overlay,
-// for the same reason as `reorderSessions`: the projection *and the URL*
-// derive from the presentation root, and the snapshot commit path
-// (`commitWithSlugRewrite`) rewrites the selected session's URL atomically
-// with the session data — an optimistic flag flip without that coupled
-// rewrite would leave the old URL unresolvable for a beat and bounce the
-// router home. The mutation is local-only (the daemon refuses it for peer
-// sessions), so the authoritative snapshot echoes in the same beat anyway.
-export function promoteSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/promote`, 'Promote')
+// Family mutations change the single parent edge. Deliberately no optimistic
+// session overlay: projection and URL derive from the family root, and
+// commitWithSlugRewrite applies both atomically when the snapshot arrives.
+export function reparentSession(sessionId: string, parentSessionId: string | null, label = 'Reparent'): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/reparent`, label, {
+    body: { parent_session_id: parentSessionId },
+  })
 }
 
-export function demoteSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/demote`, 'Return to family')
+export function promoteSession(sessionId: string): Promise<boolean> {
+  return reparentSession(sessionId, null, 'Promote')
 }
 
 // In-flight promote/demote requests, keyed by session id. Module scope, not
@@ -1841,8 +1845,8 @@ export function demoteSession(sessionId: string): Promise<boolean> {
 // its action, target flag, and generation so stale A cannot settle B.
 export type PromotionPendingEntry = {
   kind: 'promote' | 'demote'
-  /** The authoritative flag value this request is waiting to observe. */
-  targetPromoted: boolean
+  /** The authoritative current-parent value this request is waiting to observe. */
+  targetParent: string | null
   seq: number
 }
 
@@ -1869,11 +1873,11 @@ function clearPromotionTimer(id: string): void {
   promotionTimers.delete(id)
 }
 
-export function beginPromotion(id: string, kind: 'promote' | 'demote'): number {
+export function beginPromotion(id: string, kind: 'promote' | 'demote', targetParent: string | null = kind === 'promote' ? null : ''): number {
   clearPromotionTimer(id)
   const seq = ++_promotionSeq
   const next = new Map(promotionPending.value)
-  next.set(id, { kind, targetPromoted: kind === 'promote', seq })
+  next.set(id, { kind, targetParent, seq })
   promotionPending.value = next
   if (promotionAnnouncements.value.has(id)) {
     const announcements = new Map(promotionAnnouncements.value)
@@ -1926,7 +1930,7 @@ export function reconcilePromotionPending(nextSessions: readonly Session[]): voi
       continue
     }
 
-    if ((session.promoted_to_root === true) === entry.targetPromoted) {
+    if ((session.parent_session_id ?? null) === entry.targetParent) {
       nextPending.delete(id)
       clearPromotionTimer(id)
       nextAnnouncements.set(id, {
