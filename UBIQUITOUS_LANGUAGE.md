@@ -89,7 +89,8 @@ This file defines current v2 terminology. Historical ADRs may use superseded `st
 - A Session ID is durable identity; a session slug is mutable presentation.
 - Project placement and order use full Session IDs, including `id@peer` for Local-peer placements.
 - Network peers own their project stamps; viewers never rematch those sessions into local owned projects.
-- A launch parent records immutable provenance. Promotion changes presentation, not provenance.
+- The **parent** or **family edge** (`parent_session_id`) is the current behavioral parent; promotion severs it and reparenting replaces it.
+- The **launch parent** (`launched_from_session_id`) is immutable provenance and drives nothing automatically; the web may suggest it as a safe Return to family target.
 - Dismissing a parent recursively dismisses descendants but does not hard-delete their rows.
 - Permanently removing a parent clears surviving direct children's parent IDs; it does not delete otherwise resumable descendants.
 - Conversation takeover is based on adapter conversation lineage/ref semantics, not slug collision.

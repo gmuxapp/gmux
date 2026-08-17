@@ -79,6 +79,12 @@ gmux wait "$id" --timeout 250
 
 This returns after at most 250 seconds if the session has not settled, while the session keeps running. Use it when you want the completion report but need control back to inspect or intervene if the work takes too long.
 
+## Families and attention
+
+Successful observation with `wait`, `tail`, or `agent logs` consumes the result.
+Use `gmux promote <id>` when a worker needs an independent family and subagent
+budget; use `gmux reparent <id> <parent-id>` to restructure the family edge.
+
 ## Interaction notes
 
 - `gmux send "$id" 'text' Enter` types into a shell or TUI; hotkeys use names such as `C-c`.

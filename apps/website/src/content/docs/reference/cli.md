@@ -102,6 +102,8 @@ then `ref` lexicographically when timestamps are equal or unknown. A successful
 JSON invocation writes exactly one document plus a trailing newline to stdout
 and nothing to stderr.
 
+In the table, ACP-driven adapters are shown with an `(acp)` suffix.
+
 Every object has these required keys:
 
 | Key | Type | Meaning |
@@ -122,7 +124,8 @@ or unset — they are never JSON `null`:
 | `title` | string | Derived display title. |
 | `slug` | string | Human-readable owner-scoped session reference. |
 | `runner_version` | string | Diagnostic runner version. Do not compare it for capability negotiation; stable action errors are authoritative. |
-| `parent_session_id` | string | Raw parent ID. The parent belongs to the same owner (`peer`, or local) as this row. |
+| `parent_session_id` | string | Current parent ID; `promote` clears it and `reparent` replaces it. The parent belongs to the same owner (`peer`, or local) as this row. |
+| `drive_mode` | string | `terminal` or `acp`; ACP sessions have no terminal. |
 | `socket_path` | string | Runner socket path on the owning host. |
 | `command` | array of strings | Exact command argv, not a shell command string. |
 | `started_at` | string | Session-start event time in RFC 3339 format. Fractional seconds are allowed. |
@@ -154,6 +157,8 @@ gmux attach a3f20187@desktop  # a session on a peer
 ```
 
 ### `gmux tail <id>`
+
+A successful read marks the session result consumed.
 
 Print the last lines of the session's **terminal output** as plain text — what
 is on its screen. Always the raw view, for every kind of session: shell,
@@ -255,6 +260,8 @@ can send to sessions on this host. Peer sessions are reached through gmuxd's
 authenticated proxy.
 
 ### `gmux wait <id>...`
+
+A successful wait marks each observed session result consumed.
 
 ```
 gmux wait [--quiet] [--timeout N] <id> [<id>...]
@@ -729,6 +736,8 @@ longer mean that action. Plain prompts (Enter) are unaffected.
 
 ### `gmux agent logs <id>`
 
+A successful read marks the session result consumed.
+
 Render the conversation's stored history as visible exchanges — the same
 document the wait report uses, read from the adapter's own conversation file
 (pi's JSONL) rather than the terminal rendering of the TUI.
@@ -772,46 +781,25 @@ session dead — the same path as the UI's kill button.
 gmux kill a3f20187
 ```
 
-### `gmux session`
+### `gmux promote <id>`
 
-Change task-family ownership and presentation.
-
-```
-gmux session promote <id>                present a child as a root
-gmux session demote <id>                 restore normal child presentation
-gmux session reparent <id> <parent-id>   assign a new direct parent
-gmux session reparent <id> --clear       clear the direct parent
-```
-
-**Promotion is sticky presentation state, plus one behavioral edge**: the
-session renders as its own root with full root visibility in the session
-list, and its subtree gets its own
-[active-subagent budget](/reference/host-toml/) instead of drawing on the
-family's. Its organizational parent keeps owning it — recursive dismissal
-still reaches the promoted child, and launch provenance is untouched.
-Completion-notification suppression is also unchanged: it follows the
-immutable *launch* parent, so a promoted session's completions are still
-suppressed while the session that launched it is active. Demotion clears
-the override, grouping the session back under its current parent. The web
-UI exposes the same pair in the session's **⋮** menu (**Promote to root** /
-**Return to family** — see [Session families](/using-the-ui/#session-families));
-there it requires a project-backed sidebar placement for the resulting root
-(or family root), since an unplaced root has no sidebar row or routable URL to
-show. The CLI/API endpoints do not invent a project placement; using them on an
-unplaced root can make the session temporarily unreachable until its placement
-is restored or its presentation flag is reversed.
-
-**Reparenting changes ownership itself**: the new parent is what family
-grouping, recursive dismissal, and the active-subagent budget follow from
-then on. Notification suppression does *not* move — it stays with the
-immutable launch parent. Both sessions must exist on this daemon;
-self-parenting, cycles, and cross-peer reassignment are refused.
-Reparenting has no UI equivalent.
+Make a local session a root by clearing its current `parent_session_id`. This
+severs family grouping, gives the subtree an independent active-subagent budget,
+and removes it from its former parent's recursive dismissal scope. The command
+is idempotent.
 
 ```bash
-gmux session promote a3f20187          # the child earns its own sidebar row
-gmux session demote a3f20187           # …and returns to its family
-gmux session reparent a3f20187 9c41b2   # hand the worker to the reviewer
+gmux promote a3f20187
+```
+
+### `gmux reparent <id> <parent-id>`
+
+Move a local session under a new current parent. Family grouping, budget depth,
+recursive dismissal, and notification suppression all follow the new edge.
+Self-parenting, cycles, missing sessions, and peer-owned sessions are refused.
+
+```bash
+gmux reparent a3f20187 9c41b2
 ```
 
 ### `gmux edit [file]`
