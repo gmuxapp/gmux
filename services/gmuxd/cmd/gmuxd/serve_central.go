@@ -88,6 +88,36 @@ func registerGetProjectsRoute(mux *http.ServeMux, render func(*http.Request) (wi
 	})
 }
 
+// convergeTailnetPeerTransport installs the embedded LocalAPI client
+// immediately, even when ready-time suffix discovery failed, then retries the
+// suffix independently so same-tailnet routing also converges without restart.
+func convergeTailnetPeerTransport(ctx context.Context, transport *tsauth.RoutedTransport, suffix string, rt http.RoundTripper, client tsauth.PeerClient, reconnect func(), retry <-chan time.Time) {
+	transport.SetTailnet(suffix, rt, client)
+	if reconnect != nil {
+		reconnect()
+	}
+	for suffix == "" {
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry:
+		}
+		statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		status, err := client.Status(statusCtx)
+		cancel()
+		if err != nil {
+			continue
+		}
+		suffix = tsauth.StatusMagicDNSSuffix(status)
+		if suffix != "" {
+			transport.SetTailnet(suffix, rt, client)
+			if reconnect != nil {
+				reconnect()
+			}
+		}
+	}
+}
+
 func serveCentral(stderr io.Writer, replace bool) int {
 	// This must remain the first operation. A candidate that will yield must do
 	// no bootstrap work against the incumbent it was spawned to replace.
@@ -1013,10 +1043,14 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		tsListener = tsauth.Start(tsauth.Config{Hostname: tsSeed, Allow: cfg.Tailscale.Allow}, stateDir, authedHandler)
 		defer tsListener.Shutdown()
 		go func(l *tsauth.Listener) {
-			<-l.Ready()
-			if suffix := l.MagicDNSSuffix(); suffix != "" {
-				peerTransport.SetTailnet(suffix, l.Transport())
+			select {
+			case <-l.Ready():
+			case <-daemonCtx.Done():
+				return
 			}
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			convergeTailnetPeerTransport(daemonCtx, peerTransport, l.MagicDNSSuffix(), l.Transport(), l.LocalClient(), peerManager.ReconnectAll, ticker.C)
 		}(tsListener)
 	}
 	shutdownCh := make(chan struct{})
