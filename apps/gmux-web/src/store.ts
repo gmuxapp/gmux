@@ -1003,82 +1003,21 @@ export const selectedFamilyChild = computed<SelectedFamilyChild | null>(() => {
   return { session, rootId, ancestors: familyAncestors(session, index) }
 })
 
-/** Family children this tab has visited, most recent first.
+/** The one member shown beneath a family root.
  *
- * The sidebar keeps one slot per family for "the member I was just
- * looking at", so you can get back to a subagent after navigating to
- * its root. Only ids are stored: whether an id still *resolves* to a
- * live family child is derived on every read (see `familySlotById`),
- * so promotion, reparenting and session death need no cleanup pass.
- * Ephemeral by design — "recently viewed" shouldn't outlive the tab
- * that did the viewing. */
-export const recentFamilyChildren = signal<readonly string[]>([])
-
-/** Cap on the MRU list. `rememberFamilyChild` keeps one member per
- * family, so this bounds how many *families* keep a remembered row:
- * visiting a sixth family's member evicts the least recent family. */
-const MAX_RECENT_FAMILY_CHILDREN = 5
-
-/** Record a visit. Idempotent for the current head, so the recorder
- * effect can run on every snapshot without churning the signal.
- *
- * One member per family, because the entry only ever shows one: keeping
- * a sibling too would let a single family fill the list and evict other
- * families' rows without ever showing a second row of its own. Reads
- * `sessions` with `peek` — the caller is an effect that already tracks
- * the selection this resolves. */
-export function rememberFamilyChild(id: string): void {
-  const prev = recentFamilyChildren.peek()
-  if (prev[0] === id) return
-  const index = familyIndex(sessions.peek())
-  const rootOf = (member: string) => index.rootById.get(member)?.id
-  const root = rootOf(id)
-  const others = prev.filter(x => x !== id && (root === undefined || rootOf(x) !== root))
-  recentFamilyChildren.value = [id, ...others].slice(0, MAX_RECENT_FAMILY_CHILDREN)
-}
-
-/** The one member shown beneath the selected family's root.
- *
- * While a member is selected, it is the slot. While the root is selected,
- * that family's most recently visited member is the way back. The moment
- * selection leaves the family, its member row disappears; promotion now
- * provides the persistent root-level affordance for work that needs one. */
+ * The slot is a direct projection of current selection: it exists only when
+ * a family descendant is selected, and names exactly that descendant. Root
+ * selection and selection outside the family produce no member row. */
 export interface FamilySlot {
   readonly session: Session
-  /** True when this member is the current selection. */
-  readonly selected: boolean
   /** Root-first spine, for the row's hover trail. */
   readonly ancestors: readonly Session[]
 }
 
 export const familySlotById = computed<ReadonlyMap<string, FamilySlot>>(() => {
-  const index = familyIndex(sessions.value)
-  const onlyAlive = aliveOnly.value
   const map = new Map<string, FamilySlot>()
   const sel = selectedFamilyChild.value
-  if (sel) {
-    map.set(sel.rootId, { session: sel.session, ancestors: sel.ancestors, selected: true })
-    return map
-  }
-
-  // A remembered member appears only while its own root is selected.
-  const selected = index.byId.get(selectedId.value ?? '')
-  const selectedRootId = selected ? index.rootById.get(selected.id)?.id : undefined
-  if (!selected || selectedRootId !== selected.id) return map
-
-  for (const id of recentFamilyChildren.value) {
-    const session = index.byId.get(id)
-    // Gone, promoted to its own row, or reparented out of this family.
-    if (!session || !index.childIds.has(id)) continue
-    const rootId = index.rootById.get(id)?.id
-    if (!rootId || rootId === id) continue
-    if (rootId !== selected.id) continue
-    // A corpse you can't reopen is not a way back; alive-only hides the
-    // resumable ones too, matching the rest of the list.
-    if (!session.alive && (onlyAlive || !session.resumable)) continue
-    map.set(rootId, { session, ancestors: familyAncestors(session, index), selected: false })
-    break
-  }
+  if (sel) map.set(sel.rootId, { session: sel.session, ancestors: sel.ancestors })
   return map
 })
 
@@ -2164,16 +2103,6 @@ export function initStore(): () => void {
     }
   })
   cleanups.push(disposeSidebarRepair)
-
-  // Remember the family member you're viewing, so its family's sidebar
-  // entry can offer the way back after you navigate to the root. Pure
-  // UI history with no transport dependency, so it registers above the
-  // mock-mode early return below — ?mock previews this behavior too.
-  const disposeRecentChild = effect(() => {
-    const child = selectedFamilyChild.value
-    if (child) rememberFamilyChild(child.session.id)
-  })
-  cleanups.push(disposeRecentChild)
 
   if (USE_MOCK) {
     const localHost = new URLSearchParams(location.search).get('host')

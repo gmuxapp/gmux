@@ -17,7 +17,7 @@ import {
   sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
   sidebarActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
   familyActivityById, selectedFamilyChild, ownDotState,
-  familySlotById, recentFamilyChildren, rememberFamilyChild,
+  familySlotById,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -1652,8 +1652,6 @@ describe('sidebar family entry derivations', () => {
       })
     })
 
-    beforeEach(() => { recentFamilyChildren.value = [] })
-
     it('holds the same numbers whichever member the slot row names', () => {
       _rawSessions.value = [
         agent('root'),
@@ -1674,13 +1672,12 @@ describe('sidebar family entry derivations', () => {
       })
     })
 
-    it('keeps the line when the only activity is the named member', () => {
+    it('keeps deriving complete family facts while a member is selected', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
         agent('a', { slug: 'aa', parent_session_id: 'root', unread: true }),
       ]
       urlPath.value = '/proj/pi/aa'
-      rememberFamilyChild('a')
       expect(familySlotById.value.get('root')?.session.id).toBe('a')
       expect(familyActivityById.value.get('root')?.waiting).toBe(1)
     })
@@ -1726,8 +1723,6 @@ describe('sidebar family entry derivations', () => {
   })
 
   describe('familySlotById (the selected family’s one member row)', () => {
-    beforeEach(() => { recentFamilyChildren.value = [] })
-
     const slot = (rootId: string) => familySlotById.value.get(rootId)
     const family = () => [
       agent('root', { slug: 'rooty' }),
@@ -1735,83 +1730,38 @@ describe('sidebar family entry derivations', () => {
       agent('elsewhere', { slug: 'far' }),
     ]
 
-    it('shows the selected member, marked as current', () => {
+    it('shows exactly the selected member, marked as current', () => {
       _rawSessions.value = family()
       urlPath.value = '/proj/pi/kiddo'
-      expect(slot('root')).toMatchObject({ selected: true })
       expect(slot('root')?.session.id).toBe('kid')
     })
 
-    it('shows the remembered member while the root is selected', () => {
+    it('shows no member while the root is selected', () => {
       _rawSessions.value = family()
-      rememberFamilyChild('kid')
       urlPath.value = '/proj/pi/rooty'
-      expect(slot('root')).toMatchObject({ selected: false })
-      expect(slot('root')?.session.id).toBe('kid')
+      expect(familySlotById.value.size).toBe(0)
     })
 
     it('drops the member immediately when selection leaves the family', () => {
       _rawSessions.value = family()
-      rememberFamilyChild('kid')
-      urlPath.value = '/proj/pi/rooty'
+      urlPath.value = '/proj/pi/kiddo'
       expect(slot('root')?.session.id).toBe('kid')
       urlPath.value = '/proj/pi/far'
       expect(familySlotById.value.size).toBe(0)
-      // The memory survives so returning to the root restores its way back.
-      expect(recentFamilyChildren.value).toEqual(['kid'])
       urlPath.value = '/proj/pi/rooty'
-      expect(slot('root')?.session.id).toBe('kid')
+      expect(familySlotById.value.size).toBe(0)
     })
 
-    it('selection wins over an older remembered sibling', () => {
+    it('switches directly to the newly selected sibling', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
         agent('a', { slug: 'aa', parent_session_id: 'root' }),
         agent('b', { slug: 'bb', parent_session_id: 'root' }),
       ]
-      rememberFamilyChild('a')
+      urlPath.value = '/proj/pi/aa'
+      expect(slot('root')?.session.id).toBe('a')
       urlPath.value = '/proj/pi/bb'
-      expect(slot('root')).toMatchObject({ selected: true })
       expect(slot('root')?.session.id).toBe('b')
-    })
-
-    it('resolves validity and alive-only only while the root asks for its memory', () => {
-      _rawSessions.value = family()
-      rememberFamilyChild('kid')
-      urlPath.value = '/proj/pi/rooty'
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, alive: false, resumable: true } : s)
-      expect(slot('root')?.session.id).toBe('kid')
-      setAliveOnly(true)
-      expect(familySlotById.value.size).toBe(0)
-      setAliveOnly(false)
-      _rawSessions.value = _rawSessions.value.map(s =>
-        s.id === 'kid' ? { ...s, promoted_to_root: true } : s)
-      expect(familySlotById.value.size).toBe(0)
-    })
-
-    it('keeps one bounded memory per family without rendering inactive families', () => {
-      const snapshot: Session[] = []
-      for (let i = 0; i < 7; i++) {
-        snapshot.push(
-          agent(`root${i}`, { slug: `root-${i}` }),
-          agent(`kid${i}`, { parent_session_id: `root${i}` }),
-        )
-      }
-      _rawSessions.value = snapshot
-      for (let i = 0; i < 7; i++) rememberFamilyChild(`kid${i}`)
-      expect(recentFamilyChildren.value).toEqual(['kid6', 'kid5', 'kid4', 'kid3', 'kid2'])
-      expect(familySlotById.value.size).toBe(0)
-      urlPath.value = '/proj/pi/root-6'
-      expect(familySlotById.value.size).toBe(1)
-      expect(slot('root6')?.session.id).toBe('kid6')
-    })
-
-    it('is idempotent for the member already at the head', () => {
-      rememberFamilyChild('a')
-      const first = recentFamilyChildren.value
-      rememberFamilyChild('a')
-      expect(recentFamilyChildren.value).toBe(first)
     })
   })
 
@@ -2040,28 +1990,6 @@ describe('sidebar-mode repair effect (initStore)', () => {
     cleanup = null
     setNavigate(() => {/* no-op */})
     vi.unstubAllGlobals()
-  })
-
-  it('records the family member you are viewing (the recorder effect runs)', () => {
-    // Every other MRU test calls rememberFamilyChild directly, which
-    // proves the list but not the wiring. This one pins the wiring: an
-    // effect registered by initStore, above the mock-mode early return
-    // that would otherwise leave it dead in ?mock previews.
-    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
-    sessionsLoaded.value = true
-    worldLoaded.value = true
-    _rawSessions.value = [
-      makeSession({ id: 'root', slug: 'rooty', cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj' }),
-      makeSession({ id: 'kid', slug: 'kiddo', cwd: '/work', adapter: 'pi', semantic_agent: true, project_slug: 'proj', parent_session_id: 'root' }),
-    ]
-    recentFamilyChildren.value = []
-    // A resolvable selection wakes the mark-as-read effect, which reads
-    // `selected` — and that computed pokes `window` for debugging.
-    vi.stubGlobal('window', {})
-    cleanup = initStore()
-    urlPath.value = '/proj/pi/kiddo'
-    expect(selectedFamilyChild.value?.session.id).toBe('kid')
-    expect(recentFamilyChildren.value).toEqual(['kid'])
   })
 
   it('rewrites a stale ?sidebar entry in place; the signal never adopts from the URL', () => {
@@ -2379,36 +2307,5 @@ describe('conversation_file (duplicate-open warning)', () => {
     const dups = duplicateConversationFiles.value
     expect(dups.has('/conv.jsonl')).toBe(true)
     expect(dups.has('/other.jsonl')).toBe(false)
-  })
-})
-
-describe('mock-mode boot (?mock)', () => {
-  // `?mock` is the surface design work is reviewed on, and initStore
-  // returns early for it — anything registered below that return is dead
-  // in mock previews while looking perfectly wired in production. The
-  // recorder effect was, once. This boots a *fresh* store module with
-  // ?mock in the URL, which is the only way to see that difference.
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.resetModules()
-  })
-
-  it('records the family member you are viewing in a mock preview too', async () => {
-    vi.stubGlobal('location', { search: '?mock', hash: '', pathname: '/' })
-    vi.stubGlobal('window', {})
-    vi.resetModules()
-    const store = await import('./store')
-    // Stand in for the router: the store navigates through this.
-    store.setNavigate((url: string) => { store.urlPath.value = url.split('?')[0] })
-    const cleanup = store.initStore()
-    try {
-      const kid = store.sessions.value.find(s => s.parent_session_id && s.semantic_agent)
-      expect(kid, 'the mock fixtures should contain a family child').toBeDefined()
-      store.navigateToSession(kid!.id)
-      expect(store.selectedFamilyChild.value?.session.id).toBe(kid!.id)
-      expect(store.recentFamilyChildren.value).toEqual([kid!.id])
-    } finally {
-      cleanup()
-    }
   })
 })

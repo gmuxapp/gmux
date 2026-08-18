@@ -392,9 +392,9 @@ function FamilyEntry({
       {children}
       {member && (
         <a
-          class={`family-sub family-slot${slot.selected ? ' selected' : ''}`}
+          class="family-sub family-slot selected"
           href={slotHref}
-          aria-current={slot.selected ? 'page' : undefined}
+          aria-current="page"
           title={slotTrail}
           onClick={() => onClick?.()}
         >
@@ -566,7 +566,7 @@ function FolderGroup({
               // `selId` maps a selected descendant onto its root row.
               // The entry now draws that selection on the member's own
               // row instead, so the root row only lights up for itself.
-              selected={selId === s.id && !slot?.selected}
+              selected={selId === s.id && !slot}
               resuming={resumingId === s.id}
               // Root row = root's own status. The family roll-up lives on
               // the summary line below it (see FamilyEntry).
@@ -595,7 +595,9 @@ function FolderGroup({
               slot={slot}
               slotHref={slot && sessionHref(slot.session)}
               slotTrail={slot && childTrailTitle(s, slot.ancestors, slot.session)}
-              activity={activity}
+              // One subordinate row only: current-member identity replaces
+              // the family summary while a descendant owns selection.
+              activity={slot ? undefined : activity}
               onClick={onClick}
             >
               {item}
