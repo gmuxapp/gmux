@@ -2298,35 +2298,47 @@ body {
   flex: 0 1 auto;
 }
 
-/* Family trigger: a ghost icon button in the header's one control
- * language (borderless, bg-hover, sized to match .session-menu-trigger).
- * The corner badge repeats the family's aggregated dot state so
- * background family activity is visible without opening the panel. */
-/* A pill, bordered like the panel's tally buttons so it reads as one
- * coherent button rather than a strip of dots that happens to be
- * clickable. Never shrinks: it is the densest thing in the row, and
- * the title yields instead. */
+/* One quiet-button language for the family surfaces: a square control
+ * that speaks the sidebar's fill progression — bg-hover to point at it,
+ * bg-selected when it's on — rather than outlines. The trigger, the
+ * panel's tally filters and the bulk action are the same kind of thing,
+ * so they share one rule instead of three near-copies (and none of them
+ * is a pill — that shape belongs to floating status overlays, not
+ * buttons). Only Mark all read keeps a border: a lone text action
+ * beside a sentence needs its shape even at rest. */
+.family-trigger,
+.family-count,
+.family-mark-read {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+/* Family trigger: a soft fill instead of an outline — the header's other
+ * controls are borderless ghosts, so containment does the "one coherent
+ * button" work a border was doing, and hover/open step the fill up the
+ * way the header's other controls do. Never shrinks: it is the densest
+ * thing in the row, and the title yields instead. The corner badge
+ * repeats the family's aggregated dot state so background family
+ * activity is visible without opening the panel. */
 .family-trigger {
   height: 26px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+  padding: 0 8px;
+  background: var(--bg-hover);
   color: var(--text-secondary);
   font: 500 12px/1 'Source Sans 3', sans-serif;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-trigger:hover,
 .family-trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
+  background: var(--bg-selected);
   color: var(--text);
-  border-color: var(--border-strong);
 }
 .family-trigger-seg {
   display: flex;
@@ -2450,12 +2462,9 @@ body {
 .family-mark-read {
   flex: 0 0 auto;
   padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
+  border-color: var(--border);
   color: var(--text-muted);
   font: 400 11px/1.4 'Source Sans 3', sans-serif;
-  cursor: pointer;
   white-space: nowrap;
 }
 .family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
@@ -2473,7 +2482,7 @@ body {
 }
 /* Each tally is also the filter for its own state, so it looks like
    something you can press without shouting: no chrome until you point
-   at it, a filled pill once it's on. */
+   at it, a filled square button once it's on. */
 .family-count {
   display: inline-flex;
   align-items: center;
@@ -2481,18 +2490,12 @@ body {
   min-height: 24px;
   padding: 2px 7px;
   margin: -2px 0;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
   color: inherit;
   font: inherit;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
 }
-.family-count:hover { border-color: var(--border); }
+.family-count:hover { background: var(--bg-hover); }
 .family-count.active {
   background: var(--bg-selected);
-  border-color: var(--border);
   color: var(--text);
 }
 .family-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
