@@ -610,14 +610,37 @@ function FolderGroup({
   )
 }
 
-/** Compact popover behind the header's arrange icon. Three concerns,
- *  three lifetimes:
- *    View  — Projects/Activity signal, mirrored to the URL (?sidebar=).
+/** Always-visible Projects/Activity switch: under the header on desktop,
+ *  above the logo/header row on touch layouts (see the coarse-pointer
+ *  rules on .sidebar-view-toggle). Two equal buttons rather than one
+ *  cycling control — a glance answers both where you are and what the
+ *  alternative is. The active fill is the sidebar's selected-row fill:
+ *  "you are here" in the language the rows below already speak. */
+function ViewToggle({ mode }: { mode: 'projects' | 'activity' }) {
+  return (
+    <div class="sidebar-view-toggle" role="group" aria-label="Sidebar view">
+      <button
+        class={`sidebar-view-btn${mode === 'projects' ? ' active' : ''}`}
+        aria-pressed={mode === 'projects'}
+        onClick={() => setSidebarMode('projects')}
+      >Projects</button>
+      <button
+        class={`sidebar-view-btn${mode === 'activity' ? ' active' : ''}`}
+        aria-pressed={mode === 'activity'}
+        onClick={() => setSidebarMode('activity')}
+      >Activity</button>
+    </div>
+  )
+}
+
+/** Compact popover behind the header's arrange icon. Two concerns,
+ *  two lifetimes:
  *    Host  — narrows the tab to one host (`*@host` in ?filter=).
  *    Alive only — hides resumable corpses; sessionStorage (per tab).
- *  One entry point, instant switching — the list is the preview. */
+ *  The Projects/Activity switch moved out to the always-visible
+ *  ViewToggle above. One entry point, instant switching — the list is
+ *  the preview. */
 function ViewMenu({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  const mode = sidebarMode.value
   const selectors = activeSelectors.value
   // The Host radio reflects a sole `*@host` selector; anything more
   // exotic (project selectors, several hosts) lives in the chip row.
@@ -659,9 +682,6 @@ function ViewMenu({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       )}
       {open && (
         <div class="view-menu" role="menu">
-          <div class="view-menu-label">View</div>
-          <Option checked={mode === 'projects'} label="Projects" onSelect={() => setSidebarMode('projects')} />
-          <Option checked={mode === 'activity'} label="Activity" onSelect={() => setSidebarMode('activity')} />
           <div class="view-menu-label">Host</div>
           <Option checked={currentHost === null && hostSelectors.length === 0} label="All hosts" onSelect={() => setHostFilter(null)} />
           {localName && (
@@ -916,6 +936,7 @@ export function Sidebar({
             {hasUnresolved && <span class="settings-attention-pip" aria-hidden="true" />}
           </button>
         </div>
+        <ViewToggle mode={mode} />
         <FilterChips selectors={selectors} />
         <div class="sidebar-scroll" ref={scrollRef} onClick={() => menuOpen && setMenuOpen(false)}>
           {/* Every row lives on one opaque slab so the scrollport's own

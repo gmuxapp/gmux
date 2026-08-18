@@ -171,6 +171,47 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Projects/Activity switch: the family-tally language (square, quiet,
+ * sidebar fill progression) stretched into an equal-width pair. Thin on
+ * desktop — one text line, like the rows below it. */
+.sidebar-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
+}
+.sidebar-view-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 1px 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 400 12px/1.4 'Source Sans 3', sans-serif;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.sidebar-view-btn:hover { background: var(--bg-hover); }
+.sidebar-view-btn.active {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.sidebar-view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Touch: put the switch above the logo/header row so both pieces of
+ * sidebar navigation stay together. Flex order avoids moving the node;
+ * the larger targets and safe-area padding are mobile-only. */
+@media (pointer: coarse) {
+  .sidebar-view-toggle {
+    order: -1;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 4px;
+  }
+  .sidebar-view-btn { min-height: 34px; font-size: 13px; }
+}
+
 .sidebar-logo {
   font-family: 'Instrument Sans', sans-serif;
   font-size: 18px;
