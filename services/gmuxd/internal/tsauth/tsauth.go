@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
@@ -74,6 +75,19 @@ func (l *Listener) FQDN() string { return l.fqdn }
 // "tailnet.ts.net") once the listener is ready. Returns "" if tailscale
 // hasn't connected yet or MagicDNS is disabled.
 func (l *Listener) MagicDNSSuffix() string { return l.magicSuffix }
+
+// StatusMagicDNSSuffix extracts and normalizes the authoritative suffix from a
+// LocalAPI status response, preferring CurrentTailnet over the legacy field.
+func StatusMagicDNSSuffix(status *ipnstate.Status) string {
+	if status == nil {
+		return ""
+	}
+	suffix := status.MagicDNSSuffix
+	if status.CurrentTailnet != nil && status.CurrentTailnet.MagicDNSSuffix != "" {
+		suffix = status.CurrentTailnet.MagicDNSSuffix
+	}
+	return strings.TrimSuffix(suffix, ".")
+}
 
 // Diag returns diagnostic status about the Tailscale connection.
 // Safe to call at any time, including before the listener is ready.
@@ -180,17 +194,16 @@ func (l *Listener) run(handler http.Handler) {
 
 	// Resolve the full tailnet FQDN so users know exactly what to type.
 	fqdn := l.cfg.Hostname
-	if status, err := lc.Status(context.Background()); err == nil {
+	// Identity/suffix discovery must not hold Ready closed indefinitely. The
+	// caller installs the LocalClient even on timeout and retries suffix
+	// convergence independently.
+	if status, err := statusWithTimeout(context.Background(), lc, 5*time.Second); err == nil {
 		if status.Self != nil {
 			if dnsName := strings.TrimSuffix(status.Self.DNSName, "."); dnsName != "" {
 				fqdn = dnsName
 			}
 		}
-		suffix := status.MagicDNSSuffix
-		if status.CurrentTailnet != nil && status.CurrentTailnet.MagicDNSSuffix != "" {
-			suffix = status.CurrentTailnet.MagicDNSSuffix
-		}
-		l.magicSuffix = strings.TrimSuffix(suffix, ".")
+		l.magicSuffix = StatusMagicDNSSuffix(status)
 	}
 	l.fqdn = fqdn
 	close(l.ready)
