@@ -149,6 +149,10 @@ test.describe('mobile Shift+Tab keyboard', () => {
     expect(safeAreaContract.left).toContain('env(safe-area-inset-left')
     expect(safeAreaContract.right).toContain('env(safe-area-inset-right')
 
+    // Pin the narrowest phone explicitly rather than inheriting whatever the
+    // loop above ended on: the assertions below are only tight at 320px, and
+    // reordering that list must not silently relax them.
+    await page.setViewportSize({ width: 320, height: 568 })
     await page.addStyleTag({ content: '.mobile-bottom-bar { --mobile-safe-area-left: 24px; --mobile-safe-area-right: 28px; }' })
     const safe = await page.evaluate(() => {
       const bar = document.querySelector('.mobile-bottom-bar')!.getBoundingClientRect()
@@ -158,5 +162,56 @@ test.describe('mobile Shift+Tab keyboard', () => {
     })
     expect(safe.menu.x).toBeGreaterThanOrEqual(24)
     expect(safe.send.right).toBeLessThanOrEqual(safe.width - 28)
+
+    // Side insets shrink every cell, and ⇧tab is the widest label in the bar,
+    // so it is the first one that would spill: 3px of total headroom here.
+    const inset = await page.evaluate(() => {
+      const face = document.querySelector('.mk-shift-tab .mkey-face') as HTMLElement
+      const range = document.createRange()
+      range.selectNodeContents(face)
+      return { content: range.getBoundingClientRect().width, cell: document.querySelector('.mk-shift-tab')!.getBoundingClientRect().width }
+    })
+    expect(inset.content).toBeLessThan(inset.cell)
+  })
+
+  test('keeps the ⇧tab label on one line, within its cell, in a bundled font', async ({ page }) => {
+    for (const [width, height] of [
+      [320, 568],
+      [390, 844],
+      [700, 390],
+      [844, 390],
+    ] as const) {
+      await page.setViewportSize({ width, height })
+      await page.waitForTimeout(100)
+      const label = await page.evaluate(() => {
+        const face = document.querySelector('.mk-shift-tab .mkey-face') as HTMLElement
+        const range = document.createRange()
+        range.selectNodeContents(face)
+        const content = range.getBoundingClientRect()
+        const cell = document.querySelector('.mk-shift-tab')!.getBoundingClientRect()
+        return {
+          // Geometry of the painted content, not of the flex box: a wrapped
+          // label doubles its height while the box keeps the row height, and a
+          // displaced one moves out of the cell while keeping its size.
+          content: { top: content.top, right: content.right, bottom: content.bottom, left: content.left, height: content.height },
+          cell: { top: cell.top, right: cell.right, bottom: cell.bottom, left: cell.left },
+          text: face.textContent ?? '',
+          glyphs: face.querySelectorAll('svg').length,
+        }
+      })
+      // One line: a 13px line box is 18px tall, wrapping to two is ~32px.
+      expect(label.content.height).toBeLessThan(24)
+      // Contained by the key's *painted* cell on both axes — not merely by the
+      // hit area, which deliberately overhangs it by half the key gap.
+      expect(label.content.left).toBeGreaterThanOrEqual(label.cell.left)
+      expect(label.content.right).toBeLessThanOrEqual(label.cell.right)
+      expect(label.content.top).toBeGreaterThanOrEqual(label.cell.top)
+      expect(label.content.bottom).toBeLessThanOrEqual(label.cell.bottom)
+      // The modifier mark must stay a drawn glyph: no bundled Source Sans 3
+      // subset covers U+21E7, so a literal ⇧/⇤ would silently fall back to an
+      // OS font with foreign weight and per-platform metrics.
+      expect(label.glyphs).toBe(1)
+      expect(label.text).toBe('tab')
+    }
   })
 })

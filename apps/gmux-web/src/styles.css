@@ -3558,6 +3558,14 @@ body {
     padding: 0 4px;
   }
 
+  /* Shift+Tab is the one key that pairs a drawn modifier glyph with a word
+     ("⇧tab"), so it needs the one thing a single glyph or a single word does
+     not: a hair of space between them. The pair measures 31px against a 40.3px
+     cell on the narrowest supported phone (320px). */
+  .mk-shift-tab .mkey-face {
+    gap: 1px;
+  }
+
   /* Waiting dot on the hamburger menu button. Only the waiting (unread)
      state is surfaced; working/active are deliberately omitted.
      Pseudo-elements don't expand the hit-box, so taps outside the button
