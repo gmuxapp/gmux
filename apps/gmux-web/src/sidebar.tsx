@@ -232,12 +232,12 @@ function SessionItem({
   )
 }
 
-/** The activity line: what the entry does *not* name by row, in the
- *  sidebar's own dot vocabulary — error, unread, working subagent,
- *  running process — each segment dropped at zero. It's a count, not a
- *  destination, so it has no target of its own; like the rest of the
- *  entry's slack it belongs to the group, which selects the root. */
-function FamilyActivityLine({
+/** The family button: the static opener at the head of the subordinate
+ *  row, carrying the activity segments while nothing in the family is
+ *  selected. The icon never moves — it is the row's fixed identity —
+ *  only what follows it changes: counts inside the button, or the
+ *  member row beside it. */
+function FamilyOpenButton({
   activity,
   rootId,
   rootHref,
@@ -248,16 +248,12 @@ function FamilyActivityLine({
   rootHref: string
   onClick?: () => void
 }) {
-  // `familyActivityById` holds an entry only when something is non-zero,
-  // so absence is the whole of "nothing to report" — one spelling of
-  // the question, here, instead of one per call site.
-  if (!activity) return null
-  const segments = familySegments(activity)
-  const label = familyActivityLabel(activity)
+  const segments = activity ? familySegments(activity) : []
+  const label = activity ? familyActivityLabel(activity) : 'Session family'
   return (
     <button
       type="button"
-      class="family-sub family-activity"
+      class="family-activity"
       title={label}
       aria-label={`${label}. Open family panel`}
       aria-controls="agent-family-drawer"
@@ -283,43 +279,49 @@ function FamilyActivityLine({
         * the standard family numbers — everyone beneath the root — not
         * "the others", so it anchors to the root's glyph column rather
         * than indenting under whichever member row happens to be shown. */}
+      {/* The mark is the whole visible button when a member row sits
+        * beside it — it's the same icon as the header's trigger, so it
+        * already means "family panel" without a suffix. */}
       <span class="family-glyph" aria-hidden="true"><FamilyIcon class="family-activity-icon" /></span>
       {/* Glyphs are decoration; the sentence carries the meaning. */}
-      <span class="family-activity-glyphs" aria-hidden="true">
-        {segments.map(segment => (
-          <span key={segment.state} class="family-activity-seg">
-            {segment.dot
-              ? <span class={`family-glyph session-dot-indicator ${segment.dot}`} />
-              : <span class="family-glyph family-proc">$</span>}
-            {segment.count}
-          </span>
-        ))}
-      </span>
+      {segments.length > 0 && (
+        <span class="family-activity-glyphs" aria-hidden="true">
+          {segments.map(segment => (
+            <span key={segment.state} class="family-activity-seg">
+              {segment.dot
+                ? <span class={`family-glyph session-dot-indicator ${segment.dot}`} />
+                : <span class="family-glyph family-proc">$</span>}
+              {segment.count}
+            </span>
+          ))}
+        </span>
+      )}
       <span class="sr-only">{label}</span>
     </button>
   )
 }
 
-/** The sidebar's family entry: a root row, one member beneath it while
- *  this family owns selection, and a line counting the family. The member is
- *  the selection itself, or the last-viewed member while the root is selected;
- *  it disappears as soon as selection leaves the family.
+/** The sidebar's family entry: a root row and at most one subordinate
+ *  row, led by the static family button. The button carries the family
+ *  counts until a descendant takes selection; then the counts yield to
+ *  the member's own row beside it, and return the moment selection
+ *  leaves the family. No history: the member row *is* the selection.
  *
  *  Selection and hit areas nest, the way the sessions do:
  *   - the group is the root's area. Hovering anywhere in it highlights
  *     the whole group, and any click that doesn't land on the member
  *     row selects the root — including the slack around its nested
  *     targets, which has nothing better to do;
- *   - the member row and family-indicator button are their own areas
- *     inside that one, each with its own hover treatment;
+ *   - the member row and family button are their own areas inside that
+ *     one, each with its own hover treatment;
  *   - the background says *which family* you're in, the accent bar says
  *     *which row*, so selecting a member keeps the group lit and moves
  *     the bar down to it.
  *
  *  One more rule holds the content together: the root row's dot is the
  *  root session's own status, so a working child never masquerades as
- *  a working root. The line, by contrast, is a summary and may well
- *  include the member named above it — the standard family numbers are
+ *  a working root. The counts, by contrast, are a summary and may well
+ *  include the member selected within — the standard family numbers are
  *  a fact about the family, the same on every surface, and subtracting
  *  whatever a surface happens to name made them wobble with unrelated
  *  state (see `familyActivityById`).
@@ -390,29 +392,42 @@ function FamilyEntry({
       onDrop={onDragEnd && ((e) => { e.preventDefault(); onDragEnd() })}
     >
       {children}
-      {member && (
-        <a
-          class="family-sub family-slot selected"
-          href={slotHref}
-          aria-current="page"
-          title={slotTrail}
-          onClick={() => onClick?.()}
-        >
-          {/* One fixed-width glyph column, always filled: the member's
-            * status, its `$` if it's a process, or the branch arrow when
-            * there's nothing to report. The arrow is what a quiet member
-            * looks like — it marks the row as hanging off the root, and
-            * it keeps the title from sliding sideways when state
-            * arrives or clears. */}
-          {glyph?.kind === 'process'
-            ? <span class="family-glyph family-proc" aria-hidden="true">$</span>
-            : glyph?.kind === 'dot'
-            ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
-            : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}
-          <span class="family-slot-title">{member.title}</span>
-        </a>
+      {(member || activity) && (
+        <div class="family-sub">
+          {/* The static head of the row: same button in both states, so
+            * the panel's entry point never teleports. Only the content
+            * after it changes — counts inside the button, or the member
+            * row beside it. */}
+          <FamilyOpenButton
+            activity={member ? undefined : activity}
+            rootId={rootId}
+            rootHref={rootHref}
+            onClick={onClick}
+          />
+          {member && (
+            <a
+              class="family-slot selected"
+              href={slotHref}
+              aria-current="page"
+              title={slotTrail}
+              onClick={() => onClick?.()}
+            >
+              {/* One fixed-width glyph column, always filled: the member's
+                * status, its `$` if it's a process, or the branch arrow when
+                * there's nothing to report. The arrow is what a quiet member
+                * looks like — it marks the row as hanging off the root, and
+                * it keeps the title from sliding sideways when state
+                * arrives or clears. */}
+              {glyph?.kind === 'process'
+                ? <span class="family-glyph family-proc" aria-hidden="true">$</span>
+                : glyph?.kind === 'dot'
+                ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
+                : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}
+              <span class="family-slot-title">{member.title}</span>
+            </a>
+          )}
+        </div>
       )}
-      <FamilyActivityLine activity={activity} rootId={rootId} rootHref={rootHref} onClick={onClick} />
     </div>
   )
 }
@@ -595,9 +610,7 @@ function FolderGroup({
               slot={slot}
               slotHref={slot && sessionHref(slot.session)}
               slotTrail={slot && childTrailTitle(s, slot.ancestors, slot.session)}
-              // One subordinate row only: current-member identity replaces
-              // the family summary while a descendant owns selection.
-              activity={slot ? undefined : activity}
+              activity={activity}
               onClick={onClick}
             >
               {item}

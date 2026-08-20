@@ -51,11 +51,13 @@ with per-level `+N more` / `show fewer` folds. Ordinary tree order is recency of
 `last_output_at ?? created_at`; state does not otherwise reorder the tree.
 
 Outside the panel a root row stands in for its whole family and has at most one
-subordinate row. While a descendant is selected, that row names exactly the
-selected member and the icon-number summary is absent. Otherwise no member row
-is shown and the summary appears when the family has reportable activity. Root
-selection never restores a previously viewed member; a member that needs a
-persistent row can be promoted to a root.
+subordinate row, led by a static family button (the family icon) that opens the
+panel. While a descendant is selected, the selected member's row sits beside the
+icon; otherwise the icon-number summary lives inside the button, shown when the
+family has reportable activity. Both states share one
+row height, so selection never shifts the list. Root selection never restores a
+previously viewed member; a member that needs a persistent row can be promoted
+to a root.
 
 For agent members, `familyDotById` aggregates the highest-precedence dot onto
 the presentation root, and `unreadCount` adds unread descendants (alive or

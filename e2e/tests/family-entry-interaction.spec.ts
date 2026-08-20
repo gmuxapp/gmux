@@ -82,15 +82,19 @@ test.describe('sidebar family entry', () => {
     await expect(page.locator('#agent-family-drawer')).toBeHidden()
   })
 
-  test('a selected member replaces the summary as the family’s only subordinate row', async ({ page }) => {
+  test('the family button is static; only the content after it changes', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
     const family = familyEntry(page, 'orchestrator')
+    // Member selected: the button stays (the panel's entry point never
+    // teleports) but sheds its counts — the member row is the content.
+    await expect(family.locator('.family-activity')).toHaveCount(1)
     await expect(family.locator('.family-slot')).toHaveCount(1)
-    await expect(family.locator('.family-activity')).toHaveCount(0)
+    await expect(family.locator('.family-activity-seg')).toHaveCount(0)
 
     await page.locator('.session-item').filter({ hasText: 'design landing page' }).click()
     await expect(family.locator('.family-slot')).toHaveCount(0)
     await expect(family.locator('.family-activity')).toHaveCount(1)
+    expect(await family.locator('.family-activity-seg').count()).toBeGreaterThan(0)
 
     // Root selection keeps the summary and never resurrects history.
     await family.locator('.session-item').first().click()
@@ -150,24 +154,31 @@ test.describe('sidebar family entry', () => {
 })
 
 test.describe('the family line and the panel tally', () => {
-  test('the family mark anchors to the glyph column and never shares a member row', async ({ page }) => {
+  test('the family mark anchors every subordinate row to one glyph column', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
     const geometry = await page.evaluate(() => [...document.querySelectorAll('.session-family')].map(entry => {
       const slot = entry.querySelector('.family-slot')
       const mark = entry.querySelector('.family-activity .family-activity-icon')
+      const segs = entry.querySelectorAll('.family-activity-seg').length
       const center = (el: Element | null) => el
         ? Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width / 2)
         : null
-      return { memberCX: center(slot?.querySelector('.family-glyph') ?? null), markCX: center(mark) }
+      return { memberCX: center(slot?.querySelector('.family-glyph') ?? null), markCX: center(mark), segs }
     }))
 
     expect(geometry.some(g => g.memberCX !== null), 'the selected family names its member').toBe(true)
-    expect(geometry.some(g => g.markCX !== null), 'inactive families retain their summaries').toBe(true)
+    expect(geometry.some(g => g.segs > 0), 'inactive families retain their summaries').toBe(true)
     for (const g of geometry) {
-      expect(g.memberCX === null || g.markCX === null, 'at most one subordinate row').toBe(true)
+      // The mark is the row's static head: wherever a subordinate row
+      // exists, the mark leads it — and the counts and the member row
+      // never share it (one subordinate row's worth of content).
+      if (g.memberCX !== null || g.segs > 0) expect(g.markCX, 'the mark leads every subordinate row').not.toBeNull()
+      expect(g.memberCX === null || g.segs === 0, 'counts and member never share the row').toBe(true)
+      if (g.memberCX !== null && g.markCX !== null)
+        expect(g.memberCX, 'the member sits after the mark').toBeGreaterThan(g.markCX)
     }
     expect(new Set(geometry.flatMap(g => g.markCX === null ? [] : [g.markCX])).size,
-      'one glyph column for every summary').toBe(1)
+      'one glyph column for every family mark').toBe(1)
   })
 
   test("the panel's tally names states in the turn model's words", async ({ page }) => {
