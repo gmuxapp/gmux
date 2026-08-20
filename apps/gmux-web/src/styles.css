@@ -618,9 +618,11 @@ body {
 .launch-inline-menu {
   position: fixed;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  /* Same anchored-popover skin as the session ⋮ menu, the family panel
+     and the view menu. */
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
   min-width: 180px;
   /* Backstop for the JS re-clamp: never wider than the viewport. */
   max-width: calc(100vw - 16px);
@@ -1333,9 +1335,11 @@ body {
   z-index: 30;
   min-width: 160px;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  /* One anchored-popover skin, shared with the session ⋮ menu and the
+     family panel: strong border, 6px corners, one shadow. */
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
   padding: 4px;
 }
 .view-menu-label {
@@ -1354,7 +1358,8 @@ body {
   padding: 5px 10px 5px 6px;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  /* Same resting tone as the session ⋮ menu's actions. */
+  color: var(--text-secondary);
   font-size: 13px;
   text-align: left;
   border-radius: 5px;
@@ -1387,7 +1392,9 @@ body {
   color: var(--text);
   background: var(--bg-selected);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  /* Square like the app's other small controls; pills are for floating
+     status overlays. */
+  border-radius: 4px;
   padding: 1px 4px 1px 8px;
   max-width: 100%;
 }
