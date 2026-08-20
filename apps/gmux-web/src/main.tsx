@@ -57,6 +57,21 @@ const KEYBOARD_PRESENCE_PX = 60
 // Mock mode: hide close buttons and other interactive chrome via CSS.
 if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
+// Scrollbar flavor: platforms with overlay scrollbars keep them native
+// (styles.css only declares color-scheme so they render dark); hosts
+// whose classic scrollbars consume layout space get the slim custom
+// skin instead. No CSS can tell the two apart, so measure once: a
+// classic scrollbar eats into a probe's client width, an overlay one
+// doesn't. Runs before render, so nothing repaints under the class.
+{
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll'
+  document.body.appendChild(probe)
+  if (probe.offsetWidth - probe.clientWidth > 0)
+    document.documentElement.classList.add('classic-scrollbars')
+  probe.remove()
+}
+
 // Debug: __gmuxCopySession() in devtools console
 installCopySession()
 // Debug: whole store namespace for console poking in mock mode.

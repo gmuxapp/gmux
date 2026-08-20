@@ -24,6 +24,10 @@ code {
 }
 
 :root {
+  /* Native scrollbars (and form controls) render dark instead of the
+     browser's light default — load-bearing for leaving platform overlay
+     scrollbars alone (see the scrollbar block below). */
+  color-scheme: dark;
   /* Surfaces — widened gaps for clearer distinction */
   --bg: oklch(12% 0.015 250);
   --bg-sidebar: oklch(16.5% 0.015 250);
@@ -37,7 +41,7 @@ code {
   --text-muted: oklch(65% 0.01 250);
 
   /* Borders. Two tiers; the base tier drives dividers, card/button
-   * outlines and scrollbar thumbs, so it needs enough lightness to read
+   * outlines and classic-scrollbar thumbs, so it needs enough lightness to read
    * against the near-black surfaces. --border-strong stays ~6pts above
    * for hover/emphasis separators. */
   --border: oklch(32% 0.015 250);
@@ -79,36 +83,52 @@ code {
 
 /* ── Scrollbars ──
  *
- * One scrollbar style for the whole app, derived from the sidebar's slim
- * thumb but a touch wider and brighter so it's easier to spot and grab.
+ * Scrollbars: the platform's own overlay scrollbars (macOS, iOS,
+ * Android, most Linux desktops) are exactly what we'd design — floating,
+ * thin, appearing on scroll — and :root's color-scheme keeps them dark,
+ * so by default we don't touch them at all. No CSS can distinguish
+ * overlay from classic scrollbars, so a startup probe (see main.tsx)
+ * measures whether scrollbars consume layout space and tags
+ * <html class="classic-scrollbars"> only when they do. Those hosts —
+ * wide, blocking, arrow-adorned — get this slim custom skin instead.
  *
- * Two mechanisms on purpose: Chromium 121+ and Firefox honor the standard
- * scrollbar-width/scrollbar-color properties (and then ignore the
- * ::-webkit-scrollbar pseudos entirely); Safari only understands the
- * webkit pseudos. Each browser picks the one it supports.
- *
- * Keeping the thumb thin also keeps the layout cost of classic
- * (non-overlay) scrollbars small wherever they take up space. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+ * Two mechanisms on purpose, but not both at once: a browser that
+ * understands the ::-webkit-scrollbar pseudos (Chromium, Safari) gets
+ * the fully custom scrollbar — thumb only, no stepper arrows — while
+ * Firefox, which doesn't, gets the standard scrollbar-width/color
+ * properties instead (its thin scrollbar has no buttons either). The
+ * split matters because Chromium 121+ honors the standard properties
+ * too, and once they're set it *ignores* the webkit pseudos — drawing
+ * its native thin scrollbar, arrows included on desktop themes. */
+@supports not selector(::-webkit-scrollbar) {
+  .classic-scrollbars * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
 }
-*::-webkit-scrollbar {
+.classic-scrollbars *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-*::-webkit-scrollbar-track {
+.classic-scrollbars *::-webkit-scrollbar-track {
   background: transparent;
 }
-*::-webkit-scrollbar-thumb {
+.classic-scrollbars *::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 3px;
 }
-*::-webkit-scrollbar-thumb:hover {
+.classic-scrollbars *::-webkit-scrollbar-thumb:hover {
   background: oklch(46% 0.015 250);
 }
-*::-webkit-scrollbar-corner {
+.classic-scrollbars *::-webkit-scrollbar-corner {
   background: transparent;
+}
+/* No stepper arrows, anywhere. Styled scrollbars don't draw them
+ * unless asked, but saying so keeps every theme honest. */
+.classic-scrollbars *::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 html, body, #app {
