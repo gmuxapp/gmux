@@ -39,12 +39,9 @@ test.describe('sidebar family entry', () => {
       await loc.hover()
       return loc.evaluate(el => getComputedStyle(el).backgroundColor)
     }
-    // Both nested targets wear one treatment, tone-matched to their
-    // group's state — compare within one entry (the selected family
-    // shows both rows; this quiet one shows no member row).
-    const selectedEntry = familyEntry(page, 'orchestrator')
-    expect(await hoverBg(selectedEntry.locator('.family-activity')), 'same hover as the member row above')
-      .toBe(await hoverBg(selectedEntry.locator('.family-slot')))
+    // It uses the sidebar's flat background treatment rather than a
+    // bordered header pill.
+    expect(await hoverBg(indicator)).not.toBe('rgba(0, 0, 0, 0)')
     expect(await indicator.evaluate(el => getComputedStyle(el).borderStyle)).toBe('none')
 
     // The hit area stops where the numbers do: the slack to its right
@@ -85,19 +82,24 @@ test.describe('sidebar family entry', () => {
     await expect(page.locator('#agent-family-drawer')).toBeHidden()
   })
 
-  test('the member row exists only while its family owns selection', async ({ page }) => {
+  test('the family button is static; only the content after it changes', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
     const family = familyEntry(page, 'orchestrator')
+    // Member selected: the button stays (the panel's entry point never
+    // teleports) but sheds its counts — the member row is the content.
+    await expect(family.locator('.family-activity')).toHaveCount(1)
     await expect(family.locator('.family-slot')).toHaveCount(1)
+    await expect(family.locator('.family-activity-seg')).toHaveCount(0)
 
     await page.locator('.session-item').filter({ hasText: 'design landing page' }).click()
     await expect(family.locator('.family-slot')).toHaveCount(0)
+    await expect(family.locator('.family-activity')).toHaveCount(1)
+    expect(await family.locator('.family-activity-seg').count()).toBeGreaterThan(0)
 
-    // Selecting the root restores the remembered way back; leaving did not
-    // erase the memory, it only stopped rendering an inactive family's row.
+    // Root selection keeps the summary and never resurrects history.
     await family.locator('.session-item').first().click()
-    await expect(family.locator('.family-slot')).toHaveCount(1)
-    await expect(family.locator('.family-slot')).toContainText('wire up the protocol adapter layer')
+    await expect(family.locator('.family-slot')).toHaveCount(0)
+    await expect(family.locator('.family-activity')).toHaveCount(1)
   })
 
   test('a drop anywhere on the entry reorders exactly once', async ({ page }) => {
@@ -152,39 +154,31 @@ test.describe('sidebar family entry', () => {
 })
 
 test.describe('the family line and the panel tally', () => {
-  test('the family mark anchors to the glyph column, member row or not', async ({ page }) => {
+  test('the family mark anchors every subordinate row to one glyph column', async ({ page }) => {
     await openMockSidebar(page, '/my-project/claude/~fam2kid')
-    const geometry = await page.evaluate(() => {
-      const read = (entry: Element) => {
-        const slot = entry.querySelector('.family-slot')
-        const mark = entry.querySelector('.family-activity .family-activity-icon')
-        if (!mark) return null
-        return {
-          markCX: Math.round(mark.getBoundingClientRect().x + mark.getBoundingClientRect().width / 2),
-          memberGlyphCX: slot
-            ? Math.round(
-              slot.querySelector('.family-glyph')!.getBoundingClientRect().x
-                + slot.querySelector('.family-glyph')!.getBoundingClientRect().width / 2,
-            )
-            : null,
-        }
-      }
-      return [...document.querySelectorAll('.session-family')].map(read).filter(Boolean)
-    })
+    const geometry = await page.evaluate(() => [...document.querySelectorAll('.session-family')].map(entry => {
+      const slot = entry.querySelector('.family-slot')
+      const mark = entry.querySelector('.family-activity .family-activity-icon')
+      const segs = entry.querySelectorAll('.family-activity-seg').length
+      const center = (el: Element | null) => el
+        ? Math.round(el.getBoundingClientRect().x + el.getBoundingClientRect().width / 2)
+        : null
+      return { memberCX: center(slot?.querySelector('.family-glyph') ?? null), markCX: center(mark), segs }
+    }))
 
-    const withMember = geometry.filter(g => g!.memberGlyphCX !== null)
-    const withoutMember = geometry.filter(g => g!.memberGlyphCX === null)
-    expect(withMember.length, 'a family with a member row on screen').toBeGreaterThan(0)
-    expect(withoutMember.length, 'a family without one').toBeGreaterThan(0)
-
-    // The line is the standard family numbers — everyone beneath the
-    // root — not "the others", so it anchors to the root's glyph column
-    // and stays put whatever member row happens to be shown above it.
-    // (The old `+` indented under the member's title, because it meant
-    // "in addition to the one named"; that meaning is gone.)
-    const columns = new Set(geometry.map(g => g!.markCX))
-    expect(columns.size, 'one column for every family, slot row or not').toBe(1)
-    for (const g of withMember) expect(g!.markCX).toBe(g!.memberGlyphCX)
+    expect(geometry.some(g => g.memberCX !== null), 'the selected family names its member').toBe(true)
+    expect(geometry.some(g => g.segs > 0), 'inactive families retain their summaries').toBe(true)
+    for (const g of geometry) {
+      // The mark is the row's static head: wherever a subordinate row
+      // exists, the mark leads it — and the counts and the member row
+      // never share it (one subordinate row's worth of content).
+      if (g.memberCX !== null || g.segs > 0) expect(g.markCX, 'the mark leads every subordinate row').not.toBeNull()
+      expect(g.memberCX === null || g.segs === 0, 'counts and member never share the row').toBe(true)
+      if (g.memberCX !== null && g.markCX !== null)
+        expect(g.memberCX, 'the member sits after the mark').toBeGreaterThan(g.markCX)
+    }
+    expect(new Set(geometry.flatMap(g => g.markCX === null ? [] : [g.markCX])).size,
+      'one glyph column for every family mark').toBe(1)
   })
 
   test("the panel's tally names states in the turn model's words", async ({ page }) => {

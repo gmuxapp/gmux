@@ -171,6 +171,47 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Projects/Activity switch: the family-tally language (square, quiet,
+ * sidebar fill progression) stretched into an equal-width pair. Thin on
+ * desktop — one text line, like the rows below it. */
+.sidebar-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
+}
+.sidebar-view-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 1px 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 400 12px/1.4 'Source Sans 3', sans-serif;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.sidebar-view-btn:hover { background: var(--bg-hover); }
+.sidebar-view-btn.active {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.sidebar-view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Touch: put the switch above the logo/header row so both pieces of
+ * sidebar navigation stay together. Flex order avoids moving the node;
+ * the larger targets and safe-area padding are mobile-only. */
+@media (pointer: coarse) {
+  .sidebar-view-toggle {
+    order: -1;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 4px;
+  }
+  .sidebar-view-btn { min-height: 34px; font-size: 13px; }
+}
+
 .sidebar-logo {
   font-family: 'Instrument Sans', sans-serif;
   font-size: 18px;
@@ -577,9 +618,11 @@ body {
 .launch-inline-menu {
   position: fixed;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  /* Same anchored-popover skin as the session ⋮ menu, the family panel
+     and the view menu. */
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
   min-width: 180px;
   /* Backstop for the JS re-clamp: never wider than the viewport. */
   max-width: calc(100vw - 16px);
@@ -1045,30 +1088,31 @@ body {
   width: 2px;
   background: var(--accent);
   border-radius: 0 1px 1px 0;
-  /* Above the member row's own background, which spans the full width
-     and would otherwise paint over the group's bar. */
-  z-index: 1;
 }
 
-/* Sub-rows share one fixed indent: a glyph column under the root title
-   (14px pad + 7px dot + 8px gap), then content. The member row puts
-   its status there and the activity line its branch, so the two rows
-   line up on both columns. The indent is a variable because the
-   activity button reaches the same column by a different route —
-   see `.family-activity`. */
+/* The subordinate row's indent puts the family button's glyph on the
+   column under the root title (14px pad + 7px dot + 8px gap). The
+   button's own inner padding is subtracted from the indent so its hit
+   area starts at its visible edge and the glyph still lands on the
+   column — derived, so the two can't drift apart. */
 .session-family {
   --family-indent: 29px;
-  /* The activity button's own inner padding, subtracted from the
-     indent so its glyph still lands on the column. */
-  --family-pill-pad: 8px;
+  --family-btn-pad: 8px;
 }
+/* The subordinate row: one per family at most, holding the static
+   family button and, while a descendant owns selection, the member row
+   beside it. The container is not a target — its slack (the gutter and
+   everything right of the content) falls through to the root, like the
+   rest of the entry's slack. The indent stops short of the glyph
+   column by the button's own padding, so the button's hit area starts
+   at its visible edge and the glyph still lands on the column. */
 .family-sub {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   min-width: 0;
-  padding: 3px 8px 3px var(--family-indent);
+  padding: 1px 8px 3px calc(var(--family-indent) - var(--family-btn-pad));
 }
 
 /* Every glyph in that column occupies the same width, whatever it is,
@@ -1099,14 +1143,23 @@ body {
   color: var(--text-muted);
 }
 
-/* Member row: the family member you're viewing, or the last one you
-   did. Title-sized and title-coloured in every state — a peer of the
-   root row you navigate to, so only the background says where you are.
-   Its highlight sits one tone above the group's in both states, so the
-   row under the pointer is unmistakable without breaking the entry
-   apart. --bg-hover/--bg-surface read as a dent inside a selected
-   group, hence the explicit tones. */
+/* Member row: the family member you're viewing. Title-sized and
+   title-coloured — a peer of the root row you navigate to, so only the
+   background says where you are. Its highlight sits one tone above the
+   group's in both states, so the row under the pointer is unmistakable
+   without breaking the entry apart. --bg-hover/--bg-surface read as a
+   dent inside a selected group, hence the explicit tones. It claims
+   only its content — the slack right of the title stays the root's. */
 .family-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* Same height as the family button beside it (see .family-activity),
+     so the row never changes height between its two states. */
+  min-height: 23px;
+  box-sizing: border-box;
+  padding: 1px 8px;
   text-decoration: none;
   color: var(--text);
   font-size: 14px;
@@ -1139,27 +1192,27 @@ body {
   min-width: 0;
 }
 
-/* Activity button: the standard family numbers — everyone beneath the
-   root — one segment per state, each dropped at zero. It is a nested
-   target inside the family's broad hover area and opens the same panel
-   as the header's trigger, but it does not borrow that pill: the
-   sidebar's design language is flat rows with background hovers, so it
-   takes the member row's exact treatment — one tone above the group's,
-   in both states. Unlike that row it is not a navigation target, so it
-   does not claim the full row: the hit area stops where the numbers
-   do, and the slack to the right stays the root's, like the rest of
-   the entry's slack. Numbers sit a touch under the title size. */
+/* The family button: the row's static head — the family mark and an
+   ellipsis — carrying the activity segments while nothing in the
+   family is selected. Same panel as the header's trigger, but it does
+   not borrow that control's fill: the sidebar's design language is
+   flat rows with background hovers, so it takes the member row's exact
+   treatment — one tone above the group's, in both states. It claims
+   only its content: the hit area stops where the numbers (or the …)
+   do, and the slack to the right stays the root's. */
 .family-activity {
-  width: fit-content;
-  /* The row's indent, split: the part before the hit area is margin,
-     the rest is the button's own padding, so the glyph lands on the
-     shared column and the gutter left of it still belongs to the root.
-     Derived, so the two rows cannot drift apart. */
-  --family-pill-inset: calc(var(--family-indent) - var(--family-pill-pad));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+  /* Match the member row's height: the two states of the row must not
+     shift the list when selection moves. */
+  min-height: 23px;
+  box-sizing: border-box;
   /* Clip, not spill, at the sidebar's narrowest. */
-  max-width: calc(100% - var(--family-pill-inset));
-  margin: 0 0 2px var(--family-pill-inset);
-  padding: 1px var(--family-pill-pad) 2px var(--family-pill-pad);
+  max-width: 100%;
+  padding: 1px var(--family-btn-pad);
   border: 0;
   border-radius: 3px;
   background: transparent;
@@ -1282,9 +1335,11 @@ body {
   z-index: 30;
   min-width: 160px;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  /* One anchored-popover skin, shared with the session ⋮ menu and the
+     family panel: strong border, 6px corners, one shadow. */
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
   padding: 4px;
 }
 .view-menu-label {
@@ -1303,7 +1358,8 @@ body {
   padding: 5px 10px 5px 6px;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  /* Same resting tone as the session ⋮ menu's actions. */
+  color: var(--text-secondary);
   font-size: 13px;
   text-align: left;
   border-radius: 5px;
@@ -1336,7 +1392,9 @@ body {
   color: var(--text);
   background: var(--bg-selected);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  /* Square like the app's other small controls; pills are for floating
+     status overlays. */
+  border-radius: 4px;
   padding: 1px 4px 1px 8px;
   max-width: 100%;
 }
@@ -2298,35 +2356,47 @@ body {
   flex: 0 1 auto;
 }
 
-/* Family trigger: a ghost icon button in the header's one control
- * language (borderless, bg-hover, sized to match .session-menu-trigger).
- * The corner badge repeats the family's aggregated dot state so
- * background family activity is visible without opening the panel. */
-/* A pill, bordered like the panel's tally buttons so it reads as one
- * coherent button rather than a strip of dots that happens to be
- * clickable. Never shrinks: it is the densest thing in the row, and
- * the title yields instead. */
+/* One quiet-button language for the family surfaces: a square control
+ * that speaks the sidebar's fill progression — bg-hover to point at it,
+ * bg-selected when it's on — rather than outlines. The trigger, the
+ * panel's tally filters and the bulk action are the same kind of thing,
+ * so they share one rule instead of three near-copies (and none of them
+ * is a pill — that shape belongs to floating status overlays, not
+ * buttons). Only Mark all read keeps a border: a lone text action
+ * beside a sentence needs its shape even at rest. */
+.family-trigger,
+.family-count,
+.family-mark-read {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+/* Family trigger: a soft fill instead of an outline — the header's other
+ * controls are borderless ghosts, so containment does the "one coherent
+ * button" work a border was doing, and hover/open step the fill up the
+ * way the header's other controls do. Never shrinks: it is the densest
+ * thing in the row, and the title yields instead. The corner badge
+ * repeats the family's aggregated dot state so background family
+ * activity is visible without opening the panel. */
 .family-trigger {
   height: 26px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+  padding: 0 8px;
+  background: var(--bg-hover);
   color: var(--text-secondary);
   font: 500 12px/1 'Source Sans 3', sans-serif;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 .family-trigger:hover,
 .family-trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
+  background: var(--bg-selected);
   color: var(--text);
-  border-color: var(--border-strong);
 }
 .family-trigger-seg {
   display: flex;
@@ -2450,12 +2520,9 @@ body {
 .family-mark-read {
   flex: 0 0 auto;
   padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
+  border-color: var(--border);
   color: var(--text-muted);
   font: 400 11px/1.4 'Source Sans 3', sans-serif;
-  cursor: pointer;
   white-space: nowrap;
 }
 .family-mark-read:hover { color: var(--text); border-color: var(--text-muted); }
@@ -2473,7 +2540,7 @@ body {
 }
 /* Each tally is also the filter for its own state, so it looks like
    something you can press without shouting: no chrome until you point
-   at it, a filled pill once it's on. */
+   at it, a filled square button once it's on. */
 .family-count {
   display: inline-flex;
   align-items: center;
@@ -2481,18 +2548,12 @@ body {
   min-height: 24px;
   padding: 2px 7px;
   margin: -2px 0;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
   color: inherit;
   font: inherit;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
 }
-.family-count:hover { border-color: var(--border); }
+.family-count:hover { background: var(--bg-hover); }
 .family-count.active {
   background: var(--bg-selected);
-  border-color: var(--border);
   color: var(--text);
 }
 .family-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

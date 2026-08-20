@@ -31,10 +31,12 @@ async function openMenu(page: Page) {
 
 async function returnToFamilyMember(page: Page) {
   const family = page.locator('.session-family').filter({ hasText: 'orchestrator' })
-  // Inactive families no longer retain a member row: select the root first,
-  // then use the remembered member that appears beneath it.
+  // Root selection deliberately restores no member history. Its summary is
+  // the route back into the family map; choose the member there.
   await family.locator('.session-item').first().click()
-  await family.locator('.family-slot').filter({ hasText: 'wire up the protocol' }).click()
+  await family.locator('.family-activity').click()
+  await page.locator('#agent-family-drawer .family-row')
+    .filter({ hasText: 'wire up the protocol' }).click()
 }
 
 test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
