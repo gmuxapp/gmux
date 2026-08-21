@@ -122,6 +122,18 @@ importers:
         specifier: ^3.0.7
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.12.0)(tsx@4.21.0)
 
+  packages/scroll-anchor:
+    devDependencies:
+      '@xterm/xterm':
+        specifier: github:gmuxapp/xterm.js#v6.1.0-beta.288-gmux.5
+        version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/baeffe1f08c007e194c842b0f913665a48643c19
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.7
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.12.0)(tsx@4.21.0)
+
 packages:
 
   '@antfu/install-pkg@1.1.0':
