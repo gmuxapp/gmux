@@ -21,6 +21,8 @@ describe('family overview state', () => {
   it('retains the agent turn vocabulary and precedence', () => {
     expect(familyStateOf(agent('error', undefined, { alive: true, unread: true, status: { error: true } }))).toBe('error')
     expect(familyStateOf(agent('active', undefined, { alive: true, unread: true, status: { active: true } }))).toBe('active')
+    expect(familyStateOf(agent('retry', undefined, { alive: true, unread: true, status: { active: true, error: true } }))).toBe('active')
+    expect(familyStateOf(agent('acked-error', undefined, { alive: true, unread: false, status: { active: false, error: true } }))).toBeNull()
     expect(familyStateOf(agent('waiting', undefined, { unread: true }))).toBe('waiting')
   })
 })

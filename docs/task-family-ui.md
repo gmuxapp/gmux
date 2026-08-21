@@ -78,9 +78,9 @@ The panel's filter bar has these controls when their population exists:
 
 - **all** — unchanged: show the ordinary family tree, agents and processes
   together, subject to the panel's normal line budget and folds;
-- **N error** — agents with errors only;
-- **N waiting** — waiting agents only;
-- **N active** — active agents only;
+- **N error** — inactive agents with unread error outcomes (`waiting-error`);
+- **N waiting** — inactive unread agents without error (`waiting`);
+- **N active** — active agents, including transient retry/rate-limit errors;
 - **$ N running** — when one or more processes are running; or
 - **$ processes** — when process sessions exist but none is running.
 
@@ -160,8 +160,11 @@ task history/type view, not an attention queue.
 
 ## Attention and consumption
 
-Unread is independent of family presentation: every completed agent turn or
+Unread is independent of durable error outcome: every completed agent turn or
 process command records unread until a consumer reads or acts on that session.
+Reading clears unread only. An acknowledged inactive error has no presentation
+state; an active error remains a hollow red current-status ring and is not
+family attention.
 Notification delivery is suppressed only when the direct launch parent is
 active at the committed completion instant. Agent activity is semantic turn
 activity; terminal activity currently comes from the runner's OSC 133 prompt

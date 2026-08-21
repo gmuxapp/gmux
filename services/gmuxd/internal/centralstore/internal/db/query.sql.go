@@ -12,8 +12,8 @@ import (
 
 const acknowledgeSessionAtVersion = `-- name: AcknowledgeSessionAtVersion :execrows
 UPDATE local_sessions
-SET unread = 0, has_error = 0, row_version = row_version + 1
-WHERE id = ? AND row_version = ? AND (unread <> 0 OR has_error <> 0)
+SET unread = 0, row_version = row_version + 1
+WHERE id = ? AND row_version = ? AND unread <> 0
 `
 
 type AcknowledgeSessionAtVersionParams struct {
@@ -31,8 +31,8 @@ func (q *Queries) AcknowledgeSessionAtVersion(ctx context.Context, arg Acknowled
 
 const acknowledgeSessionTokenAtVersion = `-- name: AcknowledgeSessionTokenAtVersion :execrows
 UPDATE local_sessions
-SET unread = 0, has_error = 0, row_version = row_version + 1
-WHERE id = ? AND row_version = ? AND unread_token = ? AND (unread <> 0 OR has_error <> 0)
+SET unread = 0, row_version = row_version + 1
+WHERE id = ? AND row_version = ? AND unread_token = ? AND unread <> 0
 `
 
 type AcknowledgeSessionTokenAtVersionParams struct {

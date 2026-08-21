@@ -124,6 +124,10 @@ func (c *Converter) session(row central.SessionRow) Session {
 	// status_reported fact carries production's Status-pointer nil-ness
 	// (gmux wait derives died-vs-idle from exactly this, ADR 0023).
 	if v.StatusReported {
+		// Active remains the durable active-at-death fact on the shared wire:
+		// gmux wait consumes these snapshots and needs it to distinguish a clean
+		// close from a runner that died mid-turn (ADR 0023). Presentation clients
+		// normalize current activity at their UI boundary.
 		out.Status = &Status{Active: v.Active, Error: v.Error, Interrupted: v.Interrupted}
 	}
 	if v.ParentSessionID != nil {

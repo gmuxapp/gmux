@@ -62,12 +62,12 @@ Rules:
 3. **Turn close ⇒ unread.** Every genuine working→idle transition sets
    "waiting on you", exactly like an agent's completed turn. The initial
    prompt (launch phase ending) does not. Lifetime-turn exits also set
-   `Status.Error` on a non-zero exit code. Viewing acknowledges: live
-   sessions clear unread through the runner (WS attach), and — because
-   every one-shot now dies unread and has no runner — the daemon clears
-   unread (and the error dot) on *dead* sessions when a client selects
-   them (presence `OnSessionSelected`). `Working` survives the view: it
-   is the turn state at death.
+   `Status.Error` on a non-zero exit code. Viewing acknowledges unread: live
+   sessions clear it through the runner (WS attach), and — because every
+   one-shot now dies unread and has no runner — the daemon clears it on
+   *dead* sessions when a client selects them (presence `OnSessionSelected`).
+   Error remains durable outcome data and is not erased by reading. `Working`
+   survives the view: it is the turn state at death.
 4. **Turn-state-at-death.** The exit event no longer clears `Status`; the
    persisted flag records whether the turn was closed when the process
    exited. This holds across *every* exit path — in particular the
@@ -82,6 +82,13 @@ Rules:
    timing-independent — a wait issued after the death answers the same as
    one that watched it live. The child's own exit code remains a separate
    fact on the session.
+
+   **Projection boundary:** durable state and the shared wire preserve
+   active-at-death because timing-independent waits consume that historical
+   fact. The web UI's protocol-ingestion mapper separately projects dead
+   local and peer rows to inactive for current-status presentation. This is
+   intentionally a UI boundary, not a claim that every generic wire consumer
+   normalizes the durable bit.
 5. **Every session is waitable.** The daemon's `no_idle_signal` 422 (adapter
    allowlist + evidence gate) is deleted. A markless interactive shell is
    `Working` for its whole life, so a wait on it blocks honestly until exit

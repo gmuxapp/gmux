@@ -15,7 +15,7 @@ import {
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
   view, duplicateConversationFiles,
   sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
-  sidebarActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
+  sidebarActivity, backgroundActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
   familyActivityById, selectedFamilyChild, ownDotState,
   familySlotById,
 } from './store'
@@ -464,6 +464,28 @@ describe('toUISession project stamp passthrough', () => {
   it('leaves last_output_at undefined when the wire omits it', () => {
     const ui = toUISession({ id: '1vshk4fu', alive: true } as any)
     expect(ui.last_output_at).toBeUndefined()
+  })
+
+  it('normalizes durable active-at-death for local and peer UI rows', () => {
+    const local = toUISession({ id: 'local', alive: false, status: { active: true, error: true } } as any)
+    const peer = toUISession({ id: 'remote@peer', peer: 'peer', alive: false, status: { active: true } } as any)
+    expect(local.status).toEqual({ active: false, error: true })
+    expect(peer.status?.active).toBe(false)
+  })
+
+  it('preserves active and active-error for alive local and peer UI rows', () => {
+    const local = toUISession({ id: 'local', alive: true, status: { active: true } } as any)
+    const peer = toUISession({
+      id: 'remote@peer', peer: 'peer', alive: true, status: { active: true, error: true },
+    } as any)
+    expect(local.status).toEqual({ active: true })
+    expect(peer.status).toEqual({ active: true, error: true })
+  })
+
+  it('normalizes status.active to boolean for malformed missing alive input', () => {
+    const ui = toUISession({ id: 'legacy', status: { active: true, error: true } } as any)
+    expect(ui.status).toEqual({ active: false, error: true })
+    expect(typeof ui.status?.active).toBe('boolean')
   })
 
   it('treats empty-string project_slug as unstamped', () => {
@@ -998,13 +1020,14 @@ describe('markSessionRead', () => {
     expect(sessions.value[0].unread).toBe(false)
   })
 
-  it('clears error flag from status', () => {
+  it('preserves durable error while clearing unread', () => {
     _rawSessions.value = [makeSession({
-      id: '1vshk4fu',
+      id: '1vshk4fu', unread: true, unread_token: 'turn-1',
       status: { active: false, error: true },
     })]
     markSessionRead('1vshk4fu')
-    expect(sessions.value[0].status?.error).toBe(false)
+    expect(sessions.value[0].unread).toBe(false)
+    expect(sessions.value[0].status?.error).toBe(true)
   })
 
   it('does not touch other sessions', () => {
@@ -1066,6 +1089,15 @@ describe('focused view consumption', () => {
     const tracker = createViewConsumptionTracker()
     expect(tracker.selection('child', makeSession({ id: 'child', unread: true, unread_token: 'turn-1' })))
       .toEqual({ id: 'child', token: 'turn-1' })
+  })
+
+  it('does not observe acknowledged durable error as consumable', () => {
+    const tracker = createViewConsumptionTracker()
+    const acknowledgedError = makeSession({
+      id: 'child', unread: false, unread_token: 'turn-1', status: { active: false, error: true },
+    })
+    expect(tracker.selection('child', acknowledgedError)).toBeNull()
+    expect(tracker.interaction('child', acknowledgedError)).toBeNull()
   })
 })
 
@@ -1547,9 +1579,25 @@ describe('familyDotById (family-aggregated row dot)', () => {
     expect(familyDotById.value.get('working-child')).toBeUndefined()
   })
 
+  it('keeps waiting-error attention above an active sibling', () => {
+    _rawSessions.value = [
+      pi('root'),
+      pi('working-child', { parent_session_id: 'root', status: { active: true } }),
+      pi('failed-child', { parent_session_id: 'root', unread: true, status: { active: false, error: true } }),
+    ]
+    // Aggregate precedence is attention-oriented even though each child's own
+    // state still derives current activity before ordinary waiting.
+    expect(familyDotById.value.get('root')).toBe('error')
+  })
+
   it('keeps standalone sessions at their own dot state', () => {
     _rawSessions.value = [pi('solo', { unread: true })]
     expect(familyDotById.value.get('solo')).toBe('unread')
+  })
+
+  it('keeps dead sessions out of the mobile background summary', () => {
+    _rawSessions.value = [pi('dead', { alive: false, unread: true, status: { active: false, error: true } })]
+    expect(backgroundActivity.value).toBe('none')
   })
 
   it('lets a never-viewed dead child surface unread on the root', () => {
@@ -1638,12 +1686,10 @@ describe('sidebar family entry derivations', () => {
       expect(familyActivityById.value.has('root')).toBe(false)
     })
 
-    it('ignores a dead member that is merely alive-gated', () => {
-      // status.active/error only count while alive; unread still does,
-      // matching sessionDotState's vocabulary.
+    it('ignores acknowledged durable error while dead unread still waits', () => {
+      // The wire invariant projects dead historical activity to inactive.
       _rawSessions.value = [
         agent('root'),
-        agent('zombie', { parent_session_id: 'root', alive: false, status: { active: true } }),
         agent('gone', { parent_session_id: 'root', alive: false, status: { active: false, error: true } }),
         agent('unseen', { parent_session_id: 'root', alive: false, unread: true }),
       ]
@@ -1700,8 +1746,8 @@ describe('sidebar family entry derivations', () => {
         agent('kid', { parent_session_id: 'root', status: { active: true, error: true } }),
       ]
       const root = sessions.value.find(s => s.id === 'root')!
-      // The aggregate would say "error"; the row dot stays the root's own.
-      expect(familyDotById.value.get('root')).toBe('error')
+      // Active-error remains current active status; the row dot stays root-own.
+      expect(familyDotById.value.get('root')).toBe('active-error')
       expect(ownDotState(root, activityMap.value, selectedId.value)).toBe('unread')
     })
 
@@ -1714,11 +1760,17 @@ describe('sidebar family entry derivations', () => {
       expect(ownDotState(root(), activityMap.value, selectedId.value)).toBe('none')
     })
 
-    it('keeps working/active states visible while selected (only attention mutes)', () => {
-      _rawSessions.value = [agent('root', { slug: 'rooty', status: { active: true } })]
+    it('applies the family-drawer selection rule to waiting, waiting-error, and active-error', () => {
       urlPath.value = '/proj/pi/rooty'
-      const root = sessions.value.find(s => s.id === 'root')!
-      expect(ownDotState(root, activityMap.value, selectedId.value)).toBe('working')
+      for (const [extra, expected] of [
+        [{ unread: true }, 'none'],
+        [{ unread: true, status: { active: false, error: true } }, 'none'],
+        [{ unread: true, status: { active: true, error: true } }, 'active-error'],
+      ] as const) {
+        _rawSessions.value = [agent('root', { slug: 'rooty', ...extra })]
+        const root = sessions.value.find(s => s.id === 'root')!
+        expect(ownDotState(root, activityMap.value, selectedId.value)).toBe(expected)
+      }
     })
   })
 
@@ -2095,7 +2147,7 @@ describe('pending mutations overlay', () => {
       expect(applyPending(sess, [])).toBe(sess)
     })
 
-    it('mark-read clears unread and status.error on the targeted session', () => {
+    it('mark-read clears unread and preserves durable error on the targeted session', () => {
       const sess = [
         makeSession({ id: 'a', unread: true, status: { active: false, error: true } }),
         makeSession({ id: 'b', unread: true }),
@@ -2103,7 +2155,7 @@ describe('pending mutations overlay', () => {
       const m: PendingMutation = { kind: 'mark-read', id: 'a', token: '', at: 0 }
       const out = applyPending(sess, [m])
       expect(out[0].unread).toBe(false)
-      expect(out[0].status?.error).toBe(false)
+      expect(out[0].status?.error).toBe(true)
       // Untouched session keeps its flags.
       expect(out[1].unread).toBe(true)
     })
