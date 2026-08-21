@@ -77,7 +77,8 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   private currentMode: ScrollAnchorMode = 'following'
   private snapshot: ScrollAnchorSnapshot = { line: null, distanceFromBottom: 0 }
   private userIntent = false
-  private programmaticScroll = false
+  private userIntentExpiryRAF: number | null = null
+  private pendingProgrammaticScrolls = 0
   private wipePending = false
   private wipeSyncRAF: number | null = null
   private syncMode = false
@@ -101,7 +102,11 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     this.terminal = terminal
 
     const armUserIntent = () => {
-      if (!this.isAlternate()) this.userIntent = true
+      if (this.isAlternate()) return
+      // Fresh input supersedes any addon scroll that produced no onScroll.
+      this.pendingProgrammaticScrolls = 0
+      this.userIntent = true
+      this.scheduleIntentExpiry()
     }
     terminal.element?.addEventListener('wheel', armUserIntent, { capture: true, passive: true })
     terminal.element?.addEventListener('touchmove', armUserIntent, { capture: true, passive: true })
@@ -133,7 +138,7 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   }
 
   follow(): void {
-    this.userIntent = false
+    this.clearUserIntent()
     this.cancelWipeResolution()
     this.setMode('following')
     if (!this.terminal || this.isAlternate()) return
@@ -148,8 +153,8 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     this.syncMode = false
     this.wipePending = false
     this.snapshot = { line: null, distanceFromBottom: 0 }
-    this.userIntent = false
-    this.programmaticScroll = false
+    this.clearUserIntent()
+    this.pendingProgrammaticScrolls = 0
     if (wasSyncActive) this.syncEmitter.fire(false)
     this.fireBusyChange(wasBusy)
   }
@@ -165,17 +170,24 @@ export class ScrollAnchorAddon implements ITerminalAddon {
 
   private handleScroll(): void {
     const terminal = this.terminal
-    if (!terminal || this.isAlternate() || this.programmaticScroll) return
+    if (!terminal || this.isAlternate()) return
     const buffer = terminal.buffer.active
 
+    if (this.pendingProgrammaticScrolls > 0) {
+      this.pendingProgrammaticScrolls--
+      this.clearUserIntent()
+      return
+    }
+
     if (this.userIntent) {
-      this.userIntent = false
+      this.clearUserIntent()
       // User intent always supersedes a pending post-wipe rendering catch-up.
       this.cancelWipeResolution()
       if (buffer.viewportY >= buffer.baseY) {
         this.setMode('following')
       } else {
-        this.snapshot = this.captureSnapshot()
+        // Anchor identity is captured immediately before ED3; ordinary
+        // streaming relies on xterm's native eviction-adjusted viewport.
         this.setMode('anchored')
       }
       return
@@ -184,11 +196,17 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     // Bottom is structural follow intent for keyboard input, scrollbar drags,
     // and application settings such as scrollOnUserInput. During ED3 the
     // buffer transiently reports 0/0, so ignore that output-driven event while
-    // wipe re-resolution is fenced.
+    // wipe re-resolution is fenced. Other destructive resets (RIS or a
+    // scrollback-size change) intentionally have no identity snapshot and may
+    // therefore drop an anchored viewport into following mode.
     if (!this.busy && buffer.viewportY >= buffer.baseY) this.setMode('following')
   }
 
   private afterWriteParsed(): void {
+    // A write-driven scroll cannot belong to an earlier wheel/touch event or
+    // an addon scroll from a previous parse cycle.
+    this.clearUserIntent()
+    this.pendingProgrammaticScrolls = 0
     const terminal = this.terminal
     if (!terminal || this.isAlternate()) return
 
@@ -259,8 +277,35 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   }
 
   private runProgrammaticScroll(action: () => void): void {
-    this.programmaticScroll = true
-    try { action() } finally { this.programmaticScroll = false }
+    // The fork can deliver the resulting onScroll on a later animation frame.
+    // Keep one suppression token per call until those events arrive.
+    this.pendingProgrammaticScrolls++
+    try {
+      action()
+    } catch (error) {
+      this.pendingProgrammaticScrolls--
+      throw error
+    }
+  }
+
+  private clearUserIntent(): void {
+    this.userIntent = false
+    if (this.userIntentExpiryRAF !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.userIntentExpiryRAF)
+    }
+    this.userIntentExpiryRAF = null
+  }
+
+  private scheduleIntentExpiry(): void {
+    if (this.userIntentExpiryRAF !== null || typeof requestAnimationFrame === 'undefined') return
+    // Two frames cover xterm's first smooth-scroll tick without allowing a
+    // no-op wheel to arm unrelated SearchAddon/output scrolling indefinitely.
+    this.userIntentExpiryRAF = requestAnimationFrame(() => {
+      this.userIntentExpiryRAF = requestAnimationFrame(() => {
+        this.userIntentExpiryRAF = null
+        this.userIntent = false
+      })
+    })
   }
 
   private scrollToBottomWithoutAnimation(terminal: Terminal): void {

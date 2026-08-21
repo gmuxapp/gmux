@@ -25,3 +25,7 @@ Wheel and touch scrolling are observed directly. Keyboard scrollback that does n
 ## xterm compatibility note
 
 Programmatic following uses `scrollToBottom(true)` to disable smooth scrolling. The gmux xterm fork supports this optional argument, although its generated public declaration still has the upstream zero-argument signature; the addon contains a narrow cast for that mismatch. Other xterm builds ignore extra JavaScript arguments, but consumers should verify their desired smooth-scroll behavior.
+
+## Monorepo development
+
+The package's types point at the publishable `dist/index.d.ts`. Build it before running gmux-web TypeScript directly: `pnpm -C packages/scroll-anchor build` followed by `pnpm -C apps/gmux-web lint`. Moon tasks encode this dependency automatically.

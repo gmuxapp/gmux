@@ -203,6 +203,40 @@ describe('ScrollAnchorAddon', () => {
     expect(h.addon.mode).toBe('anchored')
   })
 
+  it('expires no-op wheel intent before an unrelated later scroll', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length })
+    const h = makeHarness()
+    h.setBuffer(20, 20)
+    h.armIntent()
+    frames.shift()?.(0)
+    frames.shift()?.(16)
+    h.outputScroll(10)
+    expect(h.addon.mode).toBe('following')
+    vi.unstubAllGlobals()
+  })
+
+  it('clears stale wheel intent when output is parsed before any scroll', () => {
+    const h = makeHarness()
+    h.setBuffer(20, 20)
+    h.armIntent()
+    h.parsed()
+    h.outputScroll(10)
+    expect(h.addon.mode).toBe('following')
+  })
+
+  it('suppresses an asynchronously delivered addon scroll before a later user scroll', async () => {
+    const h = makeHarness()
+    h.setBuffer(20, 20)
+    h.armIntent()
+    ;(h.addon as any).runProgrammaticScroll(() => h.setBuffer(10, 20))
+    await new Promise(resolve => setTimeout(resolve, 1))
+    h.emitScroll()
+    expect(h.addon.mode).toBe('following')
+    h.outputScroll(8)
+    expect(h.addon.mode).toBe('following')
+  })
+
   it('follows structurally when a non-wheel scroll lands at bottom', () => {
     const h = makeHarness()
     h.setBuffer(20, 20)
@@ -210,6 +244,39 @@ describe('ScrollAnchorAddon', () => {
     expect(h.addon.mode).toBe('anchored')
     h.outputScroll(20)
     expect(h.addon.mode).toBe('following')
+  })
+
+  it('does not structurally follow on a transient at-bottom wipe scroll', () => {
+    const h = makeHarness()
+    h.setBuffer(20, 20)
+    h.userScroll(10)
+    h.csi('J', [3])
+    h.outputScroll(0)
+    expect(h.addon.mode).toBe('anchored')
+  })
+
+  it('preserves progressive eviction adjustment without programmatic scrolling', () => {
+    const h = makeHarness()
+    h.setBuffer(60, 100)
+    h.userScroll(60)
+    h.setBuffer(55, 100)
+    h.parsed()
+    expect(h.addon.mode).toBe('anchored')
+    expect(h.scrollToLine).not.toHaveBeenCalled()
+    h.setBuffer(50, 100)
+    h.parsed()
+    expect(h.scrollToLine).not.toHaveBeenCalled()
+  })
+
+  it('allows xterm to clamp an evicted anchor to zero', () => {
+    const h = makeHarness()
+    h.setBuffer(5, 100)
+    h.userScroll(5)
+    h.setBuffer(0, 100)
+    h.parsed()
+    expect(h.addon.mode).toBe('anchored')
+    expect(h.scrollToLine).not.toHaveBeenCalled()
+    expect(h.scrollToBottom).not.toHaveBeenCalled()
   })
 
   it('preserves a near-bottom user anchor', () => {
