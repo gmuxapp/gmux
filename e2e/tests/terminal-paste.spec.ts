@@ -28,6 +28,19 @@ async function dispatchPaste(page: Page, text: string): Promise<void> {
   }, text)
 }
 
+/** Dispatch a synthetic binary paste through the production DOM handler. */
+async function dispatchBinaryPaste(page: Page, size: number): Promise<void> {
+  await page.evaluate((bytes) => {
+    const container = document.querySelector('.terminal-container') as HTMLElement | null
+    if (!container) throw new Error('.terminal-container not found')
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array(bytes)], 'clipboard.png', { type: 'image/png' }))
+    container.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }),
+    )
+  }, size)
+}
+
 /** Drain and return all binary WS sends recorded since the last drain. */
 async function drainCaptured(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -62,14 +75,23 @@ test.describe('terminal paste', () => {
     // Instrument WebSocket.prototype.send BEFORE the page loads so we capture
     // every binary send from the very first connection.
     await page.addInitScript(() => {
-      const origSend = WebSocket.prototype.send
+      const NativeWebSocket = WebSocket
+      const origSend = NativeWebSocket.prototype.send
       ;(window as any).__wsCaptured = [] as string[]
-      WebSocket.prototype.send = function (data: unknown) {
+      ;(window as any).__wsInstances = [] as WebSocket[]
+      NativeWebSocket.prototype.send = function (data: unknown) {
         if (data instanceof Uint8Array) {
           ;(window as any).__wsCaptured.push(new TextDecoder().decode(data))
         }
         return origSend.apply(this, [data as any])
       }
+      window.WebSocket = new Proxy(NativeWebSocket, {
+        construct(Target, args) {
+          const ws = Reflect.construct(Target, args) as WebSocket
+          ;(window as any).__wsInstances.push(ws)
+          return ws
+        },
+      })
     })
 
     await openApp(page)
@@ -156,6 +178,63 @@ test.describe('terminal paste', () => {
     expect(captured.some(s => s.includes('\x1b[201~injected'))).toBe(false)
 
     await resetBracketedPasteMode(page)
+  })
+
+  // ── Binary failure feedback ─────────────────────────────────────────────────
+
+  test('delayed image upload is cancelled after its socket is replaced', async ({ page }) => {
+    let releaseUpload!: () => void
+    const uploadMayFinish = new Promise<void>(resolve => { releaseUpload = resolve })
+    let uploadPending!: () => void
+    const sawPendingUpload = new Promise<void>(resolve => { uploadPending = resolve })
+    await page.route('**/v1/sessions/*/clipboard', async route => {
+      uploadPending()
+      await uploadMayFinish
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, data: { path: '/tmp/socket-replaced.png' } }),
+      })
+    })
+
+    await dispatchBinaryPaste(page, 3)
+    await sawPendingUpload
+    const originalIndex = await page.evaluate(() => {
+      const sockets = (window as any).__wsInstances as WebSocket[]
+      const index = sockets.findLastIndex(ws => ws.url.includes('/ws/') && ws.readyState === WebSocket.OPEN)
+      if (index < 0) throw new Error('no open terminal WebSocket')
+      sockets[index].close()
+      return index
+    })
+    await expect.poll(() => page.evaluate(index => {
+      const sockets = (window as any).__wsInstances as WebSocket[]
+      return sockets.some((ws, i) => i > index && ws.url.includes('/ws/') && ws.readyState === WebSocket.OPEN)
+    }, originalIndex)).toBe(true)
+    await page.evaluate(index => {
+      const sockets = (window as any).__wsInstances as WebSocket[]
+      // Keep the stale socket's state check non-vacuous: cancellation must be
+      // enforced by connection object identity, not merely CLOSED state. If
+      // that production guard is removed, the send attempt does not report
+      // cancellation, so the expected cancellation toast never appears.
+      Object.defineProperty(sockets[index], 'readyState', {
+        configurable: true,
+        get: () => WebSocket.OPEN,
+      })
+    }, originalIndex)
+
+    await drainCaptured(page)
+    releaseUpload()
+
+    await expect(page.getByText('Paste cancelled: terminal connection changed')).toBeVisible()
+    await expect.poll(async () => (await drainCaptured(page)).some(data => data.includes('/tmp/socket-replaced.png')))
+      .toBe(false)
+  })
+
+  test('oversize binary paste is not injected and shows a toast', async ({ page }) => {
+    await dispatchBinaryPaste(page, 10 * 1024 * 1024 + 1)
+
+    await expect(page.getByText('Clipboard item too large (limit 10MB)')).toBeVisible()
+    expect(await drainCaptured(page)).toEqual([])
   })
 
   // ── No double-paste ─────────────────────────────────────────────────────────
