@@ -41,6 +41,9 @@ importers:
       '@gmux/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@gmux/scroll-anchor':
+        specifier: workspace:*
+        version: link:../../packages/scroll-anchor
       '@preact/signals':
         specifier: ^2.9.0
         version: 2.9.0(preact@10.29.0)

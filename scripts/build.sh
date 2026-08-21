@@ -19,8 +19,10 @@ mkdir -p "$BIN"
 # ── Frontend ──
 
 if [ "$skip_frontend" = false ]; then
+  echo "→ Building frontend packages…"
+  pnpm -C "$ROOT/packages/scroll-anchor" build
   echo "→ Building frontend…"
-  (cd "$ROOT/apps/gmux-web" && npx vite build)
+  pnpm -C "$ROOT/apps/gmux-web" exec vite build
 
   # Copy dist into the go:embed directory
   rm -rf "$WEB_EMBED/assets" "$WEB_EMBED/favicon.svg" "$WEB_EMBED/manifest.json"
