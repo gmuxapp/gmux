@@ -94,15 +94,35 @@ describe('createTerminalIO', () => {
     expect(done).toHaveBeenCalledTimes(1)
   })
 
-  it('defers and coalesces resize while synchronized output is active', () => {
-    let syncActive = true
-    const h = makeHarness(() => syncActive)
+  it('defers and coalesces resize between split BSU and ESU writes', () => {
+    let busy = true
+    const h = makeHarness(() => busy)
     h.io.reset(1)
+    h.io.enqueue(enc('\x1b[?2026hpartial'), 1)
+    h.flushOne()
     h.io.requestResize({ cols: 80, rows: 24 }, 1)
     h.io.requestResize({ cols: 100, rows: 30 }, 1)
     expect(h.resizes).toEqual([])
-    syncActive = false
+    h.io.enqueue(enc('rest\x1b[?2026l'), 1)
+    h.flushOne()
+    expect(h.resizes).toEqual([])
+    busy = false
     h.io.syncStateChanged()
     expect(h.resizes).toEqual([{ cols: 100, rows: 30 }])
+  })
+
+  it('keeps resize deferred through the post-wipe re-resolution window', () => {
+    let busy = true
+    const h = makeHarness(() => busy)
+    h.io.reset(1)
+    h.io.requestResize({ cols: 120, rows: 40 }, 1)
+    expect(h.resizes).toEqual([])
+    // ESU has closed, but the addon's combined busy fence remains true until
+    // its deterministic restore and rendering catch-up have completed.
+    h.io.syncStateChanged()
+    expect(h.resizes).toEqual([])
+    busy = false
+    h.io.syncStateChanged()
+    expect(h.resizes).toEqual([{ cols: 120, rows: 40 }])
   })
 })

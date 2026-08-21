@@ -618,10 +618,10 @@ export function TerminalView({
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     termIoRef.current = createTerminalIO(term, {
-      isSyncActive: () => scrollAnchor.syncActive,
+      isSyncActive: () => scrollAnchor.busy,
     })
-    const syncDisposable = scrollAnchor.onSyncActiveChange((active) => {
-      if (!active) termIoRef.current?.syncStateChanged()
+    const busyDisposable = scrollAnchor.onBusyChange((busy) => {
+      if (!busy) termIoRef.current?.syncStateChanged()
     })
     ;(window as any).__gmuxTerm = term
     ;(window as any).__gmuxScrollAnchor = scrollAnchor
@@ -943,7 +943,7 @@ export function TerminalView({
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
-      syncDisposable.dispose()
+      busyDisposable.dispose()
       terminalScrolledUp.value = false
       terminalScrollToBottom.value = null
       terminalFindOpen.value = false
@@ -979,6 +979,7 @@ export function TerminalView({
     const epoch = termEpochRef.current + 1
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
+    scrollAnchorRef.current?.reset()
 
     const sessionChanged = terminalSessionId.current !== null
       && terminalSessionId.current !== session.id
@@ -1000,16 +1001,14 @@ export function TerminalView({
 
     function connect() {
       if (disposed.current) return
+      // A dropped socket can strand an unmatched BSU. Preserve the user's
+      // mode, but clear parser/transient fences before each replay attempt.
+      scrollAnchorRef.current?.reset()
 
       if (connectionRef.current) {
         connectionRef.current.ws.close()
         connectionRef.current = null
       }
-
-      // Replays are authoritative session snapshots. Explicitly enter follow
-      // mode before their BSU/ESU framing so stale scroll intent from the
-      // previous screen cannot survive the checkpoint wipe.
-      scrollAnchorRef.current?.follow()
 
       // The runner's binary frame is shared with `gmux attach`, so browser
       // buffer selection is delivered as metadata rather than ANSI bytes in
@@ -1157,6 +1156,7 @@ export function TerminalView({
       intentionalClose = true
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
+      scrollAnchorRef.current?.reset()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       resetResizeEchoGate()
@@ -1229,7 +1229,10 @@ export function TerminalView({
         <button
           type="button"
           class="terminal-scroll-end"
-          onClick={() => termRef.current?.scrollToBottom()}
+          onClick={() => {
+            scrollAnchorRef.current?.follow()
+            termRef.current?.scrollToBottom()
+          }}
           title="Scroll to bottom"
         >
           End ↓
