@@ -12,20 +12,30 @@
  */
 import type { Terminal } from '@xterm/xterm'
 import {
+  firstBinaryType,
+  type UploadResult,
+  uploadClipboardBlob,
+} from './clipboard-upload'
+import {
   eventMatchesKeybind,
   IS_MAC,
   keyComboToSequence,
   type ResolvedKeybind,
 } from './config'
-import {
-  firstBinaryType,
-  uploadClipboardBlob,
-  type UploadResult,
-} from './clipboard-upload'
 import { selectionToText } from './selection'
 import { terminalFindOpen } from './store'
 
 type SendFn = (data: string) => void
+
+/** Immutable terminal connection capability captured at a paste gesture. */
+export interface PasteDestination {
+  readonly sessionId: string
+  readonly bracketedPasteMode: boolean
+  /** Sends only while the exact captured connection is still current and open. */
+  send(text: string): boolean
+}
+
+export type GetPasteDestination = () => PasteDestination | null
 
 /**
  * Detect a touch-primary device (coarse pointer).
@@ -77,19 +87,25 @@ export const defaultPasteFeedback: PasteFeedback = (kind, message) => {
  * input bytes to type into the PTY on success, or null on failure (after
  * surfacing the error via feedback).
  */
-async function uploadAndFormatPath(
+async function uploadAndSendPath(
   blob: Blob,
-  sessionId: string,
-  bracketedPasteMode: boolean,
+  destination: PasteDestination,
   feedback: PasteFeedback,
-): Promise<string | null> {
-  const result: UploadResult = await uploadClipboardBlob(blob, sessionId)
+): Promise<void> {
+  const result: UploadResult = await uploadClipboardBlob(blob, destination.sessionId)
   if (!result.ok) {
     feedback('error', pasteErrorMessage(result.error))
-    return null
+    return
   }
-  feedback('info', `Pasted to ${result.path}`)
-  return formatPasteText(result.path, bracketedPasteMode)
+  if (!destination.send(formatPasteText(result.path, destination.bracketedPasteMode))) {
+    feedback('error', 'Paste cancelled: terminal connection changed')
+  }
+}
+
+function sendPaste(destination: PasteDestination, text: string, feedback: PasteFeedback): void {
+  if (!destination.send(formatPasteText(text, destination.bracketedPasteMode))) {
+    feedback('error', 'Paste cancelled: terminal connection changed')
+  }
 }
 
 function pasteErrorMessage(code: string): string {
@@ -114,10 +130,9 @@ function pasteErrorMessage(code: string): string {
 export function attachKeyboardHandler(
   term: Terminal,
   send: SendFn,
-  sendRaw: SendFn,
   keybinds: ResolvedKeybind[],
   macCommandIsCtrl = false,
-  sessionId = '',
+  getPasteDestination: GetPasteDestination = () => null,
   onPasteFeedback: PasteFeedback = defaultPasteFeedback,
 ): void {
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
@@ -151,7 +166,7 @@ export function attachKeyboardHandler(
 
       for (const kb of keybinds) {
         if (!eventMatchesKeybind(virtualMods, kb)) continue
-        const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
+        const handled = executeAction(kb, term, send, getPasteDestination, onPasteFeedback)
         if (handled) { ev.preventDefault(); return false }
       }
 
@@ -169,7 +184,7 @@ export function attachKeyboardHandler(
       // For shift+enter we need to block all event types (keydown, keypress,
       // keyup) to prevent the Kitty keyboard protocol sequence from leaking.
       if (kb.baseKey === 'enter' && kb.shift) {
-        if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
+        if (ev.type === 'keydown') executeAction(kb, term, send, getPasteDestination, onPasteFeedback)
         ev.preventDefault()
         return false
       }
@@ -177,7 +192,7 @@ export function attachKeyboardHandler(
       // For other bindings, only act on keydown.
       if (ev.type !== 'keydown') return true
 
-      const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
+      const handled = executeAction(kb, term, send, getPasteDestination, onPasteFeedback)
       if (handled) {
         // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
         // xterm.js does not call preventDefault when the custom handler
@@ -196,15 +211,13 @@ export function attachKeyboardHandler(
  * (not passed to xterm), false if xterm should still process it.
  *
  * `send` is the input channel (may apply mobile ctrl/alt arm modifiers).
- * `sendRaw` bypasses modifier logic, used by paste to avoid corrupting
- * clipboard content.
+ * Paste uses its captured destination capability to bypass modifier logic.
  */
 function executeAction(
   kb: ResolvedKeybind,
   term: Terminal,
   send: SendFn,
-  sendRaw: SendFn,
-  sessionId: string,
+  getPasteDestination: GetPasteDestination,
   onPasteFeedback: PasteFeedback,
 ): boolean {
   switch (kb.action) {
@@ -244,17 +257,18 @@ function executeAction(
       // Inspect the clipboard for binary content first; binary always
       // wins over text (see PRD). Falls back to readText() when only
       // text/* representations are present, preserving prior behavior.
-      // Both branches use sendRaw to bypass mobile ctrl/alt arm logic.
+      // Both branches use the destination capability directly, bypassing
+      // mobile ctrl/alt arm logic.
       //
       // Requires clipboard-read permission in a secure context. The
       // keydown counts as a user gesture. Permission denial is reported
       // via onPasteFeedback so users see why nothing happened.
-      void handlePasteAction({
-        sessionId,
-        bracketedPasteMode: term.modes.bracketedPasteMode,
-        feedback: onPasteFeedback,
-        emit: sendRaw,
-      })
+      const destination = getPasteDestination()
+      if (!destination) {
+        onPasteFeedback('error', 'Paste failed: no active terminal connection')
+        return true
+      }
+      void handlePasteAction(destination, onPasteFeedback)
       return true
     }
 
@@ -431,18 +445,13 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
  * - We need to own the bracketed-paste / newline conversion ourselves so it is
  *   always correct regardless of what mobile modifier state is active.
  *
- * The `sendRaw` parameter must be sendRawInput (not sendInput) so that
- * paste is never transformed by the ctrl/alt modifier logic. The name
- * encodes the contract: the keybind paste action takes the same care
- * (see executeAction's `case 'paste'`).
+ * The destination's send capability bypasses ctrl/alt modifier logic.
  *
  * Returns a cleanup function.
  */
 export function attachPasteHandler(
-  term: Terminal,
   container: HTMLElement,
-  sendRaw: SendFn,
-  sessionId = '',
+  getPasteDestination: GetPasteDestination,
   onPasteFeedback: PasteFeedback = defaultPasteFeedback,
 ): () => void {
   const handler = (ev: ClipboardEvent) => {
@@ -462,12 +471,12 @@ export function attachPasteHandler(
         onPasteFeedback('error', 'Paste failed: could not read clipboard item')
         return
       }
-      if (!sessionId) {
-        onPasteFeedback('error', 'Paste failed: no session bound')
+      const destination = getPasteDestination()
+      if (!destination) {
+        onPasteFeedback('error', 'Paste failed: no active terminal connection')
         return
       }
-      void uploadAndFormatPath(blob, sessionId, term.modes.bracketedPasteMode, onPasteFeedback)
-        .then(out => { if (out !== null) sendRaw(out) })
+      void uploadAndSendPath(blob, destination, onPasteFeedback)
       return
     }
 
@@ -478,7 +487,12 @@ export function attachPasteHandler(
     ev.stopPropagation()
     ev.preventDefault()
 
-    sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
+    const destination = getPasteDestination()
+    if (!destination) {
+      onPasteFeedback('error', 'Paste failed: no active terminal connection')
+      return
+    }
+    sendPaste(destination, text, onPasteFeedback)
   }
 
   container.addEventListener('paste', handler, { capture: true })
@@ -523,13 +537,10 @@ export function pickBinaryDataTransferItem(items: DataTransferItemList): DataTra
  * inspect-and-route logic as the keybind path. Without this, the mobile
  * button would be text-only.
  */
-export async function handlePasteAction(args: {
-  sessionId: string
-  bracketedPasteMode: boolean
-  feedback: PasteFeedback
-  emit: SendFn
-}): Promise<void> {
-  const { sessionId, bracketedPasteMode, feedback, emit } = args
+export async function handlePasteAction(
+  destination: PasteDestination,
+  feedback: PasteFeedback = defaultPasteFeedback,
+): Promise<void> {
   const reader = navigator.clipboard
 
   if (typeof reader?.read === 'function') {
@@ -544,22 +555,29 @@ export async function handlePasteAction(args: {
       for (const item of items) {
         const binMime = firstBinaryType(item.types)
         if (!binMime) continue
-        const blob = await item.getType(binMime)
-        if (!sessionId) {
-          feedback('error', 'Paste failed: no session bound')
+        let blob: Blob
+        try {
+          blob = await item.getType(binMime)
+        } catch (err) {
+          feedback('error', 'Paste failed: could not read clipboard item')
+          console.warn('Paste failed: could not read clipboard item.', err)
           return
         }
-        const out = await uploadAndFormatPath(blob, sessionId, bracketedPasteMode, feedback)
-        if (out !== null) emit(out)
+        await uploadAndSendPath(blob, destination, feedback)
         return
       }
       // No binary; extract text from the items we already have so we
       // don't trigger a second clipboard permission prompt.
       for (const item of items) {
         if (!item.types.includes('text/plain')) continue
-        const blob = await item.getType('text/plain')
-        const text = await blob.text()
-        if (text) emit(formatPasteText(text, bracketedPasteMode))
+        try {
+          const blob = await item.getType('text/plain')
+          const text = await blob.text()
+          if (text) sendPaste(destination, text, feedback)
+        } catch (err) {
+          feedback('error', 'Paste failed: could not read clipboard item')
+          console.warn('Paste failed: could not read clipboard item.', err)
+        }
         return
       }
       return // clipboard had only types we don't handle
@@ -568,7 +586,7 @@ export async function handlePasteAction(args: {
 
   try {
     const text = await reader.readText()
-    if (text) emit(formatPasteText(text, bracketedPasteMode))
+    if (text) sendPaste(destination, text, feedback)
   } catch (err) {
     feedback('error', 'Paste failed: clipboard access denied')
     console.warn('Paste failed: clipboard access denied.', err)
