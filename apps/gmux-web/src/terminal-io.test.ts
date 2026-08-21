@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ScrollAnchorAddon } from '@gmux/scroll-anchor'
 import { createTerminalIO } from './terminal-io'
 
 const enc = (s: string) => new TextEncoder().encode(s)
 
-function makeHarness(isSyncActive: () => boolean = () => false) {
+function makeHarness(isBusy: () => boolean = () => false) {
   const writes: string[] = []
   const resizes: Array<{ cols: number, rows: number }> = []
   const pending: Array<() => void> = []
@@ -13,7 +14,7 @@ function makeHarness(isSyncActive: () => boolean = () => false) {
       pending.push(() => callback?.())
     },
     resize(cols, rows) { resizes.push({ cols, rows }) },
-  }, { isSyncActive })
+  }, { isBusy })
   return {
     io, writes, resizes,
     flushOne() {
@@ -107,7 +108,7 @@ describe('createTerminalIO', () => {
     h.flushOne()
     expect(h.resizes).toEqual([])
     busy = false
-    h.io.syncStateChanged()
+    h.io.busyStateChanged()
     expect(h.resizes).toEqual([{ cols: 100, rows: 30 }])
   })
 
@@ -119,10 +120,72 @@ describe('createTerminalIO', () => {
     expect(h.resizes).toEqual([])
     // ESU has closed, but the addon's combined busy fence remains true until
     // its deterministic restore and rendering catch-up have completed.
-    h.io.syncStateChanged()
+    h.io.busyStateChanged()
     expect(h.resizes).toEqual([])
     busy = false
-    h.io.syncStateChanged()
+    h.io.busyStateChanged()
     expect(h.resizes).toEqual([{ cols: 120, rows: 40 }])
   })
+
+  it('defers a real addon-integrated resize through ED3 and its rAF', () => {
+    let viewportY = 20
+    let baseY = 20
+    const raf = { current: null as FrameRequestCallback | null }
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { raf.current = callback; return 1 })
+    const scrollListeners = new Set<() => void>()
+    const parsedListeners = new Set<() => void>()
+    const handlers = new Map<string, (params: Array<number | number[]>) => boolean>()
+    const resizes: Array<{ cols: number, rows: number }> = []
+    const active = {
+      type: 'normal',
+      get viewportY() { return viewportY },
+      get baseY() { return baseY },
+      getLine() { return { translateToString: () => 'anchor line' } },
+    }
+    const terminal = {
+      element: new EventTarget(),
+      rows: 10,
+      buffer: { active },
+      parser: {
+        registerCsiHandler(id: { prefix?: string, final: string }, handler: (params: Array<number | number[]>) => boolean) {
+          const key = `${id.prefix ?? ''}${id.final}`
+          handlers.set(key, handler)
+          return { dispose: () => handlers.delete(key) }
+        },
+      },
+      onScroll(listener: () => void) { scrollListeners.add(listener); return { dispose: () => scrollListeners.delete(listener) } },
+      onWriteParsed(listener: () => void) { parsedListeners.add(listener); return { dispose: () => parsedListeners.delete(listener) } },
+      scrollToLine(line: number) { viewportY = Math.min(line, baseY); for (const listener of scrollListeners) listener() },
+      scrollToBottom() { viewportY = baseY; for (const listener of scrollListeners) listener() },
+      write(_data: Uint8Array, callback?: () => void) { callback?.() },
+      resize(cols: number, rows: number) { resizes.push({ cols, rows }) },
+    }
+    const addon = new ScrollAnchorAddon()
+    addon.activate(terminal as any)
+    const io = createTerminalIO(terminal, { isBusy: () => addon.busy })
+    addon.onBusyChange(() => io.busyStateChanged())
+    io.reset(1)
+
+    terminal.element.dispatchEvent(new Event('wheel'))
+    viewportY = 10
+    for (const listener of scrollListeners) listener()
+    handlers.get('?h')?.([2026])
+    handlers.get('J')?.([3])
+    viewportY = 0
+    baseY = 12
+    handlers.get('?l')?.([2026])
+    for (const listener of parsedListeners) listener()
+
+    io.requestResize({ cols: 120, rows: 40 }, 1)
+    expect(addon.syncActive).toBe(false)
+    expect(addon.busy).toBe(true)
+    expect(resizes).toEqual([])
+    expect(raf.current).not.toBeNull()
+    raf.current?.(0)
+    expect(addon.busy).toBe(false)
+    expect(resizes).toEqual([{ cols: 120, rows: 40 }])
+    addon.dispose()
+    vi.unstubAllGlobals()
+  })
+
 })

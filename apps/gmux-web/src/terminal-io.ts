@@ -15,8 +15,8 @@ interface QueueItem {
 }
 
 export interface TerminalIOOptions {
-  /** Current DEC 2026 state, owned by the scroll-anchor addon. */
-  isSyncActive?: () => boolean
+  /** Current synchronized-output/wipe-resolution fence owned by the addon. */
+  isBusy?: () => boolean
 }
 
 export interface TerminalIO {
@@ -24,16 +24,17 @@ export interface TerminalIO {
   enqueue(data: Uint8Array, epoch: number, onWritten?: () => void): void
   enqueueMany(chunks: Uint8Array[], epoch: number, onWritten?: () => void): void
   requestResize(size: TerminalSize, epoch: number): void
-  /** Reconsider a resize deferred behind a synchronized-output block. */
-  syncStateChanged(): void
+  /** Reconsider a resize after the addon's combined busy fence changes. */
+  busyStateChanged(): void
   hasPendingWork(): boolean
 }
 
 /**
  * Serializes xterm writes and resizes so resize only happens when the parser
  * is idle. This avoids xterm async-parser races (eg image addon + resize).
- * Resizes are also held across DEC 2026 synchronized output; the addon owns
- * parser-level sequence observation so framing does not depend on WS chunks.
+ * Resizes are also held across DEC 2026 synchronized output and post-ED3
+ * re-resolution; the addon owns that combined busy fence so framing does not
+ * depend on WebSocket chunks and resize cannot race its viewport catch-up.
  */
 export function createTerminalIO(term: TerminalWriter, options: TerminalIOOptions = {}): TerminalIO {
   let currentEpoch = 0
@@ -61,7 +62,7 @@ export function createTerminalIO(term: TerminalWriter, options: TerminalIOOption
       return
     }
 
-    if (pendingResize && pendingResize.epoch === currentEpoch && !options.isSyncActive?.()) {
+    if (pendingResize && pendingResize.epoch === currentEpoch && !options.isBusy?.()) {
       const { cols, rows } = pendingResize
       pendingResize = null
       term.resize(cols, rows)
@@ -97,7 +98,7 @@ export function createTerminalIO(term: TerminalWriter, options: TerminalIOOption
       pump()
     },
 
-    syncStateChanged() { pump() },
+    busyStateChanged() { pump() },
 
     hasPendingWork() {
       dropStaleFront()

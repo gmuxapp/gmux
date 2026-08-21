@@ -618,10 +618,10 @@ export function TerminalView({
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     termIoRef.current = createTerminalIO(term, {
-      isSyncActive: () => scrollAnchor.busy,
+      isBusy: () => scrollAnchor.busy,
     })
     const busyDisposable = scrollAnchor.onBusyChange((busy) => {
-      if (!busy) termIoRef.current?.syncStateChanged()
+      if (!busy) termIoRef.current?.busyStateChanged()
     })
     ;(window as any).__gmuxTerm = term
     ;(window as any).__gmuxScrollAnchor = scrollAnchor
