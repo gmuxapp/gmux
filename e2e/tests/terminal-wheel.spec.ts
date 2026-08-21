@@ -21,7 +21,7 @@ async function wheelSamples(page: Page, count: number): Promise<number[]> {
   const box = await page.locator('.xterm').boundingBox()
   if (!box) throw new Error('xterm has no bounding box')
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  const samples: number[] = []
+  const samples: number[] = [(await scroll(page)).viewportY]
   for (let i = 0; i < count; i++) {
     await page.mouse.wheel(0, -120)
     samples.push((await scroll(page)).viewportY)
@@ -30,7 +30,7 @@ async function wheelSamples(page: Page, count: number): Promise<number[]> {
   return samples
 }
 
-async function startBurstSession(): Promise<{ process: ChildProcess, sessionId: string, trigger: string, dir: string, env: NodeJS.ProcessEnv }> {
+async function startBurstSession(): Promise<{ process: ChildProcess, sessionId: string, trigger: string, stop: string, dir: string, env: NodeJS.ProcessEnv }> {
   const state = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as { tmpDir: string, token: string }
   const before = await apiGet<{ data: Array<{ id: string }> }>('/v1/sessions')
   const existingIds = new Set(before.body.data.map(item => item.id))
@@ -38,12 +38,13 @@ async function startBurstSession(): Promise<{ process: ChildProcess, sessionId: 
   const dir = join(workspace, `wheel-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   mkdirSync(dir, { recursive: true })
   const trigger = join(dir, 'trigger')
+  const stop = join(dir, 'stop')
   const script = join(dir, 'gen.sh')
   writeFileSync(script, `#!/usr/bin/env bash
 for i in $(seq 1 400); do printf 'seed-line-%04d\\r\\n' "$i"; done
 while [ ! -e "${trigger}" ]; do sleep 0.01; done
 i=0
-while [ "$i" -lt 240 ]; do
+while [ ! -e "${stop}" ]; do
   printf '\\033[?2026h'
   for j in $(seq 1 5); do printf 'burst-%04d-%d\\r\\n' "$i" "$j"; done
   printf '\\033[?2026l'
@@ -70,10 +71,11 @@ while true; do sleep 60; done
     const response = await apiGet<{ data: Array<{ id: string, alive: boolean }> }>('/v1/sessions')
     return response.body.data.find(item => item.alive && !existingIds.has(item.id))?.id
   }, { timeoutMs: 10_000, description: 'burst session' })
-  return { process: child, sessionId, trigger, dir, env }
+  return { process: child, sessionId, trigger, stop, dir, env }
 }
 
-function stopBurstSession(session: { process: ChildProcess, sessionId: string, dir: string, env: NodeJS.ProcessEnv }): void {
+function stopBurstSession(session: { process: ChildProcess, sessionId: string, stop: string, dir: string, env: NodeJS.ProcessEnv }): void {
+  writeFileSync(session.stop, '')
   try { execFileSync(join(ROOT, 'bin/gmux'), ['kill', session.sessionId], { env: session.env }) } catch { /* already exited */ }
   if (session.process.pid) {
     try { process.kill(-session.process.pid, 'SIGTERM') } catch { /* already exited */ }
@@ -86,9 +88,6 @@ test.describe.serial('terminal wheel under live synchronized output', () => {
 
   test.beforeEach(async ({ page }) => {
     burst = await startBurstSession()
-    // A live write prompts the runner to publish the browser checkpoint;
-    // keep enough 30 Hz bursts after navigation for the wheel phase itself.
-    writeFileSync(burst.trigger, '')
     await openApp(page)
     await gotoSession(page, burst.sessionId)
     await page.waitForFunction(() => {
@@ -103,17 +102,22 @@ test.describe.serial('terminal wheel under live synchronized output', () => {
   test.afterEach(() => { if (burst) stopBurstSession(burst) })
 
   test('wheel-up escapes bottom during 30 Hz BSU/ESU bursts', async ({ page }) => {
+    const before = await scroll(page)
+    writeFileSync(burst.trigger, '')
     const samples = await wheelSamples(page, 25)
-    const netUp = samples[0] - samples.at(-1)!
-    expect(netUp).toBeGreaterThan(40)
+    const after = await scroll(page)
+    expect(after.baseY).toBeGreaterThan(before.baseY)
+    expect(samples[0] - samples.at(-1)!).toBeGreaterThan(40)
   })
 
   test('an anchored viewport is not dragged and further wheel input moves it', async ({ page }) => {
     const initial = await wheelSamples(page, 12)
     expect(initial[0] - initial.at(-1)!).toBeGreaterThan(20)
     const beforeLoad = await scroll(page)
+    writeFileSync(burst.trigger, '')
     await page.waitForTimeout(300)
     const beforeMore = await scroll(page)
+    expect(beforeMore.baseY).toBeGreaterThan(beforeLoad.baseY)
     expect(Math.abs(beforeMore.viewportY - beforeLoad.viewportY)).toBeLessThanOrEqual(3)
     const more = await wheelSamples(page, 10)
     expect(more[0] - more.at(-1)!).toBeGreaterThan(15)
