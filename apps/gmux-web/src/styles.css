@@ -802,13 +802,18 @@ body {
 
 }
 
-.session-dot-indicator.working {
+.session-dot-indicator.working,
+.session-dot-indicator.active-error {
   background: transparent;
   /* A hair thicker than the 1.5px it grew up with: hollow rings read
      thinner than the filled dots they sit beside, and at 7px the ring
      was dropping below legibility on low-DPI screens. */
   border: 1.75px solid var(--accent);
   animation: subtle-pulse 2.5s ease-in-out infinite;
+}
+
+.session-dot-indicator.active-error {
+  border-color: var(--status-error);
 }
 
 .session-dot-indicator.active {
@@ -3810,6 +3815,7 @@ body {
     animation: none;
   }
   .session-dot-indicator.working,
+  .session-dot-indicator.active-error,
   .session-dot-indicator.active,
   .session-dot-indicator.fading,
   .session-dot-indicator.error {

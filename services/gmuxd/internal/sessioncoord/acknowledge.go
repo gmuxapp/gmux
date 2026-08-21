@@ -18,8 +18,9 @@ var (
 	ErrAckOwnerChanged = errors.New("sessioncoord: acknowledgement owner changed")
 )
 
-// AcknowledgeDead durably clears the user-facing unread/error indicators of a
-// dead session (the `.../read` route and presence-driven selection clears).
+// AcknowledgeDead durably clears unread attention for a dead session (the
+// `.../read` route and presence-driven selection clear it). Durable error is
+// outcome data and is never consumed by reading.
 //
 // Live sessions are acknowledged by the runner on WS attach — a daemon write
 // would violate runner ownership (ADR 0026 §3). The legacy unconditional form
@@ -78,9 +79,9 @@ func (c *Coordinator) acknowledgeDead(ctx context.Context, id centralstore.Sessi
 			c.mu.Unlock()
 			return fmt.Errorf("%w: %s", centralstore.ErrSessionNotFound, id)
 		}
-		if !s.Unread && !s.Error {
+		if !s.Unread {
 			c.mu.Unlock()
-			return nil // nothing to clear
+			return nil // nothing to clear; error alone is durable outcome data
 		}
 		if s.Version > version {
 			version = s.Version

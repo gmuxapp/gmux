@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 /**
  * Fires the "arriving" CSS animation whenever the dot transitions to 'unread'.
  *
- * Triggers on any state → unread transition (none, active, working, error).
+ * Triggers on any state → unread transition (including active-error).
  *
  * Optional `generation` parameter: when provided, a change in generation
  * while the state is already 'unread' re-fires the animation. Used by the
@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
  * draws attention even though the aggregate state stays 'unread'.
  */
 export function useArrivalPulse(
-  currentState: 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none',
+  currentState: 'working' | 'active-error' | 'error' | 'unread' | 'active' | 'fading' | 'none',
   generation?: number,
 ): 'arriving' | null {
   const prevStateRef = useRef(currentState)
