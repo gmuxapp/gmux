@@ -666,7 +666,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	return MutationResult{Changed: true, SessionVersion: observed + 1, SessionsDirty: true}, nil
 }
 
-// AcknowledgeDeadSession clears the user-facing unread and error indicators.
+// AcknowledgeDeadSession clears unread attention while preserving durable error.
 // Runner liveness is deliberately outside SQLite: the lifecycle coordinator
 // must establish that no runner is live immediately before calling this
 // conditional operation.
@@ -704,7 +704,7 @@ func (s *Store) acknowledgeDeadSession(ctx context.Context, id SessionID, observ
 	if token != nil && current.UnreadToken != *token {
 		return MutationResult{SessionVersion: current.Version}, ErrUnreadTokenChanged
 	}
-	if !current.Unread && !current.Error {
+	if !current.Unread {
 		if err = tx.Commit(); err != nil {
 			return MutationResult{}, err
 		}

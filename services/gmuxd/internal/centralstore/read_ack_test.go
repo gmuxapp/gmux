@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestAcknowledgeDeadSessionClearsUnreadAndErrorOnly(t *testing.T) {
+func TestAcknowledgeDeadSessionClearsUnreadAndPreservesError(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
 	started := UnixMillis(2)
@@ -38,10 +38,10 @@ func TestAcknowledgeDeadSessionClearsUnreadAndErrorOnly(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("session ok=%v err=%v", ok, err)
 	}
-	if got.Unread || got.Error {
-		t.Fatalf("acknowledgement not applied: %#v", got)
+	if got.Unread || !got.Error {
+		t.Fatalf("acknowledgement did not clear only unread: %#v", got)
 	}
-	before.Unread, before.Error, before.Version = false, false, before.Version+1
+	before.Unread, before.Version = false, before.Version+1
 	if !reflect.DeepEqual(got, before) {
 		t.Fatalf("unrelated facts changed:\n got  %#v\n want %#v", got, before)
 	}
@@ -70,7 +70,7 @@ func TestAcknowledgeDeadSessionSingleIndicatorAndNoop(t *testing.T) {
 		wantChanged    bool
 	}{
 		{name: "unread only", unread: true, wantChanged: true},
-		{name: "error only", failed: true, wantChanged: true},
+		{name: "error only", failed: true},
 		{name: "already acknowledged"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,7 +162,7 @@ func TestDeadSessionAcknowledgementDurableTracer(t *testing.T) {
 		t.Fatalf("dead acknowledgement result=%#v attempted=%v err=%v", result, attempted, err)
 	}
 	snapshot, err := s.ListSessions(ctx)
-	if err != nil || len(snapshot) != 1 || snapshot[0].Unread || snapshot[0].Error || !snapshot[0].Active {
+	if err != nil || len(snapshot) != 1 || snapshot[0].Unread || !snapshot[0].Error || !snapshot[0].Active {
 		t.Fatalf("committed snapshot=%#v err=%v", snapshot, err)
 	}
 
@@ -197,7 +197,7 @@ func TestDeadSessionAcknowledgementDurableTracer(t *testing.T) {
 	}
 	defer s.Close()
 	reopened, err := s.ListSessions(ctx)
-	if err != nil || len(reopened) != 1 || reopened[0].Unread || reopened[0].Error || reopened[0].Version != result.SessionVersion {
+	if err != nil || len(reopened) != 1 || reopened[0].Unread || !reopened[0].Error || reopened[0].Version != result.SessionVersion {
 		t.Fatalf("reopened snapshot=%#v result=%#v err=%v", reopened, result, err)
 	}
 }

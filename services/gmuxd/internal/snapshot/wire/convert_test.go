@@ -157,6 +157,18 @@ func TestSessionConversionOverlays(t *testing.T) {
 		t.Fatal("alive row must not be resumable")
 	}
 
+	// The shared wire preserves durable turn-state-at-death because wait uses
+	// snapshots to classify a runner death. UI clients normalize liveness at
+	// their presentation boundary.
+	dead := localRow("1vshk4fu", false, func(r *central.SessionRow) {
+		r.Session.Active = true
+		r.Session.Error = true
+	})
+	deadWire := conv.session(dead)
+	if deadWire.Alive || deadWire.Status == nil || !deadWire.Status.Active || !deadWire.Status.Error || !dead.Session.Active {
+		t.Fatalf("dead conversion lost durable active-at-death: durable=%+v wire=%+v", dead.Session, deadWire)
+	}
+
 	// Never-reported status emits null (production Status-pointer parity;
 	// gmux wait derives died-vs-idle from this — not an accepted diff).
 	unreported := localRow("1o6h184m", true, func(r *central.SessionRow) { r.Session.StatusReported = false })
@@ -164,7 +176,7 @@ func TestSessionConversionOverlays(t *testing.T) {
 		t.Fatalf("never-reported status must be null on the wire: %+v", got.Status)
 	}
 
-	dead := localRow("1or99tfj", false, func(r *central.SessionRow) {
+	dead = localRow("1or99tfj", false, func(r *central.SessionRow) {
 		r.Session.ExitedAt = ms(1700000002000)
 		code := 1
 		r.Session.ExitCode = &code
