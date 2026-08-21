@@ -9,6 +9,8 @@ tasks:
     inputs:
       - "src/**/*"
       - "tsconfig.json"
+    outputs:
+      - "dist"
   test:
     command: pnpm exec vitest run
   lint:

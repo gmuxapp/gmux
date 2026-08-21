@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.7/schema.json",
   "files": {
-    "includes": ["apps/gmux-web/src/**", "packages/protocol/src/**"]
+    "includes": ["apps/gmux-web/src/**", "packages/protocol/src/**", "packages/scroll-anchor/src/**"]
   },
   "linter": {
     "enabled": true,

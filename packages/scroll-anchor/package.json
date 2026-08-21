@@ -1,10 +1,22 @@
 {
   "name": "@gmux/scroll-anchor",
   "version": "0.1.0",
+  "description": "Follow and content-anchor scroll modes for xterm.js terminals",
+  "license": "MIT",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "main": "dist/index.js",
-  "types": "src/index.ts",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

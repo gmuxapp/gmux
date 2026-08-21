@@ -18,6 +18,8 @@ export interface ScrollAnchorBuffer {
   getLine(y: number): string | null
 }
 
+type CsiParams = Array<number | number[]>
+
 /** Resolve a pre-wipe snapshot against a post-wipe buffer. */
 export function resolveScrollAnchor(snapshot: ScrollAnchorSnapshot, buffer: ScrollAnchorBuffer): number {
   if (snapshot.line !== null) {
@@ -56,8 +58,13 @@ class EventEmitter<T> implements IDisposable {
   }
 }
 
-function hasParam(params: readonly (number | readonly number[])[], expected: number): boolean {
+function containsParam(params: CsiParams, expected: number): boolean {
   return params.some(value => Array.isArray(value) ? value.includes(expected) : value === expected)
+}
+
+function firstParam(params: CsiParams): number {
+  const first = params[0] ?? 0
+  return Array.isArray(first) ? (first[0] ?? 0) : first
 }
 
 /** Keeps an xterm viewport following output until wheel/touch intent anchors it. */
@@ -66,40 +73,35 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   private disposables: IDisposable[] = []
   private readonly modeEmitter = new EventEmitter<ScrollAnchorMode>()
   private readonly syncEmitter = new EventEmitter<boolean>()
+  private readonly busyEmitter = new EventEmitter<boolean>()
   private currentMode: ScrollAnchorMode = 'following'
   private snapshot: ScrollAnchorSnapshot = { line: null, distanceFromBottom: 0 }
   private userIntent = false
-  private userIntentTimer: ReturnType<typeof setTimeout> | null = null
+  private programmaticScroll = false
   private wipePending = false
   private wipeSyncRAF: number | null = null
-  private userScrollVersion = 0
-  private syncDepth = 0
-  private wasAlternate = false
+  private syncMode = false
   private readonly isAnchorLine: (text: string) => boolean
 
   readonly onModeChange: IEvent<ScrollAnchorMode> = this.modeEmitter.event
   readonly onSyncActiveChange: IEvent<boolean> = this.syncEmitter.event
+  /** Fires for the combined sync/wipe fence used to defer terminal resizes. */
+  readonly onBusyChange: IEvent<boolean> = this.busyEmitter.event
 
   constructor(options: ScrollAnchorOptions = {}) {
     this.isAnchorLine = options.isAnchorLine ?? (text => text.trim().length >= 4)
   }
 
   get mode(): ScrollAnchorMode { return this.currentMode }
-  get syncActive(): boolean { return this.syncDepth > 0 }
+  get syncActive(): boolean { return this.syncMode }
+  get busy(): boolean { return this.syncMode || this.wipePending || this.wipeSyncRAF !== null }
 
   activate(terminal: Terminal): void {
     if (this.terminal) throw new Error('ScrollAnchorAddon is already active')
     this.terminal = terminal
-    this.wasAlternate = terminal.buffer.active.type === 'alternate'
 
     const armUserIntent = () => {
-      if (this.isAlternate()) return
-      this.userIntent = true
-      if (this.userIntentTimer !== null) clearTimeout(this.userIntentTimer)
-      this.userIntentTimer = setTimeout(() => {
-        this.userIntent = false
-        this.userIntentTimer = null
-      }, 0)
+      if (!this.isAlternate()) this.userIntent = true
     }
     terminal.element?.addEventListener('wheel', armUserIntent, { capture: true, passive: true })
     terminal.element?.addEventListener('touchmove', armUserIntent, { capture: true, passive: true })
@@ -108,37 +110,22 @@ export class ScrollAnchorAddon implements ITerminalAddon {
       terminal.element?.removeEventListener('touchmove', armUserIntent, true)
     } })
 
-    this.disposables.push(terminal.onScroll(() => {
-      if (!this.userIntent || this.isAlternate()) return
-      this.userIntent = false
-      this.userScrollVersion++
-      if (this.userIntentTimer !== null) {
-        clearTimeout(this.userIntentTimer)
-        this.userIntentTimer = null
-      }
-      const buffer = terminal.buffer.active
-      if (buffer.viewportY < buffer.baseY) {
-        this.snapshot = this.captureSnapshot()
-        this.setMode('anchored')
-      } else {
-        this.setMode('following')
-      }
-    }))
+    this.disposables.push(terminal.onScroll(() => this.handleScroll()))
 
-    const observeSync = (opening: boolean) => (params: any): boolean => {
-      if (!hasParam(params, 2026)) return false
-      const before = this.syncActive
-      this.syncDepth = opening ? this.syncDepth + 1 : Math.max(0, this.syncDepth - 1)
-      if (before !== this.syncActive) this.syncEmitter.fire(this.syncActive)
+    const observeSync = (active: boolean) => (params: CsiParams): boolean => {
+      if (containsParam(params, 2026)) this.setSyncActive(active)
       return false
     }
     this.disposables.push(terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, observeSync(true)))
     this.disposables.push(terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, observeSync(false)))
-    this.disposables.push(terminal.parser.registerCsiHandler({ final: 'J' }, (params: any) => {
-      if (!hasParam(params, 3) || this.isAlternate() || this.currentMode !== 'anchored') return false
-      // ED3 runs after parser hooks and destroys line identity, so refresh now.
+    this.disposables.push(terminal.parser.registerCsiHandler({ final: 'J' }, (params: CsiParams) => {
+      if (firstParam(params) !== 3 || this.isAlternate() || this.currentMode !== 'anchored') return false
+      const wasBusy = this.busy
+      this.cancelWipeRAF()
+      // ED3 destroys line identity after parser hooks, so refresh beforehand.
       this.snapshot = this.captureSnapshot()
       this.wipePending = true
+      this.fireBusyChange(wasBusy)
       return false
     }))
 
@@ -146,62 +133,134 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   }
 
   follow(): void {
+    this.userIntent = false
+    this.cancelWipeResolution()
     this.setMode('following')
     if (!this.terminal || this.isAlternate()) return
-    this.scrollToBottomWithoutAnimation(this.terminal)
+    this.runProgrammaticScroll(() => this.scrollToBottomWithoutAnimation(this.terminal!))
+  }
+
+  /** Clear parser/transient state at an epoch boundary without changing mode. */
+  reset(): void {
+    const wasBusy = this.busy
+    const wasSyncActive = this.syncMode
+    this.cancelWipeRAF()
+    this.syncMode = false
+    this.wipePending = false
+    this.snapshot = { line: null, distanceFromBottom: 0 }
+    this.userIntent = false
+    this.programmaticScroll = false
+    if (wasSyncActive) this.syncEmitter.fire(false)
+    this.fireBusyChange(wasBusy)
   }
 
   dispose(): void {
+    this.reset()
     for (const disposable of this.disposables.splice(0)) disposable.dispose()
-    if (this.userIntentTimer !== null) clearTimeout(this.userIntentTimer)
-    if (this.wipeSyncRAF !== null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.wipeSyncRAF)
-    this.userIntentTimer = null
-    this.wipeSyncRAF = null
-    this.userIntent = false
     this.terminal = null
     this.modeEmitter.dispose()
     this.syncEmitter.dispose()
+    this.busyEmitter.dispose()
+  }
+
+  private handleScroll(): void {
+    const terminal = this.terminal
+    if (!terminal || this.isAlternate() || this.programmaticScroll) return
+    const buffer = terminal.buffer.active
+
+    if (this.userIntent) {
+      this.userIntent = false
+      // User intent always supersedes a pending post-wipe rendering catch-up.
+      this.cancelWipeResolution()
+      if (buffer.viewportY >= buffer.baseY) {
+        this.setMode('following')
+      } else {
+        this.snapshot = this.captureSnapshot()
+        this.setMode('anchored')
+      }
+      return
+    }
+
+    // Bottom is structural follow intent for keyboard input, scrollbar drags,
+    // and application settings such as scrollOnUserInput. During ED3 the
+    // buffer transiently reports 0/0, so ignore that output-driven event while
+    // wipe re-resolution is fenced.
+    if (!this.busy && buffer.viewportY >= buffer.baseY) this.setMode('following')
   }
 
   private afterWriteParsed(): void {
     const terminal = this.terminal
-    if (!terminal) return
-    const alternate = this.isAlternate()
-    if (alternate) {
-      this.wasAlternate = true
-      return
-    }
-    if (this.wasAlternate) this.wasAlternate = false
+    if (!terminal || this.isAlternate()) return
 
-    if (this.wipePending && !this.syncActive && this.currentMode === 'anchored') {
-      this.wipePending = false
+    if (this.wipePending && !this.syncActive) {
+      if (this.currentMode !== 'anchored') {
+        const wasBusy = this.busy
+        this.wipePending = false
+        this.fireBusyChange(wasBusy)
+        return
+      }
+
       const buffer = terminal.buffer.active
       const target = resolveScrollAnchor(this.snapshot, {
         baseY: buffer.baseY,
         rows: terminal.rows,
         getLine: y => buffer.getLine(y)?.translateToString(true) ?? null,
       })
-      terminal.scrollToLine(target)
-      // The gmux xterm fork applies synchronized-output viewport DOM state
-      // after onWriteParsed. Repeat only if no newer user scroll occurred;
-      // this is a rendering catch-up, never permission to override intent.
+      const wasBusy = this.busy
+      this.cancelWipeRAF()
+      this.wipePending = false
+      this.runProgrammaticScroll(() => terminal.scrollToLine(target))
+
+      // The gmux xterm fork applies synchronized-output viewport state after
+      // onWriteParsed. Keep the resize fence through one rendering catch-up.
       if (typeof requestAnimationFrame !== 'undefined') {
-        const version = this.userScrollVersion
         this.wipeSyncRAF = requestAnimationFrame(() => {
+          const wasRAFBusy = this.busy
+          this.runProgrammaticScroll(() => terminal.scrollToLine(target))
           this.wipeSyncRAF = null
-          if (this.terminal === terminal && this.currentMode === 'anchored'
-            && this.userScrollVersion === version && !this.isAlternate()) {
-            terminal.scrollToLine(target)
-          }
+          this.fireBusyChange(wasRAFBusy)
         })
       }
+      this.fireBusyChange(wasBusy)
       return
     }
 
     if (this.currentMode === 'following') {
       const buffer = terminal.buffer.active
-      if (buffer.viewportY < buffer.baseY) this.scrollToBottomWithoutAnimation(terminal)
+      if (buffer.viewportY < buffer.baseY) {
+        this.runProgrammaticScroll(() => this.scrollToBottomWithoutAnimation(terminal))
+      }
     }
+  }
+
+  private setSyncActive(active: boolean): void {
+    if (this.syncMode === active) return
+    const wasBusy = this.busy
+    this.syncMode = active
+    this.syncEmitter.fire(active)
+    this.fireBusyChange(wasBusy)
+  }
+
+  private cancelWipeResolution(): void {
+    const wasBusy = this.busy
+    this.cancelWipeRAF()
+    this.wipePending = false
+    this.fireBusyChange(wasBusy)
+  }
+
+  private cancelWipeRAF(): void {
+    if (this.wipeSyncRAF === null) return
+    if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.wipeSyncRAF)
+    this.wipeSyncRAF = null
+  }
+
+  private fireBusyChange(previous: boolean): void {
+    if (previous !== this.busy) this.busyEmitter.fire(this.busy)
+  }
+
+  private runProgrammaticScroll(action: () => void): void {
+    this.programmaticScroll = true
+    try { action() } finally { this.programmaticScroll = false }
   }
 
   private scrollToBottomWithoutAnimation(terminal: Terminal): void {

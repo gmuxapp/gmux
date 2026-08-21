@@ -5,11 +5,13 @@ tasks:
     command: pnpm exec vite
     deps:
       - protocol:build
+      - scroll-anchor:build
     preset: server
   build:
     command: pnpm exec vite build
     deps:
       - protocol:build
+      - scroll-anchor:build
     inputs:
       - "src/**/*"
       - "index.html"
@@ -18,7 +20,9 @@ tasks:
     command: pnpm exec vitest run --passWithNoTests
     deps:
       - protocol:build
+      - scroll-anchor:build
   lint:
     command: pnpm exec tsc --noEmit
     deps:
       - protocol:build
+      - scroll-anchor:build
