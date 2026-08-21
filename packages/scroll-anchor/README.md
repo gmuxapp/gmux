@@ -18,9 +18,14 @@ terminal.loadAddon(addon)
 addon.follow()
 ```
 
-## Current input coverage
+## Current input coverage and accepted limitations
 
 Wheel and touch scrolling are observed directly. Keyboard scrollback that does not land at the bottom is not identified as user intent in v1. Scrollbar drags are recognized structurally when they land at the bottom, but a drag to another scrollback position does not enter anchored mode.
+
+Two timing limitations are accepted for this version:
+
+- With `smoothScrollDuration > 0`, parsed output can land between a wheel event and its first animation frame. Parsing clears the intent latch, so that notch can be reverted; the default duration of `0` is unaffected. A follow-up could correlate latch expiry with xterm's pending scroll animation instead of `onWriteParsed`.
+- During an ED3 wipe-resolution fence, scrollbar or keyboard arrival at bottom does not enter following mode because an output-driven transient also reports 0/0. Explicit wheel/touch intent at bottom is still recognized.
 
 ## xterm compatibility note
 

@@ -618,6 +618,10 @@ export function TerminalView({
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     termIoRef.current = createTerminalIO(term, {
+      // LOAD-BEARING: this must be `busy`, not `syncActive`. ED3 closes DEC
+      // 2026 before the addon's onWriteParsed + rAF viewport catch-up; using
+      // syncActive lets resize race that restore. The real-addon integration
+      // regression is in terminal-io.test.ts ("through ED3 and its rAF").
       isBusy: () => scrollAnchor.busy,
     })
     const busyDisposable = scrollAnchor.onBusyChange((busy) => {

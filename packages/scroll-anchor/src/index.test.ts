@@ -251,6 +251,9 @@ describe('ScrollAnchorAddon', () => {
     h.setBuffer(20, 20)
     h.userScroll(10)
     h.csi('J', [3])
+    // Real ED3 transient: xterm briefly reports ydisp=0/ybase=0. Without the
+    // busy guard this looks structurally at-bottom and incorrectly follows.
+    h.setBuffer(0, 0)
     h.outputScroll(0)
     expect(h.addon.mode).toBe('anchored')
   })
