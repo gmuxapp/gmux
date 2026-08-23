@@ -1,29 +1,30 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
-import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
-import type { ResolvedTerminalOptions } from './settings-schema'
-import { loadWebglRenderer } from './webgl-renderer'
-import { refreshAtlasWhenIconFontLoads } from './nerd-font'
-import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { Terminal } from '@xterm/xterm'
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
-import { attachMobileInputHandler } from './mobile-input'
-import { isTouchDevice } from './touch'
-import { BSU, createReplayBuffer, ESU, startsWith } from './replay'
-import { createTerminalIO, type TerminalSize } from './terminal-io'
-import { type LinkInfo, linkAtPoint, openLinkAtPoint } from './terminal-link'
-import { createLongPressRecognizer } from './long-press'
+import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, handlePasteAction, type PasteDestination } from './keyboard'
 import { LinkActionSheet } from './link-action-sheet'
-import { TerminalTextSheet } from './terminal-text-sheet'
-import { pressedBufferRow, readTerminalText } from './terminal-text'
-import { decideViewportResize, sameSize } from './terminal-resize'
-import { type WsState, wsStateOnClose, wsStateOnOutput } from './ws-state'
+import { createLongPressRecognizer } from './long-press'
+import { attachMobileInputHandler } from './mobile-input'
+import { MOCK_BY_ID } from './mock-data/index'
+import { refreshAtlasWhenIconFontLoads } from './nerd-font'
+import { BSU, createReplayBuffer, ESU, startsWith } from './replay'
+import type { ResolvedTerminalOptions } from './settings-schema'
 import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
 import { TerminalFindBar } from './terminal-find'
-import { MOCK_BY_ID } from './mock-data/index'
+import { createTerminalIO, type TerminalSize } from './terminal-io'
+import { type LinkInfo, linkAtPoint, openLinkAtPoint } from './terminal-link'
+import { decideViewportResize, sameSize } from './terminal-resize'
+import { pressedBufferRow, readTerminalText } from './terminal-text'
+import { TerminalTextSheet } from './terminal-text-sheet'
+import { pushError } from './toasts'
+import { isTouchDevice } from './touch'
 import type { Session } from './types'
+import { loadWebglRenderer } from './webgl-renderer'
+import { type WsState, wsStateOnClose, wsStateOnOutput } from './ws-state'
 
 // ── Config ──
 
@@ -36,6 +37,7 @@ const CHECKPOINT_BROWSER_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J')
 const CHECKPOINT_SGR_RESET = encoder.encode('\x1b[0m')
 
 type CheckpointMargins = { top: number, bottom: number, rows: number }
+type SessionConnection = { readonly sessionId: string, readonly ws: WebSocket }
 
 /**
  * Add browser-only buffer authority at the complete checkpoint boundary.
@@ -339,7 +341,8 @@ export function TerminalView({
   const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
+  // Session ID and socket form one atomic connection identity.
+  const connectionRef = useRef<SessionConnection | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disposed = useRef(false)
   const currentSessionId = useRef(session.id)
@@ -439,7 +442,7 @@ export function TerminalView({
     // viewport event. The server echo for this exact size re-opens the gate.
     resetResizeEchoGate()
 
-    const ws = wsRef.current
+    const ws = connectionRef.current?.ws
     if (!ws || ws.readyState !== WebSocket.OPEN) return
 
     announceResize(ws, size)
@@ -639,14 +642,15 @@ export function TerminalView({
     }
 
     const sendRawInput = (data: string) => {
-      const ws = wsRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      const connection = connectionRef.current
+      if (!connection || connection.sessionId !== currentSessionId.current
+          || connection.ws.readyState !== WebSocket.OPEN) return
       // Only re-assert focus if the terminal already had it (keyboard
       // open). Grabbing focus unconditionally would pop the on-screen
       // keyboard on every toolbar key, even when it was closed — the
       // whole point of the toolbar is to work with the keyboard down.
       const hadFocus = document.activeElement === term.textarea
-      ws.send(new TextEncoder().encode(data))
+      connection.ws.send(new TextEncoder().encode(data))
       if (hadFocus) term.focus()
     }
 
@@ -659,24 +663,43 @@ export function TerminalView({
 
     onInputReady?.(sendRawInput)
     terminalScrollToBottom.value = () => term.scrollToBottom()
-    // The paste trigger reads bracketedPasteMode and the clipboard fresh
-    // on every invocation: bracketed mode flips at runtime as TUIs come
-    // and go, and the clipboard contents are obviously volatile. Sharing
-    // handlePasteAction with the keybind path means long-press paste gets
-    // binary-paste support without divergent code.
-    pasteActionRef.current = () => {
-      void handlePasteAction({
-        sessionId: session.id,
+    const pasteFeedback = (kind: 'info' | 'error', message: string) => {
+      if (kind === 'error') {
+        console.warn('[paste]', message)
+        pushError(message)
+      }
+    }
+    const getPasteDestination = (): PasteDestination | null => {
+      const connection = connectionRef.current
+      if (!connection || connection.sessionId !== currentSessionId.current
+          || connection.ws.readyState !== WebSocket.OPEN) return null
+      return {
+        sessionId: connection.sessionId,
         bracketedPasteMode: term.modes.bracketedPasteMode,
-        feedback: defaultPasteFeedback,
-        emit: sendRawInput,
-      })
+        send(text) {
+          if (connectionRef.current !== connection
+              || currentSessionId.current !== connection.sessionId
+              || connection.ws.readyState !== WebSocket.OPEN) return false
+          connection.ws.send(new TextEncoder().encode(text))
+          return true
+        },
+      }
+    }
+    // Every gesture acquires one immutable session/socket capability. The
+    // keybind, DOM paste, and mobile sheet paths therefore share routing.
+    pasteActionRef.current = () => {
+      const destination = getPasteDestination()
+      if (!destination) {
+        pasteFeedback('error', 'Paste failed: no active terminal connection')
+        return
+      }
+      void handlePasteAction(destination, pasteFeedback)
     }
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
-    const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput, session.id)
+    attachKeyboardHandler(term, sendInput, keybinds, macCommandIsCtrl, getPasteDestination, pasteFeedback)
+    const disposePasteHandler = attachPasteHandler(containerRef.current!, getPasteDestination, pasteFeedback)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write
@@ -922,8 +945,8 @@ export function TerminalView({
       terminalFindOpen.value = false
       searchAddonRef.current = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      wsRef.current?.close()
-      wsRef.current = null
+      connectionRef.current?.ws.close()
+      connectionRef.current = null
       onInputReady?.(null)
       pasteActionRef.current = null
       onFocusReady?.(null)
@@ -972,9 +995,9 @@ export function TerminalView({
     function connect() {
       if (disposed.current) return
 
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
+      if (connectionRef.current) {
+        connectionRef.current.ws.close()
+        connectionRef.current = null
       }
 
       // Tell the scroll preservation layer to force-scroll-to-bottom for
@@ -1002,10 +1025,11 @@ export function TerminalView({
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
       const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}?client=browser`)
       ws.binaryType = 'arraybuffer'
-      wsRef.current = ws
+      const connection: SessionConnection = { sessionId: session.id, ws }
+      connectionRef.current = connection
 
       ws.onopen = () => {
-        if (wsRef.current !== ws) return
+        if (connectionRef.current !== connection) return
         attempt = 0
         setWsState('open')
 
@@ -1030,13 +1054,13 @@ export function TerminalView({
 
         // First connect for this session: claim ownership by fitting the PTY
         // to our viewport. fitAndResize measures, sets viewport+pty
-        // optimistically, and sends the resize over this ws (wsRef was set
+        // optimistically, and sends the resize over this ws (connectionRef was set
         // above).
         fitAndResize()
       }
 
       ws.onmessage = (ev) => {
-        if (wsRef.current !== ws) return
+        if (connectionRef.current !== connection) return
         // Safety net: live output proves the connection works. Never show the
         // disconnected pill while data is flowing on the current socket.
         setWsState(wsStateOnOutput)
@@ -1106,7 +1130,7 @@ export function TerminalView({
         // fires *after* the replacement socket opened, and marking the
         // connection 'lost' then would leave the pill stuck on screen
         // forever while the live socket streams output behind it.
-        const isCurrent = wsRef.current === ws
+        const isCurrent = connectionRef.current === connection
         setWsState(prev => wsStateOnClose(prev, isCurrent))
         if (!isCurrent) return
         resetResizeEchoGate()
@@ -1132,8 +1156,8 @@ export function TerminalView({
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       resetResizeEchoGate()
-      wsRef.current?.close()
-      wsRef.current = null
+      connectionRef.current?.ws.close()
+      connectionRef.current = null
     }
   }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, fontReady])
 
