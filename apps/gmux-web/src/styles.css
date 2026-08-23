@@ -221,14 +221,13 @@ body {
   color: var(--text);
 }
 .sidebar-view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Touch: put the switch above the logo/header row so both pieces of
- * sidebar navigation stay together. Flex order avoids moving the node;
- * the larger targets and safe-area padding are mobile-only. */
+/* Touch: the header row (logo) docks to the bottom for thumb reach
+ * (order 3, further down), so the switch slots in right above it —
+ * both pieces of sidebar navigation stay together, inside the same
+ * reach. Flex order avoids moving the node; the larger targets are
+ * mobile-only. */
 @media (pointer: coarse) {
-  .sidebar-view-toggle {
-    order: -1;
-    padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 4px;
-  }
+  .sidebar-view-toggle { order: 2; }
   .sidebar-view-btn { min-height: 34px; font-size: 13px; }
 }
 
@@ -1137,6 +1136,11 @@ body {
   align-items: center;
   gap: 2px;
   min-width: 0;
+  /* Tucked up under the root: without this the row sits as far from
+     its own root as from the next entry below, and the family reads
+     as two unrelated rows. The pull-up eats into the root row's
+     bottom padding (whitespace, not content). */
+  margin-top: -4px;
   padding: 1px 8px 3px calc(var(--family-indent) - var(--family-btn-pad));
 }
 
@@ -1146,13 +1150,6 @@ body {
   flex: 0 0 7px;
   width: 7px;
   text-align: center;
-}
-/* What a quiet member looks like: no state to report, so the column
-   shows the branch instead. */
-.family-branch {
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1;
 }
 /* The activity line's own glyph: the family mark, same as the header's
    trigger. Slightly larger than the 7px glyph column and centered on
@@ -1277,9 +1274,11 @@ body {
   gap: 5px;
   flex: 0 0 auto;
 }
-/* The `$`: process identity, always cyan on a process itself. Agent
-   attention and command exit status never recolor it; running versus
-   finished is expressed by summaries and the process view's sections.
+/* The `$`: process identity. Its one state is lifecycle — a running
+   process is lit cyan and set bold, a finished one dims to muted at
+   regular weight, the same filled-versus-faded language as the status
+   dots but in ink. Agent attention and command exit status never
+   recolor it.
 
    Vocabulary only: no box. The sidebar pairs it with `.family-glyph`,
    which owns the fixed column there, and repeating those properties
@@ -1289,7 +1288,12 @@ body {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1;
+  font-weight: 600;
   color: var(--accent);
+}
+.family-proc.done {
+  font-weight: 400;
+  color: var(--text-muted);
 }
 /* The panel has no glyph-column class of its own, so it gives the `$`
    the same box its status dots occupy. */

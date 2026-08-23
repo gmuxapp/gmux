@@ -49,10 +49,11 @@ function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
         href={hrefFor(session)}
         aria-current={session.id === selectedId ? 'page' : undefined}
       >
-        {/* `$` is process identity, always cyan. Agent attention never
-          * recolors it; lifecycle is structural in the processes view. */}
+        {/* `$` is process identity; its one state is lifecycle — lit
+          * while running, dimmed when finished. Agent attention never
+          * recolors it. */}
         {process
-          ? <span class="family-proc" aria-hidden="true">$</span>
+          ? <span class={`family-proc${isRunningProcess(session) ? '' : ' done'}`} aria-hidden="true">$</span>
           : <span class={`session-dot-indicator ${dot}`} aria-hidden="true" />}
         <span class="family-row-title">{session.title}</span>
         {/* Levels are ordered by this timestamp, so it has to be on
@@ -294,7 +295,7 @@ function ProcessRow({ entry, selectedId, now }: {
         href={hrefFor(session)}
         aria-current={session.id === selectedId ? 'page' : undefined}
       >
-        <span class="family-proc" aria-hidden="true">$</span>
+        <span class={`family-proc${isRunningProcess(session) ? '' : ' done'}`} aria-hidden="true">$</span>
         <span class="family-row-title">{session.title}</span>
         <span class="family-process-parent">{parent.title}</span>
         <span class="family-row-age">{formatAge(session.last_output_at ?? session.created_at, now)}</span>
