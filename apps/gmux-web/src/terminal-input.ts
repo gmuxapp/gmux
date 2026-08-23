@@ -9,7 +9,10 @@ export function canSendTerminalInput(
   currentConnection: TerminalInputConnection | null,
   expectedConnection: TerminalInputConnection | null,
   currentSessionId: string,
-): boolean {
+  // A type predicate, not just a boolean: passing means the expected
+  // connection is the current one and the current one is non-null, so
+  // callers can use their captured connection without re-checking.
+): expectedConnection is TerminalInputConnection {
   return inputClaimed
     && currentConnection !== null
     && currentConnection === expectedConnection
