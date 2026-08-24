@@ -657,9 +657,9 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
-    // follow() scrolls to the bottom itself; adding term.scrollToBottom()
-    // here would only fire a second, animated scroll for the addon to
-    // recognize and suppress.
+    // follow() already scrolls to the bottom, so a second term.scrollToBottom()
+    // here would compute a zero delta and only add a scroll event for the addon
+    // to classify.
     terminalScrollToBottom.value = () => scrollAnchor.follow()
     const pasteFeedback = (kind: 'info' | 'error', message: string) => {
       if (kind === 'error') {

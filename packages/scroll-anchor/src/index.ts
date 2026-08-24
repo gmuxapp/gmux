@@ -144,7 +144,7 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     this.cancelWipeResolution()
     this.setMode('following')
     if (!this.terminal || this.isAlternate()) return
-    this.runProgrammaticScroll(() => this.scrollToBottomWithoutAnimation(this.terminal!))
+    this.runProgrammaticScroll(() => this.terminal!.scrollToBottom())
   }
 
   /** Clear parser/transient state at an epoch boundary without changing mode. */
@@ -245,7 +245,7 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     if (this.currentMode === 'following') {
       const buffer = terminal.buffer.active
       if (buffer.viewportY < buffer.baseY) {
-        this.runProgrammaticScroll(() => this.scrollToBottomWithoutAnimation(terminal))
+        this.runProgrammaticScroll(() => terminal.scrollToBottom())
       }
     }
   }
@@ -307,12 +307,6 @@ export class ScrollAnchorAddon implements ITerminalAddon {
         this.userIntent = false
       })
     })
-  }
-
-  private scrollToBottomWithoutAnimation(terminal: Terminal): void {
-    // gmux's xterm fork accepts this optional public behavior flag even though
-    // its generated declaration still exposes the upstream zero-arg shape.
-    ;(terminal.scrollToBottom as (disableSmoothScroll?: boolean) => void)(true)
   }
 
   private captureSnapshot(): ScrollAnchorSnapshot {

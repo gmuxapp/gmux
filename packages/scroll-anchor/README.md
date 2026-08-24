@@ -5,7 +5,7 @@ An xterm.js addon that separates two terminal scroll modes:
 - **following** keeps the viewport at the newest output;
 - **anchored** lets xterm preserve the user's viewport natively while output streams, and restores a content/distance anchor after `CSI 3 J` clears scrollback.
 
-Wheel and touch movement enter anchored mode. Reaching the bottom, or calling `follow()`, returns to following mode. The addon also exposes DEC 2026 synchronized-output state and a combined `busy` fence for integrations that must defer terminal resizes through post-wipe viewport synchronization.
+Wheel and touch movement enter anchored mode. Reaching the bottom, or calling `follow()`, returns to following mode. The addon also exposes a `busy` fence for integrations that must defer terminal resizes through DEC 2026 synchronized output and post-wipe viewport synchronization.
 
 ```ts
 import { ScrollAnchorAddon } from '@gmux/scroll-anchor'
@@ -27,9 +27,9 @@ Two timing limitations are accepted for this version:
 - With `smoothScrollDuration > 0`, parsed output can land between a wheel event and its first animation frame. Parsing clears the intent latch, so that notch can be reverted; the default duration of `0` is unaffected. A follow-up could correlate latch expiry with xterm's pending scroll animation instead of `onWriteParsed`.
 - During an ED3 wipe-resolution fence, scrollbar or keyboard arrival at bottom does not enter following mode because an output-driven transient also reports 0/0. Explicit wheel/touch intent at bottom is still recognized.
 
-## xterm compatibility note
+## Smooth scrolling
 
-Programmatic following uses `scrollToBottom(true)` to disable smooth scrolling. The gmux xterm fork supports this optional argument, although its generated public declaration still has the upstream zero-argument signature; the addon contains a narrow cast for that mismatch. Other xterm builds ignore extra JavaScript arguments, but consumers should verify their desired smooth-scroll behavior.
+Programmatic following calls the public `Terminal.scrollToBottom()`, which takes no arguments: xterm's public wrapper does not forward the internal `disableSmoothScroll` flag, so following animates whenever `smoothScrollDuration` is non-zero. With the default of `0` the viewport moves synchronously. See the limitations above for the behavior that non-zero durations imply.
 
 ## Monorepo development
 
