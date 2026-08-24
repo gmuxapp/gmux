@@ -89,6 +89,21 @@ async function scrollToBottom(page: Page): Promise<void> {
   await page.evaluate(() => (window as any).__gmuxTerm.scrollToBottom())
 }
 
+/** Mark a programmatic test setup scroll as wheel intent for the addon. */
+async function userScrollToLine(page: Page, line: number): Promise<void> {
+  const box = await page.locator('.xterm').boundingBox()
+  if (!box) throw new Error('xterm has no bounding box')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  // A real wheel event establishes anchored mode; the absolute scroll that
+  // follows only makes each legacy contract's buffer geometry deterministic.
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.wheel(0, -120)
+    await page.waitForTimeout(30)
+  }
+  await page.waitForFunction(() => (window as any).__gmuxScrollAnchor?.mode === 'anchored')
+  await page.evaluate((target) => (window as any).__gmuxTerm.scrollToLine(target), line)
+}
+
 test.describe('terminal scrollback (jump-to-top bug)', () => {
   test.beforeEach(async ({ page }) => {
     await openApp(page)
@@ -281,7 +296,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
 
     // Scroll up by 20 lines. We pick an absolute line halfway up.
     const target = Math.max(1, baseline.baseY - 20)
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    await userScrollToLine(page, target)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(target)
     expect(beforeBurst.viewportY).toBeLessThan(beforeBurst.baseY)
@@ -427,7 +442,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
 
     // Scroll up well into the seeded backscroll.
     const target = Math.floor(baseline.baseY / 2)
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    await userScrollToLine(page, target)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(target)
 
@@ -471,7 +486,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
 
     const distance = 3
     const target = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    await userScrollToLine(page, target)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
 
@@ -527,7 +542,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // contract under test is content matching, not seed numbering.
     const distance = 10
     const targetY = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    await userScrollToLine(page, targetY)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(targetY)
     const targetText = await page.evaluate((y) => {
@@ -592,7 +607,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
 
     const distance = 5
     const targetY = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    await userScrollToLine(page, targetY)
     const targetText = await page.evaluate((y) => {
       const term = (window as any).__gmuxTerm
       const line = term.buffer.active.getLine(y)
@@ -683,7 +698,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     const preWipeDistance = preWipeBaseY - targetY
     expect(preWipeDistance).toBeGreaterThan(15)
 
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    await userScrollToLine(page, targetY)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(targetY)
 
@@ -752,7 +767,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // dramatic in the assertion message.
     const distance = 3
     const target = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    await userScrollToLine(page, target)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
     const prevBaseY = beforeBurst.baseY

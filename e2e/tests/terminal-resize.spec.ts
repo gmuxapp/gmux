@@ -59,7 +59,65 @@ test.describe('terminal resize', () => {
 })
 
 test.describe('terminal resize — reconnect', () => {
-  test('reconnect after network blip does not re-claim', async ({ page, context }) => {
+  test('does not yank a scrolled-up reader until reconnect replay completes', async ({ page }) => {
+    await page.addInitScript(() => {
+      ;(window as any).__allWs = [] as WebSocket[]
+      ;(window as any).__blockTerminalReconnect = false
+      const OriginalWebSocket = window.WebSocket
+      ;(window as any).WebSocket = function (...args: ConstructorParameters<typeof WebSocket>) {
+        const original = String(args[0])
+        const url = (window as any).__blockTerminalReconnect && original.includes('/ws/')
+          ? 'ws://127.0.0.1:1/unavailable'
+          : original
+        const ws = new OriginalWebSocket(url, ...(args.slice(1) as any))
+        ;(window as any).__allWs.push(ws)
+        return ws
+      } as unknown as typeof WebSocket
+      Object.assign((window as any).WebSocket, OriginalWebSocket)
+      ;(window as any).WebSocket.prototype = OriginalWebSocket.prototype
+    })
+
+    await openApp(page)
+    await gotoTestSession(page)
+    const payload = Array.from({ length: 200 }, (_, i) => `reconnect-seed-${i}\r\n`).join('')
+    await page.evaluate((encoded) => (window as any).__gmuxInject(encoded), Buffer.from(payload).toString('base64'))
+    await page.waitForTimeout(200)
+    const box = await page.locator('.xterm').boundingBox()
+    if (!box) throw new Error('xterm has no bounding box')
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    for (let i = 0; i < 5; i++) await page.mouse.wheel(0, -120)
+    const before = await page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm.buffer.active
+      return { viewportY: buffer.viewportY, baseY: buffer.baseY }
+    })
+    expect(before.viewportY).toBeLessThan(before.baseY)
+
+    await page.evaluate(() => {
+      ;(window as any).__blockTerminalReconnect = true
+      for (const ws of (window as any).__allWs as WebSocket[]) {
+        if (ws.readyState === WebSocket.OPEN) ws.close()
+      }
+    })
+    await expect(page.locator('.terminal-disconnected-pill')).toBeVisible({ timeout: 10_000 })
+    await page.waitForTimeout(800)
+    const during = await page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm.buffer.active
+      return { viewportY: buffer.viewportY, baseY: buffer.baseY }
+    })
+    expect(during.viewportY).toBeLessThan(during.baseY)
+    expect(during.viewportY).toBe(before.viewportY)
+
+    await page.evaluate(() => { (window as any).__blockTerminalReconnect = false })
+    await expect(page.locator('.terminal-disconnected-pill')).not.toBeVisible({ timeout: 10_000 })
+    await page.waitForTimeout(1000)
+    const after = await page.evaluate(() => {
+      const buffer = (window as any).__gmuxTerm.buffer.active
+      return { viewportY: buffer.viewportY, baseY: buffer.baseY }
+    })
+    expect(after.viewportY).toBe(after.baseY)
+  })
+
+  test('reconnect after network blip does not re-claim', async ({ page }) => {
     // Instrument WS.send and expose a helper to force-close WebSockets,
     // since context.setOffline doesn't immediately sever WS connections.
     await page.addInitScript(() => {

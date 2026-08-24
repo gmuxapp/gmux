@@ -1,24 +1,34 @@
 language: javascript
 
+# No deps on protocol:build / scroll-anchor:build: both workspace packages
+# resolve from TypeScript source in-repo (see their package.json), so no
+# task ordering is required to consume them. Their own build/lint tasks
+# still run via the `:build` / `:lint` fan-out, which keeps the publishable
+# dist output compiling in CI. The package sources are declared as inputs
+# instead: the deps were also this project's cache-invalidation channel,
+# and dropping them without this would let moon serve a stale gmux-web
+# build when only package source changed.
 tasks:
   dev:
     command: pnpm exec vite
-    deps:
-      - protocol:build
     preset: server
   build:
     command: pnpm exec vite build
-    deps:
-      - protocol:build
     inputs:
       - "src/**/*"
       - "index.html"
       - "vite.config.ts"
+      - "/packages/protocol/src/**/*"
+      - "/packages/scroll-anchor/src/**/*"
   test:
     command: pnpm exec vitest run --passWithNoTests
-    deps:
-      - protocol:build
+    inputs:
+      - "**/*"
+      - "/packages/protocol/src/**/*"
+      - "/packages/scroll-anchor/src/**/*"
   lint:
     command: pnpm exec tsc --noEmit
-    deps:
-      - protocol:build
+    inputs:
+      - "**/*"
+      - "/packages/protocol/src/**/*"
+      - "/packages/scroll-anchor/src/**/*"

@@ -1,8 +1,15 @@
 {
-  "name": "@gmux/protocol",
+  "name": "@gmux/scroll-anchor",
   "version": "0.1.0",
+  "description": "Follow and content-anchor scroll modes for xterm.js terminals",
+  "license": "MIT",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -23,13 +30,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "lint": "tsc --noEmit"
   },
-  "dependencies": {
-    "zod": "^3.24.2"
+  "peerDependencies": {
+    "@xterm/xterm": "*"
   },
   "devDependencies": {
+    "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.288-gmux.5",
     "typescript": "^5.8.2",
     "vitest": "^3.0.7"
   }

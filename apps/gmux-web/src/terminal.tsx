@@ -1,3 +1,4 @@
+import { ScrollAnchorAddon } from '@gmux/scroll-anchor'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { SearchAddon } from '@xterm/addon-search'
@@ -354,6 +355,7 @@ export function TerminalView({
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
+  const scrollAnchorRef = useRef<ScrollAnchorAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termEpochRef = useRef(0)
 
@@ -600,6 +602,11 @@ export function TerminalView({
     term.loadAddon(searchAddon)
     searchAddonRef.current = searchAddon
     term.open(containerRef.current)
+    // Load after open so the addon can observe wheel/touch intent on
+    // terminal.element as well as parser-level output sequences.
+    const scrollAnchor = new ScrollAnchorAddon()
+    term.loadAddon(scrollAnchor)
+    scrollAnchorRef.current = scrollAnchor
     loadWebglRenderer(term)
     // The Nerd Font icon fallback loads lazily; refresh the glyph atlas once
     // it arrives so icons rasterized as tofu beforehand get redrawn.
@@ -611,25 +618,13 @@ export function TerminalView({
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     termIoRef.current = createTerminalIO(term, {
-      getState() {
-        const buf = term.buffer.active
-        return { viewportY: buf.viewportY, baseY: buf.baseY, rows: term.rows }
-      },
-      scrollToLine(line: number) { term.scrollToLine(line) },
-      scrollToBottom() { term.scrollToBottom() },
-      getLine(y: number): string | null {
-        const line = term.buffer.active.getLine(y)
-        if (!line) return null
-        const text = line.translateToString(true)
-        // Filter trivial anchors so a wipe-and-redraw doesn't snap the
-        // user to the first stretch of separators or whitespace it
-        // finds. Four visible chars is enough to be distinctive without
-        // excluding short but meaningful lines ("DONE", "PASS", etc.).
-        if (text.trim().length < 4) return null
-        return text
-      },
+      isBusy: () => scrollAnchor.busy,
+    })
+    const busyDisposable = scrollAnchor.onBusyChange((busy) => {
+      if (!busy) termIoRef.current?.busyStateChanged()
     })
     ;(window as any).__gmuxTerm = term
+    ;(window as any).__gmuxScrollAnchor = scrollAnchor
     // Test-only inject hook: pumps bytes through the same path as ws.onmessage
     // (createTerminalIO.enqueue) bypassing the WebSocket and replay buffer.
     // Used by e2e/tests/terminal-scroll.spec.ts to exercise scroll preservation
@@ -662,7 +657,10 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
-    terminalScrollToBottom.value = () => term.scrollToBottom()
+    // follow() already scrolls to the bottom, so a second term.scrollToBottom()
+    // here would compute a zero delta and only add a scroll event for the addon
+    // to classify.
+    terminalScrollToBottom.value = () => scrollAnchor.follow()
     const pasteFeedback = (kind: 'info' | 'error', message: string) => {
       if (kind === 'error') {
         console.warn('[paste]', message)
@@ -687,6 +685,11 @@ export function TerminalView({
     }
     // Every gesture acquires one immutable session/socket capability. The
     // keybind, DOM paste, and mobile sheet paths therefore share routing.
+    // The paste trigger reads bracketedPasteMode and the clipboard fresh
+    // on every invocation: bracketed mode flips at runtime as TUIs come
+    // and go, and the clipboard contents are obviously volatile. Sharing
+    // handlePasteAction with the keybind path means long-press paste gets
+    // binary-paste support without divergent code.
     pasteActionRef.current = () => {
       const destination = getPasteDestination()
       if (!destination) {
@@ -940,10 +943,12 @@ export function TerminalView({
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
+      busyDisposable.dispose()
       terminalScrolledUp.value = false
       terminalScrollToBottom.value = null
       terminalFindOpen.value = false
       searchAddonRef.current = null
+      scrollAnchorRef.current = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       connectionRef.current?.ws.close()
       connectionRef.current = null
@@ -951,6 +956,7 @@ export function TerminalView({
       pasteActionRef.current = null
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
+      ;(window as any).__gmuxScrollAnchor = null
       ;(window as any).__gmuxInject = null
       disposeIconFontWatch()
       term.dispose()
@@ -973,6 +979,7 @@ export function TerminalView({
     const epoch = termEpochRef.current + 1
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
+    scrollAnchorRef.current?.reset()
 
     const sessionChanged = terminalSessionId.current !== null
       && terminalSessionId.current !== session.id
@@ -994,19 +1001,14 @@ export function TerminalView({
 
     function connect() {
       if (disposed.current) return
+      // A dropped socket can strand an unmatched BSU. Preserve the user's
+      // mode, but clear parser/transient fences before each replay attempt.
+      scrollAnchorRef.current?.reset()
 
       if (connectionRef.current) {
         connectionRef.current.ws.close()
         connectionRef.current = null
       }
-
-      // Tell the scroll preservation layer to force-scroll-to-bottom for
-      // the replay frame. This avoids the "jump to top" bug: xterm's
-      // isUserScrolling flag can persist from the previous session, and
-      // \x1b[3J resets ybase/ydisp to 0 without clearing that flag. The
-      // force flag makes the BSU/ESU handler treat it as wasAtBottom=true
-      // regardless of the stale scroll state.
-      termIoRef.current?.forceNextScrollToBottom()
 
       // The runner's binary frame is shared with `gmux attach`, so browser
       // buffer selection is delivered as metadata rather than ANSI bytes in
@@ -1017,7 +1019,7 @@ export function TerminalView({
       const replay = createReplayBuffer((chunks) => {
         const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins)
         queueMany(prepared, () => {
-          termRef.current?.scrollToBottom()
+          scrollAnchorRef.current?.follow()
           setTermLoading(false)
         })
       })
@@ -1153,6 +1155,7 @@ export function TerminalView({
       intentionalClose = true
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
+      scrollAnchorRef.current?.reset()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       resetResizeEchoGate()
@@ -1225,7 +1228,7 @@ export function TerminalView({
         <button
           type="button"
           class="terminal-scroll-end"
-          onClick={() => termRef.current?.scrollToBottom()}
+          onClick={() => scrollAnchorRef.current?.follow()}
           title="Scroll to bottom"
         >
           End ↓

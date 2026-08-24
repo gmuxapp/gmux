@@ -1,0 +1,17 @@
+language: javascript
+
+tasks:
+  dev:
+    command: pnpm exec tsc --watch --preserveWatchOutput -p tsconfig.json
+    preset: server
+  build:
+    command: pnpm exec tsc -p tsconfig.json
+    inputs:
+      - "src/**/*"
+      - "tsconfig.json"
+    outputs:
+      - "dist"
+  test:
+    command: pnpm exec vitest run
+  lint:
+    command: pnpm exec tsc --noEmit
