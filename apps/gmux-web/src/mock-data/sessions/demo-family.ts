@@ -1,5 +1,5 @@
 // Agent families for mock mode: a 5-deep chain (exercises the header's
-// collapsed `…` crumb, every dot state, and a long title) plus a shallow
+// collapsed `…` crumb, every attention state, and a long title) plus a shallow
 // long-titled pair (crumb truncation). Without these, `?mock` has no
 // family at all and the header breadcrumbs / family panel can't be seen.
 import { type MockSession, ago } from '../types'
@@ -34,12 +34,16 @@ function fam(over: Partial<MockSession> & Pick<MockSession, 'id' | 'title'>): Mo
 export const DEMO_FAMILY: MockSession[] = [
   fam({ id: 'fam0root', title: 'orchestrator', last_output_at: ago(40), status: { active: true } }),
   fam({ id: 'fam1kid', title: 'implement drawer', parent_session_id: 'fam0root', unread: true, last_output_at: ago(2) }),
-  fam({ id: 'fam2kid', title: 'wire up the protocol adapter layer end to end', parent_session_id: 'fam1kid', status: { active: true }, last_output_at: ago(1) }),
+  // Active-error is a transient retry: the selected row stays in the active
+  // family bucket but renders the same hollow active ring in red.
+  fam({ id: 'fam2kid', title: 'wire up the protocol adapter layer end to end', parent_session_id: 'fam1kid', status: { active: true, error: true }, last_output_at: ago(1) }),
   fam({ id: 'fam3kid', title: 'refactor session store', parent_session_id: 'fam2kid', last_output_at: ago(20) }),
   fam({
     id: 'fam4kid',
     title: 'investigate a really long descendant title that should truncate somewhere sensible',
-    parent_session_id: 'fam3kid', status: { active: false, error: true }, last_output_at: ago(5),
+    // An unread terminal error supplies filterable waiting-error attention;
+    // error without unread is an acknowledged outcome and has no family bucket.
+    parent_session_id: 'fam3kid', status: { active: false, error: true }, unread: true, last_output_at: ago(5),
   }),
   // Processes owned by agents in the chain: the sidebar's family
   // activity row counts a running one under `$` (subagents get a dot),

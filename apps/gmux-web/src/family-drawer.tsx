@@ -9,11 +9,15 @@ import {
 import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import {
-  activityMap, cancelSession, familyActivityById, markSessionRead,
-  projects, sessions, sessionDotState, tabHref,
+  activityMap, cancelSession, familyActivityById, markSessionRead, ownDotState,
+  projects, sessions, tabHref,
 } from './store'
 import { pushError } from './toasts'
 import type { Session } from './types'
+
+export function familyDrawerDotState(session: Session, selectedId: string) {
+  return ownDotState(session, activityMap.value, selectedId)
+}
 
 function hrefFor(session: Session): string | undefined {
   const path = viewToPath({ kind: 'session', sessionId: session.id }, projects.value, sessions.value)
@@ -33,12 +37,10 @@ function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
 }) {
   const session = node.session
   const process = isProcessSession(session)
-  // No selection muting here, unlike the sidebar: the panel is a map of
-  // the family, and a map that blanks the row you're standing on would
-  // claim "1 error" in the counts line with no errored row in sight.
-  // (Viewing a session clears its unread/error flags server-side anyway,
-  // so the dot settles on its own a beat later.)
-  const dot = sessionDotState(session, activityMap.value)
+  // Selection acknowledges only waiting attention; durable error remains.
+  // Match every other navigation surface by muting selected waiting and
+  // waiting-error states while retaining selected active/active-error status.
+  const dot = familyDrawerDotState(session, selectedId)
   return (
     <li>
       <a

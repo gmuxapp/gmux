@@ -13,6 +13,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
+	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
 
@@ -86,6 +87,23 @@ func TestTerminalReasonAndRunEvidenceTable(t *testing.T) {
 	}
 	if !hasRunEvidence(compatSession{}, true) || !hasRunEvidence(compatSession{StartedAt: "x"}, false) || hasRunEvidence(compatSession{}, false) {
 		t.Fatal("run evidence table")
+	}
+}
+
+func TestConvertedDeadActiveSnapshotStillReportsRunnerDied(t *testing.T) {
+	exit := 1
+	row := central.SessionRow{SessionView: centralstore.SessionView{Session: centralstore.Session{
+		ID: "dead", CreatedAt: 1, StartedAt: func() *centralstore.UnixMillis { v := centralstore.UnixMillis(1); return &v }(),
+		ExitCode: &exit, StatusReported: true, Active: true,
+	}}}
+	payload := (&wire.Converter{}).Sessions(&central.SessionsPayload{Sessions: []central.SessionRow{row}}, nil, nil)
+	if len(payload.Sessions) != 1 || payload.Sessions[0].Status == nil || !payload.Sessions[0].Status.Active {
+		t.Fatalf("converter dropped durable active-at-death: %#v", payload.Sessions)
+	}
+	got, done := terminalReason(legacySessionFromWire(payload.Sessions[0]), false)
+	want := waitConclusion{Reason: "died", Outcome: "error", Cause: "runner_died"}
+	if !done || got != want {
+		t.Fatalf("converted wait verdict = %+v,%v; want %+v,true", got, done, want)
 	}
 }
 

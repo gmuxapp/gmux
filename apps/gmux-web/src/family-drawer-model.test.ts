@@ -374,7 +374,7 @@ describe('filtering by a state the tally counts', () => {
       last_output_at: new Date(Date.parse('2026-08-04T20:00:00Z') - minutes * 60_000).toISOString(),
       ...extra,
     })
-  const errored = { status: { active: true, error: true } } as const
+  const errored = { unread: true, status: { active: false, error: true } } as const
   const waiting = { unread: true } as const
 
   /** A family with something of each state, plus filler to make the
@@ -475,8 +475,8 @@ describe('the budget charges only for folds that get drawn', () => {
     const snapshot = [at(0, 'root', undefined)]
     for (const branch of ['a', 'b', 'c']) {
       snapshot.push(at(start[branch], branch, 'root'))
-      snapshot.push(at(start[branch] + 1.5, `${branch}1`, branch, { status: { active: true, error: true } }))
-      snapshot.push(at(start[branch] + 1.6, `${branch}2`, branch, { status: { active: true, error: true } }))
+      snapshot.push(at(start[branch] + 1.5, `${branch}1`, branch, { unread: true, status: { active: false, error: true } }))
+      snapshot.push(at(start[branch] + 1.6, `${branch}2`, branch, { unread: true, status: { active: false, error: true } }))
       for (let i = 0; i < 50; i++) snapshot.push(at(20 + i, `${branch}-idle-${i}`, branch))
     }
     const tree = projectFamily(snapshot[0], snapshot).tree

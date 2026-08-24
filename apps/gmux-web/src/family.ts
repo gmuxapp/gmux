@@ -2,6 +2,7 @@ import type { ProjectItem, Session } from './types'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
 import { sidebarProjectForSession } from './projects'
+import { sessionPresentationState } from './presentation'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
@@ -294,10 +295,13 @@ export type FamilyState = 'error' | 'active' | 'running' | 'waiting'
 
 export function familyStateOf(session: Session): FamilyState | null {
   if (isProcessSession(session)) return isRunningProcess(session) ? 'running' : null
-  if (session.alive && session.status?.error) return 'error'
-  if (session.alive && session.status?.active) return 'active'
-  if (session.unread) return 'waiting'
-  return null
+  switch (sessionPresentationState(session)) {
+    case 'active':
+    case 'active-error': return 'active'
+    case 'waiting-error': return 'error'
+    case 'waiting': return 'waiting'
+    case 'none': return null
+  }
 }
 
 /** The standard family numbers: what the descendants of one

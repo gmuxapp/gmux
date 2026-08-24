@@ -26,6 +26,7 @@ import {
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
 import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
 import { pushError } from './toasts'
+import { isWaitingPresentation, sessionPresentationState, type SessionPresentationState } from './presentation'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, mockWorld } from './mock-data/index'
@@ -162,7 +163,7 @@ export function applyPending(
   for (const s of rawSessions) {
     if (dismissed.has(s.id)) continue
     out.push(readTokens.get(s.id)?.has(s.unread_token ?? '')
-      ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status }
+      ? { ...s, unread: false }
       : s)
   }
   return out
@@ -177,7 +178,7 @@ function isResolved(m: PendingMutation, rawSessions: Session[]): boolean {
       const s = rawSessions.find(x => x.id === m.id)
       if (!s) return true
       if ((s.unread_token ?? '') !== m.token) return true
-      return !s.unread && !s.status?.error
+      return !s.unread
     }
     case 'dismiss':
       return !rawSessions.some(s => s.id === m.id)
@@ -380,22 +381,26 @@ export const peerStatusByName = computed<ReadonlyMap<string, string>>(() => {
 
 /** True when a session lives on a peer we can't reach right now.
  *  Local sessions (peer === undefined) are never unavailable. */
-/**
- * Single source of truth for the visual dot state of a session, used
- * by both the sidebar row and the wide dashboard row. Encodes the
- * precedence: error > active > unread > recent terminal activity.
- * The 'working' DotState token is UI/CSS vocabulary for the active dot;
- * the session fact behind it is `status.active`.
- * Selection-aware muting ("unread is suppressed when you're already
- * viewing the session") lives at the call site, not here.
- */
+/** Map the canonical semantic state to the app's established CSS vocabulary. */
+export function presentationDotState(state: SessionPresentationState): DotState {
+  switch (state) {
+    case 'active': return 'working'
+    case 'active-error': return 'active-error'
+    case 'waiting': return 'unread'
+    case 'waiting-error': return 'error'
+    case 'none': return 'none'
+  }
+}
+
+/** Single status/attention derivation used by row, header, family, and mobile
+ * surfaces. Transient terminal activity is only a fallback after semantic
+ * state has resolved to none. */
 export function sessionDotState(
   session: Session,
   am: ReadonlyMap<string, 'active' | 'fading'>,
 ): DotState {
-  if (session.alive && session.status?.error)   return 'error'
-  if (session.alive && session.status?.active) return 'working'
-  if (session.unread)                            return 'unread'
+  const semantic = presentationDotState(sessionPresentationState(session))
+  if (semantic !== 'none') return semantic
   const act = am.get(session.id)
   if (act === 'active') return 'active'
   if (act === 'fading') return 'fading'
@@ -874,18 +879,20 @@ export const selected = computed(() => {
 })
 
 /** Dot state for the mobile hamburger: summarizes background session activity. */
-export type DotState = 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none'
+export type DotState = 'working' | 'active-error' | 'error' | 'unread' | 'active' | 'fading' | 'none'
 
 export const backgroundActivity = computed((): DotState => {
   const sel = selectedId.value
   const am = activityMap.value
-  const others = sessions.value.filter(s => s.id !== sel && s.alive)
-  if (others.some(s => s.status?.error))          return 'error'
-  if (others.some(s => s.status?.active))        return 'working'
-  if (others.some(s => s.unread))                 return 'unread'
-  if (others.some(s => am.get(s.id) === 'active')) return 'active'
-  if (others.some(s => am.get(s.id) === 'fading')) return 'fading'
-  return 'none'
+  let result: DotState = 'none'
+  for (const s of sessions.value) {
+    // Preserve the mobile summary's live-session scope. Current presentation
+    // is derived canonically rather than reading status/error independently.
+    if (s.id === sel || !s.alive) continue
+    const dot = sessionDotState(s, am)
+    if (AGGREGATE_DOT_RANK[dot] > AGGREGATE_DOT_RANK[result]) result = dot
+  }
+  return result
 })
 
 /** Count of unread sessions (excluding selected).
@@ -931,7 +938,13 @@ export const unreadCount = computed(() => {
   return n
 })
 
-const DOT_RANK: Record<DotState, number> = { none: 0, fading: 1, active: 2, unread: 3, working: 4, error: 5 }
+/** Aggregate precedence intentionally differs from a session's own semantic
+ * derivation only for waiting-error attention: it outranks an active sibling
+ * so the failure cannot disappear. Ordinary waiting remains below active,
+ * matching the established family aggregation behavior. */
+const AGGREGATE_DOT_RANK: Record<DotState, number> = {
+  none: 0, fading: 1, active: 2, unread: 3, working: 4, 'active-error': 5, error: 6,
+}
 
 /** Family-aggregated dot state, keyed by presentation-root session id.
  *
@@ -941,8 +954,9 @@ const DOT_RANK: Record<DotState, number> = { none: 0, fading: 1, active: 2, unre
  * never becomes an agent-style aggregate dot.
  *
  * Selection muting happens per member before aggregation: the selected
- * session's own error/unread is dropped ("you're already looking at it"),
- * while its siblings' attention states still surface on the root row.
+ * session's waiting/waiting-error attention is dropped ("you're already
+ * looking at it"), while active/active-error status and sibling attention
+ * still surface on the root row.
  * Standalone sessions are their own root, so this map is the single
  * dot-state source for every root-level row. */
 export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
@@ -957,9 +971,9 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
     // their own row state because no family root stands in for them.
     if (isProcessSession(s) && rootId !== s.id) continue
     let own = sessionDotState(s, am)
-    if (s.id === sel && (own === 'error' || own === 'unread')) own = 'none'
+    if (s.id === sel && isWaitingPresentation(sessionPresentationState(s))) own = 'none'
     const prev = map.get(rootId)
-    if (prev === undefined || DOT_RANK[own] > DOT_RANK[prev]) map.set(rootId, own)
+    if (prev === undefined || AGGREGATE_DOT_RANK[own] > AGGREGATE_DOT_RANK[prev]) map.set(rootId, own)
   }
   return map
 })
@@ -976,7 +990,7 @@ export function ownDotState(
   sel: string | null,
 ): DotState {
   const own = sessionDotState(session, am)
-  return session.id === sel && (own === 'error' || own === 'unread') ? 'none' : own
+  return session.id === sel && isWaitingPresentation(sessionPresentationState(session)) ? 'none' : own
 }
 
 /** The selected session projected onto its family's sidebar row.
@@ -1210,7 +1224,10 @@ export function toUISession(s: ProtocolSession): Session {
     exited_at: s.exited_at ?? null,
     title: s.title ?? s.command?.[0] ?? 'session',
     subtitle: s.subtitle ?? '',
-    status: s.status ?? null,
+    // The shared wire preserves durable active-at-death for gmux wait. At the
+    // local+peer UI funnel, project it to current activity and defend against
+    // older/version-skewed peers that can send dead+active snapshots.
+    status: s.status ? { ...s.status, active: Boolean(s.alive && s.status.active) } : null,
     unread: s.unread ?? false,
     unread_token: s.unread_token ?? '',
     resumable: s.resumable ?? false,
@@ -1472,7 +1489,7 @@ type ReadObservation = { id: string; token: string }
 export function createViewConsumptionTracker() {
   let establishedSelection: string | null = null
   const unreadObservation = (id: string | null, sess: Session | null): ReadObservation | null =>
-    id && sess && (sess.unread || sess.status?.error)
+    id && sess?.unread
       ? { id, token: sess.unread_token ?? '' }
       : null
   return {

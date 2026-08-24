@@ -224,6 +224,34 @@ test.describe('the family line and the panel tally', () => {
     expect(segments.some(s => /waiting|active|error/.test(s.text ?? ''))).toBe(true)
   })
 
+  test('a selected active retry stays active but uses the hollow red ring', async ({ page }) => {
+    await openMockSidebar(page, '/my-project/claude/~fam2kid')
+    await page.locator('.family-trigger').click()
+
+    const retry = page.locator('.family-row[aria-current="page"] .session-dot-indicator')
+    await expect(retry).toHaveClass(/active-error/)
+    const terminalError = page.locator('.family-row').filter({
+      hasText: 'investigate a really long descendant',
+    }).locator('.session-dot-indicator')
+    await expect(terminalError).toHaveClass(/error/)
+
+    const colors = await page.evaluate(() => {
+      const retryDot = document.querySelector('.family-row[aria-current="page"] .session-dot-indicator')
+      const errorRow = [...document.querySelectorAll('.family-row')].find(row =>
+        row.textContent?.includes('investigate a really long descendant'))
+      const errorDot = errorRow?.querySelector('.session-dot-indicator')
+      if (!retryDot || !errorDot) throw new Error('expected retry and terminal-error dots')
+      return {
+        retryBackground: getComputedStyle(retryDot).backgroundColor,
+        retryBorder: getComputedStyle(retryDot).borderColor,
+        errorBackground: getComputedStyle(errorDot).backgroundColor,
+      }
+    })
+    expect(colors.retryBackground).toBe('rgba(0, 0, 0, 0)')
+    expect(colors.retryBorder).toBe(colors.errorBackground)
+    await expect(page.locator('.family-count').filter({ hasText: '1 active' })).toBeVisible()
+  })
+
   test('each tally filters the tree to its own state, and back', async ({ page }) => {
     // Standing on an `active` member, so the `error` filter excludes the
     // very row you're on — the case that has to keep working.
