@@ -618,10 +618,6 @@ export function TerminalView({
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     termIoRef.current = createTerminalIO(term, {
-      // LOAD-BEARING: this must be `busy`, not `syncActive`. ED3 closes DEC
-      // 2026 before the addon's onWriteParsed + rAF viewport catch-up; using
-      // syncActive lets resize race that restore. The real-addon integration
-      // regression is in terminal-io.test.ts ("through ED3 and its rAF").
       isBusy: () => scrollAnchor.busy,
     })
     const busyDisposable = scrollAnchor.onBusyChange((busy) => {
@@ -661,10 +657,10 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
-    terminalScrollToBottom.value = () => {
-      scrollAnchor.follow()
-      term.scrollToBottom()
-    }
+    // follow() scrolls to the bottom itself; adding term.scrollToBottom()
+    // here would only fire a second, animated scroll for the addon to
+    // recognize and suppress.
+    terminalScrollToBottom.value = () => scrollAnchor.follow()
     const pasteFeedback = (kind: 'info' | 'error', message: string) => {
       if (kind === 'error') {
         console.warn('[paste]', message)
@@ -1024,7 +1020,6 @@ export function TerminalView({
         const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins)
         queueMany(prepared, () => {
           scrollAnchorRef.current?.follow()
-          termRef.current?.scrollToBottom()
           setTermLoading(false)
         })
       })
@@ -1233,10 +1228,7 @@ export function TerminalView({
         <button
           type="button"
           class="terminal-scroll-end"
-          onClick={() => {
-            scrollAnchorRef.current?.follow()
-            termRef.current?.scrollToBottom()
-          }}
+          onClick={() => scrollAnchorRef.current?.follow()}
           title="Scroll to bottom"
         >
           End ↓

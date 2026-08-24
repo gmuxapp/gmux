@@ -9,7 +9,6 @@
     "dist",
     "README.md"
   ],
-  "//": "In-repo consumers resolve TypeScript source: no build step and no task ordering is required for vite, vitest, tsc, moon, goreleaser or docker to consume this package. `publishConfig` swaps the entry points to the compiled output when the package is actually published, so a published consumer still gets JS + .d.ts. Pointing the default entries at dist instead makes every build path that doesn't run `scroll-anchor:build` first fail with 'Failed to resolve entry for package' (the goreleaser before-hook calls vite directly, bypassing moon).",
   "exports": {
     ".": {
       "types": "./src/index.ts",

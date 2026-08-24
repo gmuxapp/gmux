@@ -309,29 +309,34 @@ describe('ScrollAnchorAddon', () => {
   it('treats repeated BSU as idempotent and one ESU closes it', () => {
     const h = makeHarness()
     const changes: boolean[] = []
-    h.addon.onSyncActiveChange(active => { changes.push(active) })
+    h.addon.onBusyChange(busy => { changes.push(busy) })
     h.csi('?h', [2026])
     h.csi('?h', [[2026]])
-    expect(h.addon.syncActive).toBe(true)
+    expect(h.addon.busy).toBe(true)
+    // ONE close for two opens. xterm's mode set is idempotent, so the stream
+    // considers synchronized output finished here and the fence must open.
+    // A depth counter would sit at 1 and starve every later resize for the
+    // lifetime of the session, which is the bug this boolean replaced.
     h.csi('?l', [2026])
-    h.csi('?l', [2026])
-    expect(h.addon.syncActive).toBe(false)
+    expect(h.addon.busy).toBe(false)
+    // One open, one close: no duplicate events to churn hosts either.
     expect(changes).toEqual([true, false])
   })
 
   it('reset clears unmatched sync, wipe, snapshot, and latched intent', () => {
     const h = makeHarness()
-    const sync: boolean[] = []
-    h.addon.onSyncActiveChange(active => { sync.push(active) })
+    const busy: boolean[] = []
+    h.addon.onBusyChange(value => { busy.push(value) })
     h.setBuffer(20, 20)
     h.userScroll(10)
     h.csi('?h', [2026])
     h.csi('J', [3])
     h.armIntent()
     h.addon.reset()
-    expect(h.addon.syncActive).toBe(false)
+    // An epoch reset drops the ESU chunk, so reset must reopen the fence
+    // itself or every later resize is starved for the session's lifetime.
     expect(h.addon.busy).toBe(false)
-    expect(sync).toEqual([true, false])
+    expect(busy).toEqual([true, false])
     h.outputScroll(8)
     expect(h.addon.mode).toBe('anchored')
     h.parsed()

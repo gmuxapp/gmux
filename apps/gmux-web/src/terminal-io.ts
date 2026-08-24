@@ -26,7 +26,6 @@ export interface TerminalIO {
   requestResize(size: TerminalSize, epoch: number): void
   /** Reconsider a resize after the addon's combined busy fence changes. */
   busyStateChanged(): void
-  hasPendingWork(): boolean
 }
 
 /**
@@ -99,10 +98,5 @@ export function createTerminalIO(term: TerminalWriter, options: TerminalIOOption
     },
 
     busyStateChanged() { pump() },
-
-    hasPendingWork() {
-      dropStaleFront()
-      return writeInFlight || queue.length > 0 || (!!pendingResize && pendingResize.epoch === currentEpoch)
-    },
   }
 }

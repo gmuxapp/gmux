@@ -33,4 +33,8 @@ Programmatic following uses `scrollToBottom(true)` to disable smooth scrolling. 
 
 ## Monorepo development
 
-The package's types point at the publishable `dist/index.d.ts`. Build it before running gmux-web TypeScript directly: `pnpm -C packages/scroll-anchor build` followed by `pnpm -C apps/gmux-web lint`. Moon tasks encode this dependency automatically.
+No build step is needed to consume this package in-repo. `main`, `types` and `exports` point at TypeScript source, so vite, vitest, tsc, moon, goreleaser and docker all resolve it without depending on task ordering. `publishConfig` swaps those entries to the compiled `dist/` output at publish time, so published consumers still get JavaScript plus declarations.
+
+Pointing the default entries at `dist/` instead breaks any path that does not run this package's build first — the goreleaser release hook invokes vite directly, bypassing moon, and fails with `Failed to resolve entry for package`.
+
+`pnpm -C packages/scroll-anchor build` still produces `dist/` for publication and as a type check.

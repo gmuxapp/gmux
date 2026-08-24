@@ -72,7 +72,6 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   private terminal: Terminal | null = null
   private disposables: IDisposable[] = []
   private readonly modeEmitter = new EventEmitter<ScrollAnchorMode>()
-  private readonly syncEmitter = new EventEmitter<boolean>()
   private readonly busyEmitter = new EventEmitter<boolean>()
   private currentMode: ScrollAnchorMode = 'following'
   private snapshot: ScrollAnchorSnapshot = { line: null, distanceFromBottom: 0 }
@@ -85,8 +84,12 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   private readonly isAnchorLine: (text: string) => boolean
 
   readonly onModeChange: IEvent<ScrollAnchorMode> = this.modeEmitter.event
-  readonly onSyncActiveChange: IEvent<boolean> = this.syncEmitter.event
-  /** Fires for the combined sync/wipe fence used to defer terminal resizes. */
+  /**
+   * Fires for the fence a host must respect before resizing the terminal.
+   * Deliberately the only fence on the public API: it already covers DEC 2026
+   * and post-ED3 re-resolution, and exposing the narrower synchronized-output
+   * flag alongside it only invites hosts to pick the one that races.
+   */
   readonly onBusyChange: IEvent<boolean> = this.busyEmitter.event
 
   constructor(options: ScrollAnchorOptions = {}) {
@@ -94,7 +97,6 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   }
 
   get mode(): ScrollAnchorMode { return this.currentMode }
-  get syncActive(): boolean { return this.syncMode }
   get busy(): boolean { return this.syncMode || this.wipePending || this.wipeSyncRAF !== null }
 
   activate(terminal: Terminal): void {
@@ -148,14 +150,12 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   /** Clear parser/transient state at an epoch boundary without changing mode. */
   reset(): void {
     const wasBusy = this.busy
-    const wasSyncActive = this.syncMode
     this.cancelWipeRAF()
     this.syncMode = false
     this.wipePending = false
     this.snapshot = { line: null, distanceFromBottom: 0 }
     this.clearUserIntent()
     this.pendingProgrammaticScrolls = 0
-    if (wasSyncActive) this.syncEmitter.fire(false)
     this.fireBusyChange(wasBusy)
   }
 
@@ -164,7 +164,6 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     for (const disposable of this.disposables.splice(0)) disposable.dispose()
     this.terminal = null
     this.modeEmitter.dispose()
-    this.syncEmitter.dispose()
     this.busyEmitter.dispose()
   }
 
@@ -210,7 +209,7 @@ export class ScrollAnchorAddon implements ITerminalAddon {
     const terminal = this.terminal
     if (!terminal || this.isAlternate()) return
 
-    if (this.wipePending && !this.syncActive) {
+    if (this.wipePending && !this.syncMode) {
       if (this.currentMode !== 'anchored') {
         const wasBusy = this.busy
         this.wipePending = false
@@ -252,10 +251,12 @@ export class ScrollAnchorAddon implements ITerminalAddon {
   }
 
   private setSyncActive(active: boolean): void {
-    if (this.syncMode === active) return
+    // A boolean, never a depth counter: xterm's mode set is idempotent, so a
+    // stream that opens DEC 2026 twice and closes it once has finished
+    // synchronized output. Counting depth leaves the fence latched and
+    // starves every later resize for the lifetime of the session.
     const wasBusy = this.busy
     this.syncMode = active
-    this.syncEmitter.fire(active)
     this.fireBusyChange(wasBusy)
   }
 

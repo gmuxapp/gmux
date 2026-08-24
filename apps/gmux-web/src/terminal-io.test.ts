@@ -177,7 +177,9 @@ describe('createTerminalIO', () => {
     for (const listener of parsedListeners) listener()
 
     io.requestResize({ cols: 120, rows: 40 }, 1)
-    expect(addon.syncActive).toBe(false)
+    // ESU already closed DEC 2026 here: the fence stays shut only because the
+    // addon still owes a post-ED3 re-resolution, which is the whole reason
+    // terminal-io gates on `busy` rather than synchronized output alone.
     expect(addon.busy).toBe(true)
     expect(resizes).toEqual([])
     expect(raf.current).not.toBeNull()
