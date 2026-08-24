@@ -38,3 +38,7 @@ No build step is needed to consume this package in-repo. `main`, `types` and `ex
 Pointing the default entries at `dist/` instead breaks any path that does not run this package's build first — the goreleaser release hook invokes vite directly, bypassing moon, and fails with `Failed to resolve entry for package`.
 
 `pnpm -C packages/scroll-anchor build` still produces `dist/` for publication and as a type check.
+
+Publishing must go through `pnpm publish`: the `publishConfig` entry swap is a pnpm feature that `npm publish` ignores. `src/` ships in the tarball as insurance, but an npm-published package would still resolve to TypeScript source.
+
+During `pnpm dev`, edits to this package hot-reload the module, but the live `Terminal` keeps the parser and scroll handlers registered by the previous addon instance — reload the page for addon changes to take effect.
