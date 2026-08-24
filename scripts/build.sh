@@ -19,8 +19,6 @@ mkdir -p "$BIN"
 # ── Frontend ──
 
 if [ "$skip_frontend" = false ]; then
-  echo "→ Building frontend packages…"
-  pnpm -C "$ROOT/packages/scroll-anchor" build
   echo "→ Building frontend…"
   pnpm -C "$ROOT/apps/gmux-web" exec vite build
 
