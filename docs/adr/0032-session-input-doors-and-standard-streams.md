@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-30
+**Amended:** 2026-08-25 (definite pending stdin is refused before launch)
 **Related:** ADR 0028 (CLI output channels)
 
 ## Context
@@ -16,17 +17,18 @@ stdin alone, putting a terminal into raw mode even when stdout was redirected.
 
 1. **Launcher stdin is not session input.** Input enters only through a live
    attach (including the web UI), `gmux send`, or semantic agent verbs such as
-   `gmux agent prompt`. In headless foreground mode gmux neither reads nor
-   forwards stdin. If launch-time inspection, without consuming bytes, finds
-   pending data in a pipe or unread bytes in a regular file, gmux prints a
-   best-effort stderr notice naming `gmux send <id>`. Empty pipes, character
-   devices such as `/dev/null`, sockets, unknown types, and inspection errors
-   are silent.
+   `gmux agent prompt`. In headless mode gmux neither reads nor forwards stdin.
+   If launch-time inspection, without consuming bytes, finds pending data in a
+   pipe or unread bytes in a regular file, gmux refuses the invocation before
+   minting an ID, binding a socket, starting the child, or contacting gmuxd.
+   Empty pipes, character devices such as `/dev/null`, sockets, unknown types,
+   and inspection errors remain accepted because they are common harness launch
+   sources and do not prove that data would be discarded.
 2. **The PTY merge is part of stdout.** A child's stdout and stderr are one
    terminal stream, as with `ssh -t` or `script`. That combined payload is
    relayed on gmux stdout; gmux stderr remains the channel for the session id
-   and diagnostics, including the stdin notice. This refines ADR 0028 without
-   changing its channel discipline.
+   and diagnostics, including the pre-launch stdin refusal. This refines ADR
+   0028 without changing its channel discipline.
 3. **Transparent attach requires both stdin and stdout TTYs.** Otherwise gmux
    uses the headless relay: cleaned stdout, metadata and diagnostics on stderr,
    no stdin relay, and no raw terminal mode. The same predicate governs nested
@@ -41,8 +43,8 @@ stdin alone, putting a terminal into raw mode even when stdout was redirected.
 ## Conventions survey
 
 - **tmux/screen: follow.** Server-owned terminals receive input through attach
-  or send-keys. gmux adds a foreground wait, so it warns rather than refusing
-  the non-TTY launch shape.
+  or send-keys. gmux's additional foreground wait makes proven launch-time data
+  loss actionable: pending stdin is refused before the session exists.
 - **ssh: differ deliberately.** ssh owns one command invocation; gmux owns a
   durable session with later and concurrent writers. ssh's `-n` also shows how
   implicit stdin coupling harms scripts.
@@ -64,8 +66,9 @@ stdin alone, putting a terminal into raw mode even when stdout was redirected.
   that sessions do not serve.
 - **Forward without EOF translation.** It retains stdin stealing while leaving
   draining children unable to observe EOF.
-- **Refuse piped stdin.** Agent harnesses routinely provide an empty pipe; the
-  useful compromise is a notice only when data is already pending.
+- **Refuse every non-TTY stdin source.** Agent harnesses routinely provide an
+  empty pipe or `/dev/null`; refusing only input that is definitely pending
+  prevents proven data loss without rejecting those ordinary launches.
 - **No PTY or a separate child-stderr channel.** Either removes attachable
   terminal semantics or destroys the session's ordered terminal truth.
 - **Inject VEOF at launch.** This kills agents and later-send workflows.
@@ -74,10 +77,13 @@ stdin alone, putting a terminal into raw mode even when stdout was redirected.
 
 ## Consequences
 
-`printf hi | gmux -- cat` remains an idle, addressable session, but now states
-why and how to send input. Empty harness pipes remain quiet. Redirecting stdout
-selects a cleaned headless relay and never alters the caller's terminal.
-Child-stderr bytes are intentionally part of stdout, while the id and gmux
-notices remain on stderr. In headless foreground mode, SIGINT shuts down the
-session rather than forwarding a terminal keystroke. Detached launches,
-passthrough commands, terminal sizing, and daemon behavior are unchanged.
+`printf hi | gmux -- cat` now fails synchronously instead of creating an idle
+session whose `cat` can never receive the supplied bytes or EOF. The refusal
+consumes no input and creates no session artifacts. Empty harness pipes remain
+accepted. Redirecting stdout selects a cleaned headless relay and never alters
+the caller's terminal. Child-stderr bytes are intentionally part of stdout,
+while session IDs and gmux diagnostics remain on stderr. In headless foreground
+mode, SIGINT shuts down the session rather than forwarding a terminal
+keystroke. Passthrough commands, terminal sizing, and daemon behavior are
+unchanged; explicit detached launches apply the same stdin preflight before
+re-execing the runner.

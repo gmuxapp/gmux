@@ -90,7 +90,9 @@ var verbHelpPages = map[string]string{
   gmux -d -- <cmd> [args]
 
 A session receives input only through an interactive attach, 'gmux send', or
-'gmux agent prompt'. The launching process's stdin is never forwarded.
+'gmux agent prompt'. The launching process's stdin is never forwarded. If stdin
+has pending data, gmux refuses before launching a session; redirect </dev/null
+to discard it explicitly.
 
 The child runs on a terminal, so its stdout and stderr are one stream, as in
 'ssh -t' or 'script'. That payload is written to stdout; gmux's own stderr
