@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/scrollback"
@@ -2022,5 +2023,107 @@ func TestPTYServerCommandWrapperAndExtraFiles(t *testing.T) {
 	}
 	if !strings.Contains(result, "FD4=true") {
 		t.Errorf("fd 4 not a pipe in subprocess (ExtraFiles[1] not passed): %q", result)
+	}
+}
+
+func TestRenderScreenSoftWrapRoundTripReflows(t *testing.T) {
+	const text = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB"
+	if len(text) != 100 {
+		t.Fatalf("test text length = %d", len(text))
+	}
+
+	narrow, narrowDrain := newScreen(40, 5, func(bool) {})
+	defer stopScreenDrain(narrow, narrowDrain)
+	if _, err := narrow.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := renderScreen(narrow)
+	if strings.Contains(checkpoint[:len(text)], "\r\n") {
+		t.Fatalf("checkpoint injected a visual-row break: %q", checkpoint[:len(text)])
+	}
+
+	wide, wideDrain := newScreen(80, 5, func(bool) {})
+	defer stopScreenDrain(wide, wideDrain)
+	if _, err := wide.WriteString(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	var got strings.Builder
+	occupiedRows := 0
+	for y := 0; y < wide.Height(); y++ {
+		var row strings.Builder
+		for x := 0; x < wide.Width(); x++ {
+			if c := wide.CellAt(x, y); c != nil {
+				row.WriteString(c.Content)
+			}
+		}
+		content := strings.TrimRight(row.String(), " ")
+		if content != "" {
+			occupiedRows++
+			got.WriteString(content)
+		}
+	}
+	if occupiedRows != 2 {
+		t.Fatalf("reflow occupied %d rows, want 2; checkpoint=%q got=%q", occupiedRows, checkpoint, got.String())
+	}
+	if got.String() != text {
+		t.Fatalf("text changed across checkpoint: got %q", got.String())
+	}
+}
+
+func TestRealScrollbackCheckpointKeepsPiLogicalLines(t *testing.T) {
+	const dir = "/home/mg/.local/state/gmux/sessions/sbsfn5fi"
+	var raw []byte
+	for _, name := range []string{"scrollback.0", "scrollback"} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatal(err)
+		}
+		raw = append(raw, b...)
+	}
+	if len(raw) == 0 {
+		t.Skip("local sbsfn5fi replay data is unavailable")
+	}
+
+	screen, drain := newScreen(114, 44, func(bool) {})
+	defer stopScreenDrain(screen, drain)
+	screen.SetScrollbackSize(2000)
+	if _, err := screen.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := renderScreen(screen)
+	plain := ansi.Strip(checkpoint)
+
+	// Every non-wrapped visual row ends one serialized logical line; wrapped
+	// rows must not contribute a CRLF. This checks all provenance bits in the
+	// real replay rather than relying only on the inspected samples below.
+	nonWrappedRows := 0
+	if sb := screen.Scrollback(); sb != nil {
+		for i := 0; i < sb.Len(); i++ {
+			if !sb.Wrapped(i) {
+				nonWrappedRows++
+			}
+		}
+	}
+	for y := 0; y < screen.Height(); y++ {
+		if !screen.Wrapped(y) {
+			nonWrappedRows++
+		}
+	}
+	if logicalLines := strings.Count(checkpoint, "\r\n") + 1; logicalLines != nonWrappedRows {
+		t.Fatalf("serialized logical lines=%d, non-wrapped rows=%d", logicalLines, nonWrappedRows)
+	}
+
+	// These were emitted by pi as individual logical lines and each spans
+	// more than one 114-column visual row in this recording.
+	for _, line := range []string{
+		"The stray empties are orphan working-copy commits from each abandon — not on the branch line, never pushed. Branch is 13 clean commits. Pushing:",
+		"The split landed correctly (30fafd2 = scroll-anchor, 72cd036 = protocol) but both carry the same message. Fixingthe second's description:",
+	} {
+		if !strings.Contains(plain, line) {
+			t.Fatalf("checkpoint split known logical line at a visual boundary: %q", line)
+		}
 	}
 }

@@ -649,3 +649,15 @@ func TestRenderTailRaceFreeWithResponses(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderTailJoinsSoftWrappedRows(t *testing.T) {
+	text := strings.Repeat("wrap-provenance-", 8)
+	lines, err := RenderTail(strings.NewReader(text+"\r\nHARD\r\n"), 40, 8, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{text, "HARD"}
+	if !equalLines(lines, want) {
+		t.Fatalf("got %q, want %q", lines, want)
+	}
+}
