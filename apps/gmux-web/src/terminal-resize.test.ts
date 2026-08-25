@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { decideViewportResize, sameSize } from './terminal-resize'
+import { decideViewportResize, sameSize, shouldQueueResizeEcho } from './terminal-resize'
 
 describe('sameSize', () => {
-  test('matches identical sizes', () => {
-    expect(sameSize({ cols: 80, rows: 24 }, { cols: 80, rows: 24 })).toBe(true)
+  test('matches identical sizes and suppresses an echo already applied by a claim barrier', () => {
+    const claim = { cols: 80, rows: 24 }
+    expect(sameSize(claim, { cols: 80, rows: 24 })).toBe(true)
+    expect(shouldQueueResizeEcho({ cols: 80, rows: 24 }, claim)).toBe(false)
+    expect(shouldQueueResizeEcho({ cols: 81, rows: 24 }, claim)).toBe(true)
+    expect(shouldQueueResizeEcho(claim, null)).toBe(true)
   })
 
   test('rejects nulls and mismatches', () => {

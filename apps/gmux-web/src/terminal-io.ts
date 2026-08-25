@@ -8,11 +8,9 @@ export interface TerminalSize {
   rows: number
 }
 
-interface QueueItem {
-  epoch: number
-  data: Uint8Array
-  onWritten?: () => void
-}
+type QueueItem =
+  | { epoch: number, kind: 'write', data: Uint8Array, onWritten?: () => void }
+  | { epoch: number, kind: 'resize', size: TerminalSize, onApplied?: () => void }
 
 export interface TerminalIOOptions {
   /** Current synchronized-output/wipe-resolution fence owned by the addon. */
@@ -23,6 +21,8 @@ export interface TerminalIO {
   reset(epoch: number): void
   enqueue(data: Uint8Array, epoch: number, onWritten?: () => void): void
   enqueueMany(chunks: Uint8Array[], epoch: number, onWritten?: () => void): void
+  /** Queue an ordered resize barrier immediately before these writes. */
+  enqueueResizeThenMany(size: TerminalSize, chunks: Uint8Array[], epoch: number, onWritten?: () => void, onResized?: () => void): void
   requestResize(size: TerminalSize, epoch: number): void
   /** Reconsider a resize after the addon's combined busy fence changes. */
   busyStateChanged(): void
@@ -50,8 +50,17 @@ export function createTerminalIO(term: TerminalWriter, options: TerminalIOOption
     if (writeInFlight) return
     dropStaleFront()
 
-    const next = queue.shift()
-    if (next) {
+    const next = queue[0]
+    if (next?.kind === 'resize') {
+      if (options.isBusy?.()) return
+      queue.shift()
+      term.resize(next.size.cols, next.size.rows)
+      if (next.epoch === currentEpoch) next.onApplied?.()
+      pump()
+      return
+    }
+    if (next?.kind === 'write') {
+      queue.shift()
       writeInFlight = true
       term.write(next.data, () => {
         writeInFlight = false
@@ -79,14 +88,23 @@ export function createTerminalIO(term: TerminalWriter, options: TerminalIOOption
 
     enqueue(data: Uint8Array, epoch: number, onWritten?: () => void) {
       if (epoch !== currentEpoch) return
-      queue.push({ epoch, data, onWritten })
+      queue.push({ epoch, kind: 'write', data, onWritten })
       pump()
     },
 
     enqueueMany(chunks: Uint8Array[], epoch: number, onWritten?: () => void) {
       if (epoch !== currentEpoch || chunks.length === 0) return
       for (let i = 0; i < chunks.length; i++) {
-        queue.push({ epoch, data: chunks[i], onWritten: i === chunks.length - 1 ? onWritten : undefined })
+        queue.push({ epoch, kind: 'write', data: chunks[i], onWritten: i === chunks.length - 1 ? onWritten : undefined })
+      }
+      pump()
+    },
+
+    enqueueResizeThenMany(size: TerminalSize, chunks: Uint8Array[], epoch: number, onWritten?: () => void, onResized?: () => void) {
+      if (epoch !== currentEpoch) return
+      queue.push({ epoch, kind: 'resize', size, onApplied: onResized })
+      for (let i = 0; i < chunks.length; i++) {
+        queue.push({ epoch, kind: 'write', data: chunks[i], onWritten: i === chunks.length - 1 ? onWritten : undefined })
       }
       pump()
     },

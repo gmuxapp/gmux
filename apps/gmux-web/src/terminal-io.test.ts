@@ -85,13 +85,20 @@ describe('createTerminalIO', () => {
     expect(h.resizes).toEqual([{ cols: 80, rows: 24 }])
   })
 
-  it('runs completion after the final enqueueMany chunk', () => {
+  it('applies enqueueResizeThenMany before writes and completes after its final chunk', () => {
     const h = makeHarness()
     const done = vi.fn()
+    const resized = vi.fn()
     h.io.reset(1)
-    h.io.enqueueMany([enc('a'), enc('b'), enc('c')], 1, done)
+    h.io.enqueueResizeThenMany({ cols: 80, rows: 25 }, [enc('a'), enc('b'), enc('c')], 1, done, resized)
+    // A later coalescible request cannot overwrite the ordered barrier.
+    h.io.requestResize({ cols: 114, rows: 44 }, 1)
+    expect(h.resizes).toEqual([{ cols: 80, rows: 25 }])
+    expect(resized).toHaveBeenCalledTimes(1)
+    expect(h.writes).toEqual(['a'])
     h.flushAll()
     expect(h.writes).toEqual(['a', 'b', 'c'])
+    expect(h.resizes).toEqual([{ cols: 80, rows: 25 }, { cols: 114, rows: 44 }])
     expect(done).toHaveBeenCalledTimes(1)
   })
 

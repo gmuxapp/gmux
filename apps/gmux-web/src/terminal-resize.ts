@@ -4,6 +4,11 @@ export function sameSize(a: TerminalSize | null, b: TerminalSize | null): boolea
   return a != null && b != null && a.cols === b.cols && a.rows === b.rows
 }
 
+/** A claim barrier already applied its matching echo to xterm. */
+export function shouldQueueResizeEcho(applied: TerminalSize, barrierClaim: TerminalSize | null): boolean {
+  return !sameSize(applied, barrierClaim)
+}
+
 /**
  * Decide how a viewport change should affect terminal sizing.
  *
