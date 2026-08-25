@@ -220,6 +220,15 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		execPassthrough(args)
 	}
 
+	// Managed commands do not inherit launcher stdin (ADR 0032). Refuse input
+	// we can prove would be discarded before minting an ID, binding a socket,
+	// starting the child, or contacting gmuxd. The inspection is non-consuming;
+	// empty harness pipes and /dev/null remain valid headless launch sources.
+	if stdinHasPendingData(os.Stdin) {
+		fmt.Fprintln(os.Stderr, pendingStdinRefusal)
+		os.Exit(exitUsage)
+	}
+
 	attachStdin, attachStdout := os.Stdin, os.Stdout
 	var controllingTTY *os.File
 	if dir.AttachControllingTerminal {
@@ -557,9 +566,6 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		// Publish only after the child and PTY exist. Before New succeeds the
 		// reserved id does not name a runnable or addressable session.
 		fmt.Fprintln(os.Stderr, sessionID)
-		if stdinHasPendingData(os.Stdin) {
-			fmt.Fprintf(os.Stderr, "gmux: stdin is not forwarded into the session; use 'gmux send %s'.\n", sessionID)
-		}
 	}
 
 	state.SetRunning(srv.Pid())

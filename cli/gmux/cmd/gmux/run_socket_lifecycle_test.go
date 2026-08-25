@@ -61,6 +61,7 @@ func buildGmuxBinary(t *testing.T) string {
 // fakeDaemon is the smallest gmuxd the runner will accept: healthy, and
 // willing to record registrations and deregistrations.
 type fakeDaemon struct {
+	requests     atomic.Int64
 	registered   atomic.Int64
 	deregistered atomic.Int64
 
@@ -84,9 +85,11 @@ func startFakeDaemon(t *testing.T, sockPath string) *fakeDaemon {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		d.requests.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"version": "dev"}})
 	})
 	mux.HandleFunc("POST /v1/register", func(w http.ResponseWriter, r *http.Request) {
+		d.requests.Add(1)
 		var body struct {
 			SessionID  string `json:"session_id"`
 			SocketPath string `json:"socket_path"`
@@ -99,6 +102,7 @@ func startFakeDaemon(t *testing.T, sockPath string) *fakeDaemon {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /v1/deregister", func(w http.ResponseWriter, r *http.Request) {
+		d.requests.Add(1)
 		var body struct {
 			SessionID string `json:"session_id"`
 		}

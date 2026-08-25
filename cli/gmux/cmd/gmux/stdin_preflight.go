@@ -6,9 +6,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// stdinHasPendingData reports whether f contains launch-time input which the
-// headless session path will not forward. It is deliberately non-consuming
-// and best-effort: any inspection error means no notice.
+const pendingStdinRefusal = "gmux: refusing to discard pending stdin; managed commands do not inherit launcher stdin (redirect </dev/null to discard it, run the command directly for pipe semantics, or use 'gmux send')"
+
+// stdinHasPendingData reports whether f contains launch-time input which a
+// managed command would discard. It is deliberately non-consuming and
+// best-effort: any inspection error leaves the source classified as empty.
 func stdinHasPendingData(f *os.File) bool {
 	info, err := f.Stat()
 	if err != nil {

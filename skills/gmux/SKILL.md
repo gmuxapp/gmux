@@ -19,6 +19,8 @@ gmux kill "$id"                           # if no longer needed
 
 For long builds and tests, `gmux -- <command> | tail` keeps the complete stream in gmux while returning only the useful final lines to your context. Foreground commands compose normally: `if gmux -- pytest; then ...`.
 
+Managed commands do not inherit launcher stdin. If a pipe or file already contains input, gmux refuses before creating a session rather than discarding it. Run commands needing ordinary pipe semantics directly; use `</dev/null` to discard inherited input explicitly.
+
 ## Agent sessions
 
 Launch agents with `gmux agent prompt --new`; the returned ID names an ordinary gmux session:

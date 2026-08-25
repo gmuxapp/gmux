@@ -51,7 +51,11 @@ already inside a gmux session:
 | ----- | ------ | ---------------- | -------- |
 | TTY | TTY | no | Attach interactively: forward terminal input, Ctrl-C, and resize; print no session ID. |
 | TTY | TTY | yes | Auto-detach to avoid nested PTYs; print a confirmation message on stderr (no session ID — use `gmux -d` to capture one). |
-| any other combination | any other combination | either | Headless foreground: block, stream merged PTY output to stdout, print the session ID on stderr, and propagate the child exit code. Launcher stdin is not forwarded; use `gmux send` for input. |
+| any other combination | any other combination | either | Headless foreground: block, stream merged PTY output to stdout, print the session ID on stderr, and propagate the child exit code. Launcher stdin is not forwarded; if data is already pending, gmux refuses before creating a session. Use `gmux send` for session input. |
+
+Empty harness pipes and `/dev/null` remain valid headless stdin sources. To
+explicitly discard inherited input, redirect `</dev/null`; a prefilled pipe or
+unread regular file is rejected without consuming its bytes.
 
 The headless row is the canonical shape for scripts and agent harnesses:
 a blocking call, stdout that carries exactly what the child printed (so
