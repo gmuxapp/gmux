@@ -312,29 +312,47 @@ func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 // screen are dropped because an idle TUI pads the bottom of its
 // viewport with blanks that aren't useful in a log-style tail.
 func extractLines(e *vt.Emulator) []string {
-	var lines []string
+	type row struct {
+		text    string
+		wrapped bool
+	}
+	var rows []row
 	if sb := e.Scrollback(); sb != nil {
-		for _, line := range sb.Lines() {
-			lines = append(lines, plainLine(line))
+		for i, line := range sb.Lines() {
+			rows = append(rows, row{plainLine(line), sb.Wrapped(i)})
 		}
 	}
 
 	w, h := e.Width(), e.Height()
-	screenLines := make([]string, h)
+	visible := make([]row, h)
 	for y := 0; y < h; y++ {
-		row := make(uv.Line, w)
+		line := make(uv.Line, w)
 		for x := 0; x < w; x++ {
 			if c := e.CellAt(x, y); c != nil {
-				row[x] = *c
+				line[x] = *c
 			}
 		}
-		screenLines[y] = plainLine(row)
+		visible[y] = row{plainLine(line), e.Wrapped(y)}
 	}
-	end := len(screenLines)
-	for end > 0 && strings.TrimSpace(screenLines[end-1]) == "" {
+	end := len(visible)
+	for end > 0 && strings.TrimSpace(visible[end-1].text) == "" {
 		end--
 	}
-	return append(lines, screenLines[:end]...)
+	rows = append(rows, visible[:end]...)
+
+	var lines []string
+	var logical strings.Builder
+	for _, r := range rows {
+		logical.WriteString(r.text)
+		if !r.wrapped {
+			lines = append(lines, logical.String())
+			logical.Reset()
+		}
+	}
+	if logical.Len() > 0 {
+		lines = append(lines, logical.String())
+	}
+	return lines
 }
 
 // plainLine renders a terminal line as plain text (no ANSI styling),

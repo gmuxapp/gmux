@@ -467,30 +467,38 @@ func renderScreen(e *vt.Emulator) string {
 func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 	var sb strings.Builder
 
+	first := true
+	previousWrapped := false
+	writeRow := func(line uv.Line, wrapped bool) {
+		if !first && !previousWrapped {
+			sb.WriteString("\r\n")
+		}
+		sb.WriteString(line.Render())
+		first = false
+		previousWrapped = wrapped
+	}
+
 	// Scrollback belongs to the normal buffer. Do not push it through a
 	// browser's alternate-buffer checkpoint, where it would be discarded.
 	if includeScrollback {
 		if scrollback := e.Scrollback(); scrollback != nil {
-			for _, line := range scrollback.Lines() {
-				sb.WriteString(line.Render())
-				sb.WriteString("\r\n")
+			for i, line := range scrollback.Lines() {
+				writeRow(line, scrollback.Wrapped(i))
 			}
 		}
 	}
 
-	// Visible screen.
+	// Visible screen. Line.Render trims unused trailing cells, so joining a
+	// soft wrap never injects viewport padding into the logical line.
 	w, h := e.Width(), e.Height()
 	for y := 0; y < h; y++ {
-		if y > 0 {
-			sb.WriteString("\r\n")
-		}
 		line := make(uv.Line, w)
 		for x := 0; x < w; x++ {
 			if c := e.CellAt(x, y); c != nil {
 				line[x] = *c
 			}
 		}
-		sb.WriteString(line.Render())
+		writeRow(line, e.Wrapped(y))
 	}
 	return sb.String()
 }
