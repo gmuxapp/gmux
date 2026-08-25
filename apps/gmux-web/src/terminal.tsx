@@ -16,9 +16,10 @@ import { BSU, createReplayBuffer, ESU, startsWith } from './replay'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
 import { TerminalFindBar } from './terminal-find'
+import { canSendTerminalInput } from './terminal-input'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { type LinkInfo, linkAtPoint, openLinkAtPoint } from './terminal-link'
-import { decideViewportResize, sameSize } from './terminal-resize'
+import { decideViewportResize, sameSize, shouldQueueResizeEcho } from './terminal-resize'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pushError } from './toasts'
@@ -358,6 +359,8 @@ export function TerminalView({
   const scrollAnchorRef = useRef<ScrollAnchorAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termEpochRef = useRef(0)
+  // Drop initial-attach input until replay and viewport claim commit.
+  const inputClaimedRef = useRef(false)
 
   // True once the terminal's font is downloaded; gates xterm mount.
   // See the preload effect below for why this matters.
@@ -380,6 +383,9 @@ export function TerminalView({
   // must not trigger effect re-runs but need current values.
   const viewportSizeRef = useRef<TerminalSize | null>(null)
   const ptySizeRef = useRef<TerminalSize | null>(null)
+  // A claim resize is a FIFO barrier rather than a pending resize. Its echo
+  // releases ownership gating but must not resize xterm a second time.
+  const barrierClaimResizeRef = useRef<TerminalSize | null>(null)
   const resizeEchoGateRef = useRef<{
     awaitingEcho: TerminalSize | null
     dirty: boolean
@@ -412,6 +418,7 @@ export function TerminalView({
     const gate = resizeEchoGateRef.current
     if (gate.timer !== null) clearTimeout(gate.timer)
     gate.awaitingEcho = null
+    barrierClaimResizeRef.current = null
     gate.dirty = false
     gate.timer = null
   }, [])
@@ -422,6 +429,7 @@ export function TerminalView({
 
     if (gate.timer !== null) clearTimeout(gate.timer)
     gate.awaitingEcho = null
+    if (sameSize(barrierClaimResizeRef.current, applied)) barrierClaimResizeRef.current = null
     gate.timer = null
 
     if (!gate.dirty) return
@@ -429,14 +437,14 @@ export function TerminalView({
     processViewportResizeRef.current?.(true)
   }, [])
 
-  const applyOwnedResize = useCallback((size: TerminalSize) => {
+  const applyOwnedResize = useCallback((size: TerminalSize, queueTerminalResize = true) => {
     const prevPty = ptySizeRef.current
 
     // Optimistically sync ptySize so the pill hides immediately, before the
     // server echoes the resize back. Without this, ptySize would lag behind
     // viewportSize for one round-trip, causing a spurious pill flash.
     setPtySize(size); ptySizeRef.current = size
-    queueResize(size)
+    if (queueTerminalResize) queueResize(size)
 
     if (sameSize(prevPty, size)) return
 
@@ -507,6 +515,18 @@ export function TerminalView({
     if (!dims) return
 
     applyOwnedResize(dims)
+  }, [applyOwnedResize])
+
+  // Announce ownership without occupying TerminalIO's coalescible resize
+  // slot. Initial attach queues this size as a FIFO barrier before held output.
+  const announceViewportClaim = useCallback((): TerminalSize | null => {
+    const term = termRef.current
+    const shell = shellRef.current
+    if (!term || !shell) return null
+    const dims = measureTerminalFit(term, shell)
+    setViewportSize(dims); viewportSizeRef.current = dims
+    applyOwnedResize(dims, false)
+    return dims
   }, [applyOwnedResize])
 
   const focusTerminal = useCallback(() => {
@@ -633,13 +653,12 @@ export function TerminalView({
       const bin = atob(b64)
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      termIoRef.current?.enqueue(bytes, termEpochRef.current)
+      termIoRef.current?.enqueue(bytes, termEpochRef.current, () => setTermLoading(false))
     }
 
     const sendRawInput = (data: string) => {
       const connection = connectionRef.current
-      if (!connection || connection.sessionId !== currentSessionId.current
-          || connection.ws.readyState !== WebSocket.OPEN) return
+      if (!canSendTerminalInput(inputClaimedRef.current, connectionRef.current, connection, currentSessionId.current)) return
       // Only re-assert focus if the terminal already had it (keyboard
       // open). Grabbing focus unconditionally would pop the on-screen
       // keyboard on every toolbar key, even when it was closed — the
@@ -669,15 +688,12 @@ export function TerminalView({
     }
     const getPasteDestination = (): PasteDestination | null => {
       const connection = connectionRef.current
-      if (!connection || connection.sessionId !== currentSessionId.current
-          || connection.ws.readyState !== WebSocket.OPEN) return null
+      if (!canSendTerminalInput(inputClaimedRef.current, connectionRef.current, connection, currentSessionId.current)) return null
       return {
         sessionId: connection.sessionId,
         bracketedPasteMode: term.modes.bracketedPasteMode,
         send(text) {
-          if (connectionRef.current !== connection
-              || currentSessionId.current !== connection.sessionId
-              || connection.ws.readyState !== WebSocket.OPEN) return false
+          if (!canSendTerminalInput(inputClaimedRef.current, connectionRef.current, connection, currentSessionId.current)) return false
           connection.ws.send(new TextEncoder().encode(text))
           return true
         },
@@ -980,6 +996,7 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
     scrollAnchorRef.current?.reset()
+    inputClaimedRef.current = false
 
     const sessionChanged = terminalSessionId.current !== null
       && terminalSessionId.current !== session.id
@@ -1016,12 +1033,65 @@ export function TerminalView({
       // staged; the existing screen remains visible during failed attempts.
       let checkpointAlt: boolean | null = null
       let checkpointMargins: CheckpointMargins | null = null
+      // Keep post-checkpoint bytes out of TerminalIO until the initial replay
+      // has committed and xterm has claimed the browser geometry.
+      let attachPhase: 'replay' | 'claiming' | 'claimed' = isFirstConnect ? 'replay' : 'claimed'
+      const postClaimWrites: Uint8Array[] = []
+      let claimFallbackTimer: ReturnType<typeof setTimeout> | null = null
+      const finishPostClaimWrite = () => {
+        if (claimFallbackTimer !== null) clearTimeout(claimFallbackTimer)
+        claimFallbackTimer = null
+        setTermLoading(false)
+      }
       const replay = createReplayBuffer((chunks) => {
         const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins)
-        queueMany(prepared, () => {
+        const claiming = attachPhase === 'replay'
+        if (claiming) attachPhase = 'claiming'
+        // Newly launched sessions can reach the WS before their first SSE
+        // dimensions. The runner's pre-resize default is 80 columns; sessions
+        // with an established geometry carry it in session/resize metadata.
+        const cols = sessionRef.current.terminal_cols ?? ptySizeRef.current?.cols ?? 80
+        const rows = checkpointMargins?.rows
+        const checkpointSize = claiming && cols && rows ? { cols, rows } : null
+        const onReplayed = () => {
+          if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
           scrollAnchorRef.current?.follow()
-          setTermLoading(false)
-        })
+          if (!claiming) {
+            setTermLoading(false)
+            return
+          }
+
+          isFirstConnect = false
+          const claimSize = announceViewportClaim()
+          if (!claimSize) return
+          barrierClaimResizeRef.current = claimSize
+          const onClaimResized = () => {
+            if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+            attachPhase = 'claimed'
+            inputClaimedRef.current = true
+            claimFallbackTimer = setTimeout(() => {
+              if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+              claimFallbackTimer = null
+              setTermLoading(false)
+            }, 500)
+            // Include bytes that arrived while the resize barrier was waiting
+            // on the addon's busy fence.
+            const heldWrites = postClaimWrites.splice(0)
+            for (let i = 0; i < heldWrites.length; i++) {
+              queueData(heldWrites[i], i === heldWrites.length - 1 ? finishPostClaimWrite : undefined)
+            }
+          }
+          // Claim geometry is a second FIFO barrier. Held live bytes cannot
+          // parse at checkpoint geometry, and input opens only when it applies.
+          termIoRef.current?.enqueueResizeThenMany(claimSize, [], epoch, undefined, onClaimResized)
+        }
+        if (checkpointSize) {
+          // This ordered barrier resizes xterm before the first checkpoint
+          // byte; a later viewport claim cannot overwrite it.
+          termIoRef.current?.enqueueResizeThenMany(checkpointSize, prepared, epoch, onReplayed)
+        } else {
+          queueMany(prepared, onReplayed)
+        }
       })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -1035,30 +1105,22 @@ export function TerminalView({
         attempt = 0
         setWsState('open')
 
-        if (!isFirstConnect) {
-          // Reconnect: re-sync ptySize from session metadata in case a
-          // terminal_resize WS event was missed during the drop. Session
-          // metadata is updated via SSE independently, so it may be
-          // fresher than our cached ptySize after a network blip.
-          resetResizeEchoGate()
-          const sess = sessionRef.current
-          if (sess.terminal_cols && sess.terminal_rows) {
-            const cached = ptySizeRef.current
-            if (!cached || cached.cols !== sess.terminal_cols || cached.rows !== sess.terminal_rows) {
-              const size = { cols: sess.terminal_cols, rows: sess.terminal_rows }
-              setPtySize(size); ptySizeRef.current = size
-              queueResize(size)
-            }
-          }
-          return
-        }
-        isFirstConnect = false
+        if (isFirstConnect) return
+        inputClaimedRef.current = true
 
-        // First connect for this session: claim ownership by fitting the PTY
-        // to our viewport. fitAndResize measures, sets viewport+pty
-        // optimistically, and sends the resize over this ws (connectionRef was set
-        // above).
-        fitAndResize()
+        // Reconnect: re-sync ptySize from session metadata in case a
+        // terminal_resize WS event was missed during the drop. Reconnects
+        // deliberately never reclaim the viewport.
+        resetResizeEchoGate()
+        const sess = sessionRef.current
+        if (sess.terminal_cols && sess.terminal_rows) {
+          const cached = ptySizeRef.current
+          if (!cached || cached.cols !== sess.terminal_cols || cached.rows !== sess.terminal_rows) {
+            const size = { cols: sess.terminal_cols, rows: sess.terminal_rows }
+            setPtySize(size); ptySizeRef.current = size
+            queueResize(size)
+          }
+        }
       }
 
       ws.onmessage = (ev) => {
@@ -1096,7 +1158,7 @@ export function TerminalView({
               if (cols && rows) {
                 const size = { cols, rows }
                 setPtySize(size); ptySizeRef.current = size
-                queueResize(size)
+                if (shouldQueueResizeEcho(size, barrierClaimResizeRef.current)) queueResize(size)
                 releaseResizeEchoGate(size)
               }
               return
@@ -1110,7 +1172,8 @@ export function TerminalView({
             replay.push(data)
             return
           }
-          queueData(data, () => setTermLoading(false))
+          if (attachPhase === 'claiming') postClaimWrites.push(data)
+          else queueData(data, attachPhase === 'claimed' ? finishPostClaimWrite : () => setTermLoading(false))
           return
         }
 
@@ -1123,7 +1186,8 @@ export function TerminalView({
           return
         }
 
-        queueData(data, () => setTermLoading(false))
+        if (attachPhase === 'claiming') postClaimWrites.push(data)
+        else queueData(data, attachPhase === 'claimed' ? finishPostClaimWrite : () => setTermLoading(false))
       }
 
       ws.onclose = () => {
@@ -1135,6 +1199,8 @@ export function TerminalView({
         const isCurrent = connectionRef.current === connection
         setWsState(prev => wsStateOnClose(prev, isCurrent))
         if (!isCurrent) return
+        if (claimFallbackTimer !== null) clearTimeout(claimFallbackTimer)
+        claimFallbackTimer = null
         resetResizeEchoGate()
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
@@ -1153,6 +1219,7 @@ export function TerminalView({
 
     return () => {
       intentionalClose = true
+      inputClaimedRef.current = false
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       scrollAnchorRef.current?.reset()
@@ -1162,7 +1229,7 @@ export function TerminalView({
       connectionRef.current?.ws.close()
       connectionRef.current = null
     }
-  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, fontReady])
+  }, [announceViewportClaim, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, fontReady])
 
   // Pill is purely derived from size mismatch. No "driving" flag: we claim
   // on every fresh session select (first ws.onopen), and fitAndResize sets
