@@ -412,17 +412,16 @@ function FamilyEntry({
               title={slotTrail}
               onClick={() => onClick?.()}
             >
-              {/* One fixed-width glyph column, always filled: the member's
-                * status, its `$` if it's a process, or the branch arrow when
-                * there's nothing to report. The arrow is what a quiet member
-                * looks like — it marks the row as hanging off the root, and
-                * it keeps the title from sliding sideways when state
-                * arrives or clears. */}
+              {/* One fixed-width glyph column: the member's status, or
+                * its `$` if it's a process. A quiet member shows nothing —
+                * the family button beside the row already says it hangs
+                * off the root, and a filler arrow next to that icon read
+                * as a second, mysterious control. */}
               {glyph?.kind === 'process'
-                ? <span class="family-glyph family-proc" aria-hidden="true">$</span>
+                ? <span class={`family-glyph family-proc${glyph.running ? '' : ' done'}`} aria-hidden="true">$</span>
                 : glyph?.kind === 'dot'
                 ? <span class={`family-glyph session-dot-indicator ${glyph.state}`} aria-hidden="true" />
-                : <span class="family-glyph family-branch" aria-hidden="true">↳</span>}
+                : null}
               <span class="family-slot-title">{member.title}</span>
             </a>
           )}

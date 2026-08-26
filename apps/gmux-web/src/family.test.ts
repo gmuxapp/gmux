@@ -326,10 +326,16 @@ describe('member row glyph', () => {
     id: 'k', cwd: '/p', title: 'kid', semantic_agent: true, parent_session_id: 'root', ...over,
   })
 
-  it('gives a process one stable $ in every state', () => {
+  it('gives a process one stable $ in every state, carrying lifecycle', () => {
     // Shape alone says “process”; agent attention never recolors it.
-    expect(familyMemberGlyph(proc(), 'none')).toEqual({ kind: 'process' })
-    expect(familyMemberGlyph(proc(), 'working')).toEqual({ kind: 'process' })
+    // The one fact the $ does carry is lifecycle: running or not.
+    expect(familyMemberGlyph(proc(), 'none')).toEqual({ kind: 'process', running: false })
+    expect(familyMemberGlyph(proc(), 'working')).toEqual({ kind: 'process', running: false })
+    expect(familyMemberGlyph(proc({ status: { active: true } }), 'none'))
+      .toEqual({ kind: 'process', running: true })
+    // Dead is never running, whatever the last status said.
+    expect(familyMemberGlyph(proc({ status: { active: true }, alive: false }), 'none'))
+      .toEqual({ kind: 'process', running: false })
   })
 
   it('keeps a named agent\'s attention on its dot', () => {
@@ -337,8 +343,8 @@ describe('member row glyph', () => {
       const glyph = familyMemberGlyph(kid(), state)
       expect(glyph).toEqual({ kind: 'dot', state })
     }
-    expect(familyMemberGlyph(proc({ unread: true }), 'unread')).toEqual({ kind: 'process' })
-    expect(familyMemberGlyph(proc({ status: { error: true } }), 'error')).toEqual({ kind: 'process' })
+    expect(familyMemberGlyph(proc({ unread: true }), 'unread')).toEqual({ kind: 'process', running: false })
+    expect(familyMemberGlyph(proc({ status: { error: true } }), 'error')).toEqual({ kind: 'process', running: false })
   })
 
   it('falls back to the branch only for an agent with nothing to say', () => {

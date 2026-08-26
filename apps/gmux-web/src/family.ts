@@ -263,14 +263,16 @@ function byRecency(a: Session, b: Session): number {
 
 /** What the member row's glyph column shows. Agent state lives on its
  * dot; `$` is stable process identity and is never recolored as agent
- * attention. An agent with nothing to report falls back to the branch. */
+ * attention — but it does carry the one process fact, lifecycle:
+ * running is lit, finished is dimmed. An agent with nothing to report
+ * shows nothing. */
 export type MemberGlyph =
-  | { readonly kind: 'process' }
+  | { readonly kind: 'process'; readonly running: boolean }
   | { readonly kind: 'dot'; readonly state: Exclude<DotState, 'none'> }
   | { readonly kind: 'branch' }
 
 export function familyMemberGlyph(member: Session, dot: DotState): MemberGlyph {
-  if (isProcessSession(member)) return { kind: 'process' }
+  if (isProcessSession(member)) return { kind: 'process', running: isRunningProcess(member) }
   return dot === 'none' ? { kind: 'branch' } : { kind: 'dot', state: dot }
 }
 

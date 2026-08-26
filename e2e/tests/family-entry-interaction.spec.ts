@@ -438,8 +438,11 @@ test.describe('the family line and the panel tally', () => {
     await expect(page.locator('.family-process-section h3')).toHaveText(['Running · 1', 'Finished · 1'])
     const glyphs = page.locator('.family-process-list .family-proc')
     await expect(glyphs).toHaveCount(2)
+    // The $ never changes shape between rows, but it does carry the one
+    // process fact: the running row's glyph is lit, the finished row's is
+    // dimmed — two lifecycles, two tones.
     const colors = await glyphs.evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color))
-    expect(new Set(colors).size, 'every process row uses one identity colour').toBe(1)
+    expect(new Set(colors).size, 'running and finished use distinct tones').toBe(2)
   })
 
   test('agent-state filters do not pin the selected process into their rows', async ({ page }) => {
@@ -472,9 +475,11 @@ test.describe('the family line and the panel tally', () => {
     await page.locator('.family-trigger').click()
     const control = page.locator('.family-count').filter({ hasText: 'processes' })
     await expect(control).toHaveAccessibleName('Processes')
+    // Nothing runs here, so every $ in sight is quiet: the history control
+    // and the finished rows share the same dimmed tone.
     const processColor = await control.locator('.family-proc').evaluate(node => getComputedStyle(node).color)
     const rowColor = await page.locator('.family-row.process .family-proc').first().evaluate(node => getComputedStyle(node).color)
-    expect(processColor, 'the history control is quiet').not.toBe(rowColor)
+    expect(processColor, 'finished history is uniformly quiet').toBe(rowColor)
     await control.click()
     await expect(page.locator('.family-process-section h3')).toHaveText(['Finished · 28'])
     const list = page.locator('.family-process-list')

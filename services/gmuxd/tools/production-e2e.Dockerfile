@@ -2,6 +2,9 @@ FROM golang:1.26-bookworm
 WORKDIR /src
 COPY go.work go.work.sum ./
 COPY packages ./packages
+# packages/scrollback and cli/gmux replace charmbracelet/x/vt with this
+# vendored copy; without it every `go build` in the image dangles.
+COPY third_party ./third_party
 COPY cli/gmux ./cli/gmux
 COPY services/gmuxd ./services/gmuxd
 RUN cd services/gmuxd && go build -trimpath -o /opt/gmuxd ./cmd/gmuxd \

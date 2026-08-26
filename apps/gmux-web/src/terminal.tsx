@@ -525,6 +525,7 @@ export function TerminalView({
     if (!term || !shell) return null
     const dims = measureTerminalFit(term, shell)
     setViewportSize(dims); viewportSizeRef.current = dims
+    if (!dims) return null
     applyOwnedResize(dims, false)
     return dims
   }, [applyOwnedResize])
