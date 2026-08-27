@@ -328,6 +328,8 @@ func TestHelpAliases(t *testing.T) {
 		{[]string{"attach", "--help"}, "attach"},
 		{[]string{"kill", "?"}, "kill"},
 		{[]string{"promote", "--help"}, "promote"},
+		{[]string{"promote", "abc", "--help"}, "promote"},       // flagless verbs answer here too
+		{[]string{"reparent", "abc", "def", "--help"}, "reparent"},
 		{[]string{"help", "reparent"}, "reparent"},
 		{[]string{"edit", "--help"}, "edit"},
 		{[]string{"send-keys", "--help"}, "send-keys"},

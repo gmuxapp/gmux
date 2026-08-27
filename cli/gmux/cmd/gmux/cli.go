@@ -104,14 +104,15 @@ type command struct {
 	codexHookEvent string // the codex hook event name (SessionStart, ...)
 }
 
-// reservedVerbs is the top-level namespace from ADR 0009 plus the explicit
-// `read` consumption/remediation command. Other growth happens under namespace
-// groups, not new top-level verbs. Used to give
+// reservedVerbs is the top-level namespace under the ADR 0009 criterion: a
+// top-level verb is an operation on a session addressed by id, which is why
+// `promote` and `reparent` sit beside `wait`, `tail`, and `kill`. Used to give
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
 //
-// `agent` and `session` are namespace groups, not bare action verbs. They grow
-// under `gmux <group> <verb>` without reopening the frozen action list.
+// `agent` and `daemon` are namespace groups for non-session domains; they grow
+// under `gmux <group> <verb>` without adding top-level verbs. Consumption has
+// no verb at all: it is a side effect of observing a result.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
 	"wait", "promote", "reparent", "agent", "edit", "daemon", "auth", "remote", "version", "help",
@@ -346,6 +347,12 @@ func parseReparent(args []string) (*command, error) {
 
 func parseMutationRefs(m mode, name string, args []string, arity int) (*command, error) {
 	for _, arg := range args {
+		// A help request anywhere in the argv is a help request. These verbs
+		// carry no flags, so they parse by hand; without this they would be the
+		// only verbs where a trailing --help is an error rather than the page.
+		if isHelpToken(arg) {
+			return &command{mode: modeHelp, helpTopic: name}, nil
+		}
 		if strings.HasPrefix(arg, "-") {
 			return nil, fmt.Errorf("%s: unknown flag %q", name, arg)
 		}
