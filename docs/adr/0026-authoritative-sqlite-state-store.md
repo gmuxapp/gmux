@@ -163,7 +163,7 @@ The explicit reparent operation may assign any retained session on the same daem
 
 The motivating orchestration workflow is to launch worker sessions, launch a reviewer session, then reparent the workers under the reviewer so it owns their attention. Arbitrary ownership trees are therefore an orchestration primitive rather than an accidental record of process launch order. Reparenting also changes which parent's activity suppresses child notifications.
 
-**Amendment (2026-08-27):** As with the [ADR 0009 amendment](0009-session-state-and-events.md), migration 00005 removed `promoted_to_root` and collapsed family behavior onto the single mutable `parent_session_id` edge. Promotion clears that edge; Return to family restores `launched_from_session_id` when valid. Presentation, ownership, dismissal, budgeting, and notification suppression now agree on that edge.
+**Amendment (2026-08-27):** As with the [ADR 0009 amendment](0009-verb-first-cli-and-frozen-top-level-namespace.md), migration 00005 removed `promoted_to_root` and collapsed family behavior onto the single mutable `parent_session_id` edge. Promotion clears that edge; Return to family restores `launched_from_session_id` when valid. Presentation, ownership, dismissal, budgeting, and notification suppression now agree on that edge.
 
 A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging may reorder siblings; promotion and all reparenting rewrite `parent_session_id`.
 

@@ -207,6 +207,31 @@ func TestCentralNotifyInactiveParentChangeReconsidersSuppression(t *testing.T) {
 	}
 }
 
+func TestCentralNotifyParentChangeDoesNotRedeliverUnreadToken(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
+	r.handleOutcome(upsertOutcome("new-parent", notifyRow("pi", false, "", false)))
+	child := notifyRow("pi", true, "", false)
+	r.handleOutcome(upsertOutcome("child", child))
+	child.Active = false
+	child.Unread = true
+	child.UnreadToken = "result-1"
+	r.handleOutcome(upsertOutcome("child", child))
+	if !hasPendingNotification(r, "child") {
+		t.Fatal("initial unread notification was not scheduled")
+	}
+	r.firePending("child")
+	if hasPendingNotification(r, "child") {
+		t.Fatal("delivered unread remained pending")
+	}
+
+	parent := centralstore.SessionID("new-parent")
+	child.ParentSessionID = &parent
+	r.handleOutcome(upsertOutcome("child", child))
+	if hasPendingNotification(r, "child") {
+		t.Fatal("parent change redelivered an already delivered unread token")
+	}
+}
+
 func TestCentralNotifyFusedCompletionUnreadUsesParentSuppression(t *testing.T) {
 	r := newParentNotifyTestRouter(t)
 	r.handleOutcome(upsertOutcome("parent", notifyRow("pi", true, "", false)))

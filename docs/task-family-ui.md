@@ -170,8 +170,9 @@ family attention.
 Notification delivery is suppressed only when the session's current direct
 parent is active when the completion outcome is published. The publisher
 re-reads the session after the completion commit, so a reparent that commits in
-that narrow window can be the parent it observes. Reparenting otherwise changes
-the suppressor immediately; promoting removes it. A missing parent fails safe
+that narrow window can be the parent it observes. A parent-edge change is
+observed and the latch reconsidered on the session's next outcome; promotion
+removes the suppressor once such an outcome arrives. A missing parent fails safe
 as inactive, so the notification is delivered. Agent activity is semantic turn
 activity; terminal activity currently comes from the runner's OSC 133 prompt
 cycle (active command to idle prompt). Suppression is best-effort, one hop, and

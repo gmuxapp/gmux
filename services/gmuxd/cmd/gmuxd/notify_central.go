@@ -156,10 +156,12 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	r.prevState[id] = cur
 	transitionedInactive := existed && prev.Active && !cur.Active
 	inactiveParentChanged := existed && !cur.Active && prev.ParentID != cur.ParentID
+	releasedBySuppression := inactiveParentChanged && r.suppressedInactive[id]
 	// Suppression is decided at the committed child transition using only the
 	// direct parent's latest committed outcome already observed by this router.
-	// A later parent outcome never retroactively changes this decision. This is
-	// intentionally one hop: an inactive/missing direct parent ends the lookup.
+	// Later parent activity never retroactively changes this decision; a parent
+	// edge change while inactive re-decides it. The lookup is intentionally one
+	// hop: an inactive/missing direct parent ends it.
 	if cur.Active {
 		// A new turn gets a fresh completion decision.
 		delete(r.suppressedInactive, id)
@@ -173,7 +175,8 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	// Runner facts can arrive in separate committed outcomes (for example the
 	// inactive edge before the final unread bit). Once this completion was
 	// suppressed, keep all later attention for that inactive turn suppressed;
-	// parent inactivity or fact ordering must not resurrect it.
+	// parent activity or fact ordering must not resurrect it. Only a changed
+	// parent edge re-decides the latch.
 	suppress := !cur.Active && r.suppressedInactive[id]
 	r.mu.Unlock()
 	if !existed {
@@ -196,7 +199,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start), cur.Adapter)
 	}
-	if cur.Unread && (inactiveParentChanged || !prev.Unread || prev.UnreadToken != cur.UnreadToken) {
+	if cur.Unread && (releasedBySuppression || !prev.Unread || prev.UnreadToken != cur.UnreadToken) {
 		r.scheduleNotification(id, "unread", cur.Title, "New output", cur.Adapter)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -486,5 +487,25 @@ func TestActiveSubagentMutableOwnershipTransitions(t *testing.T) {
 	b.setParent("child", budgetParent("b"))
 	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 {
 		t.Fatalf("reparent counts = %v", b.activeByDepth)
+	}
+	b.setLive("grand", false)
+	if b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 0 {
+		t.Fatalf("termination counts = %v", b.activeByDepth)
+	}
+}
+
+func TestActiveSubagentUnknownMutationIsNoop(t *testing.T) {
+	b := newActiveSubagentBudget([]int{8}, false, func(string) bool { return true }, []centralstore.Session{
+		budgetSession("root", "shell", nil, false),
+		budgetSession("child", "pi", budgetParent("root"), false),
+	})
+	b.setLive("child", true)
+	beforeCounts := maps.Clone(b.activeByDepth)
+	beforeNodes := len(b.nodes)
+
+	b.setParent("missing", budgetParent("root"))
+	b.setLive("missing", true)
+	if !maps.Equal(b.activeByDepth, beforeCounts) || len(b.nodes) != beforeNodes {
+		t.Fatalf("unknown mutation changed budget: counts=%v nodes=%v", b.activeByDepth, b.nodes)
 	}
 }

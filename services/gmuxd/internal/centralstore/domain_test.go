@@ -1078,6 +1078,10 @@ func TestDedicatedInsertAndTriStatePatch(t *testing.T) {
 	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &x, Clear: true}}); err == nil {
 		t.Fatal("set+clear accepted")
 	}
+	size := TerminalSize{Cols: 80, Rows: 24}
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &size, Clear: true}}); err == nil || !strings.Contains(err.Error(), "terminal patch cannot set and clear") {
+		t.Fatalf("terminal set+clear error = %v", err)
+	}
 	bad := TerminalSize{Cols: 80}
 	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &bad}}); err == nil || !strings.Contains(err.Error(), "terminal dimensions must be positive") {
 		t.Fatalf("one-sided terminal size error = %v", err)
