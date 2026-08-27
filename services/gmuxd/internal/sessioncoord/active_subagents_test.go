@@ -468,3 +468,23 @@ func BenchmarkActiveSubagentAdmission1000Sessions(b *testing.B) {
 		budget.release(reservation.Token, false)
 	}
 }
+
+func TestActiveSubagentMutableOwnershipTransitions(t *testing.T) {
+	rows := []centralstore.Session{
+		budgetSession("a", "shell", nil, false),
+		budgetSession("b", "shell", nil, false),
+		budgetSession("child", "pi", budgetParent("a"), false),
+		budgetSession("grand", "pi", budgetParent("child"), false),
+	}
+	b := newActiveSubagentBudget([]int{8}, false, func(adapter string) bool { return adapter == "pi" }, rows)
+	b.setLive("child", true)
+	b.setLive("grand", true)
+	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "a", depth: 2}] != 1 {
+		t.Fatalf("initial counts = %v", b.activeByDepth)
+	}
+
+	b.setParent("child", budgetParent("b"))
+	if b.activeByDepth[activeSubagentCountKey{root: "a", depth: 1}] != 0 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 1}] != 1 || b.activeByDepth[activeSubagentCountKey{root: "b", depth: 2}] != 1 {
+		t.Fatalf("reparent counts = %v", b.activeByDepth)
+	}
+}

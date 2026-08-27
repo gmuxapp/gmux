@@ -868,3 +868,54 @@ func TestOrderTakeoverEvictionsRejectsCorruptParentCycle(t *testing.T) {
 		t.Fatal("corrupt launch-parent cycle was accepted")
 	}
 }
+
+func TestRegisterRunnerSameIDPreservesHistoryAndNoop(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	cat := registrationCatalog(t, s)
+	parent := SessionID("original-parent")
+	first := registration("same", "shell", "/one", false, 10)
+	first.ParentSessionID = &parent
+	first.Facts.ExitedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(12))}
+	first.Facts.ExitCode = NullablePatch[int]{Set: ptr(3)}
+	got, _, err := s.RegisterRunner(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetSessionParent(ctx, "same", nil); err != nil {
+		t.Fatal(err)
+	}
+	beforePlacement := localPlacement(t, s, "same")
+	beforePos, beforeProject := beforePlacement.pos, beforePlacement.project
+
+	otherParent := SessionID("replacement-parent")
+	resume := registration("same", "shell", "/one", true, 99)
+	resume.ParentSessionID = &otherParent
+	got, result, err := s.RegisterRunner(ctx, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CreatedAt != 10 || got.ParentSessionID != nil || got.ExitedAt != nil || got.ExitCode != nil {
+		t.Fatalf("history not preserved/live exit not cleared: %#v", got)
+	}
+	if result.SessionVersion != 3 || !result.SessionsDirty || result.WorldDirty {
+		t.Fatalf("resume result=%#v", result)
+	}
+	p := localPlacement(t, s, "same")
+	if p.project != beforeProject || p.pos != beforePos || p.project != int64(cat[0].ID) {
+		t.Fatalf("placement moved: %#v", p)
+	}
+
+	noop := registration("same", "shell", "/ignored-created", true, 100)
+	noop.Facts = RunnerFacts{}
+	_, result, err = s.RegisterRunner(ctx, noop)
+	if err != nil || result.Changed || result.SessionsDirty || result.WorldDirty || result.SessionVersion != 3 {
+		t.Fatalf("noop result=%#v err=%v", result, err)
+	}
+
+	mismatch := registration("same", "pi", "/one", true, 101)
+	_, result, err = s.RegisterRunner(ctx, mismatch)
+	if !errors.Is(err, ErrAdapterMismatch) || result.SessionVersion != 3 {
+		t.Fatalf("mismatch result=%#v err=%v", result, err)
+	}
+}

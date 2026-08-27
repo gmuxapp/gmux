@@ -339,7 +339,7 @@ func parsePromote(args []string) (*command, error) {
 
 func parseReparent(args []string) (*command, error) {
 	cmd, err := parseMutationRefs(modeReparent, "reparent", args, 2)
-	if err == nil {
+	if err == nil && cmd.mode == modeReparent && len(args) == 2 {
 		cmd.parentRef = args[1]
 	}
 	return cmd, err

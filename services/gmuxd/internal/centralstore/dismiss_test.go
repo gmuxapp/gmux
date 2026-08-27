@@ -274,9 +274,54 @@ func TestUndismissalResurfacesUnderVisibleParent(t *testing.T) {
 	}
 }
 
-// Parent deletion promotes surviving direct children to genuine roots by
-// user-authored presentation state and is neither set nor cleared by
-// deletion; grandchildren keep their own provenance.
+func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	registrationCatalog(t, s)
+	mustRegister(t, s, regWithParent("p", "", "/one", 10))
+	mustRegister(t, s, regWithParent("c1", "p", "/one", 20))
+	mustRegister(t, s, regWithParent("c2", "p", "/one", 30))
+	mustRegister(t, s, regWithParent("g", "c2", "/one", 40))
+	mustRegister(t, s, regWithParent("x", "", "/one", 50))
+	parent := mustSession(t, s, "p")
 
-// touch it, including re-registration after dismissal — a promoted child
-// resurfaces as a root even when its parent is visible.
+	result, err := s.RemoveSessionAtVersion(ctx, "p", parent.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || !result.SessionsDirty || !result.WorldDirty {
+		t.Fatalf("result=%#v", result)
+	}
+	if _, ok, err := s.Session(ctx, "p"); err != nil || ok {
+		t.Fatalf("parent must be deleted: ok=%v err=%v", ok, err)
+	}
+	c1 := mustSession(t, s, "c1")
+	c2 := mustSession(t, s, "c2")
+	g := mustSession(t, s, "g")
+	if c1.ParentSessionID != nil || c2.ParentSessionID != nil {
+		t.Fatalf("children parents not cleared: %#v %#v", c1.ParentSessionID, c2.ParentSessionID)
+	}
+	if g.ParentSessionID == nil || *g.ParentSessionID != "c2" {
+		t.Fatalf("grandchild provenance must survive: %#v", g.ParentSessionID)
+	}
+	// Root scope repaired densely across all affected scopes; grandchild
+	// stays grouped under its (now root) parent.
+	positions := map[SessionID]int64{}
+	for _, id := range []SessionID{"c1", "c2", "x"} {
+		p := localPlacement(t, s, id)
+		if p == nil || p.scope != "r" {
+			t.Fatalf("%s must be a root: %#v", id, p)
+		}
+		positions[id] = p.pos
+	}
+	seen := map[int64]bool{}
+	for id, pos := range positions {
+		if pos < 0 || pos > 2 || seen[pos] {
+			t.Fatalf("root scope not dense: %s at %d (%v)", id, pos, positions)
+		}
+		seen[pos] = true
+	}
+	if p := localPlacement(t, s, "g"); p == nil || p.scope != "c:l:c2" || p.pos != 0 {
+		t.Fatalf("grandchild scope: %#v", p)
+	}
+}

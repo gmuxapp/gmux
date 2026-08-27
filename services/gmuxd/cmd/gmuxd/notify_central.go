@@ -155,6 +155,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	prev, existed := r.prevState[id]
 	r.prevState[id] = cur
 	transitionedInactive := existed && prev.Active && !cur.Active
+	inactiveParentChanged := existed && !cur.Active && prev.ParentID != cur.ParentID
 	// Suppression is decided at the committed child transition using only the
 	// direct parent's latest committed outcome already observed by this router.
 	// A later parent outcome never retroactively changes this decision. This is
@@ -162,7 +163,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if cur.Active {
 		// A new turn gets a fresh completion decision.
 		delete(r.suppressedInactive, id)
-	} else if transitionedInactive {
+	} else if transitionedInactive || inactiveParentChanged {
 		delete(r.suppressedInactive, id)
 		if cur.ParentID != "" {
 			parent, parentExists := r.prevState[cur.ParentID]
@@ -195,7 +196,7 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start), cur.Adapter)
 	}
-	if cur.Unread && (!prev.Unread || prev.UnreadToken != cur.UnreadToken) {
+	if cur.Unread && (inactiveParentChanged || !prev.Unread || prev.UnreadToken != cur.UnreadToken) {
 		r.scheduleNotification(id, "unread", cur.Title, "New output", cur.Adapter)
 	}
 }

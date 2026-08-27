@@ -199,3 +199,51 @@ func TestRegisterRunnerEvictionOfDismissedLoser(t *testing.T) {
 		t.Fatalf("child=%#v", child)
 	}
 }
+
+func TestRegisterRunnerEvictsTakeoverLosers(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	registrationCatalog(t, s)
+	loser := evictFixture(t, s)
+
+	winner := registration("winner", "pi", "/one", true, 20)
+	ref := "conv-a"
+	winner.Facts.ConversationRef = &ref
+	winner.Evict = []TakeoverEviction{{ID: "loser", Version: loser.Version}}
+	got, result, err := s.RegisterRunner(ctx, winner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || !result.SessionsDirty || !result.WorldDirty {
+		t.Fatalf("eviction result=%#v", result)
+	}
+	if _, ok, _ := s.Session(ctx, "loser"); ok {
+		t.Fatal("loser row survived takeover")
+	}
+	// Winner is intact and placed.
+	if got.ID != "winner" || got.ExitedAt != nil {
+		t.Fatalf("winner=%#v", got)
+	}
+	// The loser's child was promoted to a genuine root: parent cleared,
+	// and its own row retained.
+	child := mustSession(t, s, "child")
+	if child.ParentSessionID != nil {
+		t.Fatalf("child not promoted to genuine root: %#v", child)
+	}
+	// Placement scope is densely renormalized: loser's placement is gone,
+	// survivors occupy 0..n-1 in the root scope.
+	if p := localPlacement(t, s, "loser"); p != nil {
+		t.Fatalf("loser placement survived: %#v", p)
+	}
+	positions := map[int64]bool{}
+	for _, id := range []SessionID{"child", "sibling", "winner"} {
+		p := localPlacement(t, s, id)
+		if p == nil {
+			t.Fatalf("placement missing for %s", id)
+		}
+		positions[p.pos] = true
+	}
+	if !positions[0] || !positions[1] || !positions[2] {
+		t.Fatalf("scope not dense: %v", positions)
+	}
+}

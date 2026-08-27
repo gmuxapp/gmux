@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -1048,3 +1049,48 @@ func assertKernelInvariants(t *testing.T, s *Store) {
 	}
 }
 func stringsHasPrefixTemp(s string) bool { return len(s) >= 2 && s[:2] == "~:" }
+
+func TestDedicatedInsertAndTriStatePatch(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	epoch := UnixMillis(0)
+	cols, rows := uint16(80), uint16(24)
+	v, _, err := s.InsertSession(ctx, NewSession{ID: "s", Adapter: "shell", Command: nil, CWD: "/", Remotes: nil, CreatedAt: 0, StartedAt: &epoch, TerminalCols: &cols, TerminalRows: &rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Version != 1 || v.DismissedAt != nil || v.Command == nil || v.Remotes == nil || v.StartedAt == nil || *v.StartedAt != 0 {
+		t.Fatalf("round trip=%#v", v)
+	}
+	clear := CommonFactsPatch{StartedAt: NullablePatch[UnixMillis]{Clear: true}, TerminalSize: NullablePatch[TerminalSize]{Clear: true}}
+	r, err := s.ApplyCommonFacts(ctx, "s", 1, clear)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Changed || !r.SessionsDirty || r.WorldDirty || r.SessionVersion != 2 {
+		t.Fatalf("patch result=%#v", r)
+	}
+	got, _, _ := s.Session(ctx, "s")
+	if got.StartedAt != nil || got.TerminalCols != nil || got.TerminalRows != nil {
+		t.Fatalf("clear failed: %#v", got)
+	}
+	x := UnixMillis(1)
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &x, Clear: true}}); err == nil {
+		t.Fatal("set+clear accepted")
+	}
+	bad := TerminalSize{Cols: 80}
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &bad}}); err == nil || !strings.Contains(err.Error(), "terminal dimensions must be positive") {
+		t.Fatalf("one-sided terminal size error = %v", err)
+	}
+}
+
+func TestSessionMutationsReturnErrSessionNotFound(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	if _, err := s.ApplyCommonFacts(ctx, "missing", 1, CommonFactsPatch{}); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("ApplyCommonFacts err=%v", err)
+	}
+	if _, err := s.RemoveSessionAtVersion(ctx, "missing", 1); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("RemoveSessionAtVersion err=%v", err)
+	}
+}

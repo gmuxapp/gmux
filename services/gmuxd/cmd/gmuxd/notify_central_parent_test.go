@@ -164,6 +164,49 @@ func TestCentralNotifyReparentChangesSuppressor(t *testing.T) {
 	}
 }
 
+func TestCentralNotifyInactiveParentChangeReconsidersSuppression(t *testing.T) {
+	tests := []struct {
+		name       string
+		newParent  string
+		parentLive bool
+		want       bool
+	}{
+		{name: "promotion", want: true},
+		{name: "inactive parent", newParent: "new", want: true},
+		{name: "active parent", newParent: "new", parentLive: true, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newParentNotifyTestRouter(t)
+			r.handleOutcome(upsertOutcome("old", notifyRow("pi", true, "", false)))
+			if tc.newParent != "" {
+				r.handleOutcome(upsertOutcome(tc.newParent, notifyRow("pi", tc.parentLive, "", false)))
+			}
+			child := notifyRow("pi", true, "old", false)
+			r.handleOutcome(upsertOutcome("child", child))
+			child.Active = false
+			r.handleOutcome(upsertOutcome("child", child))
+			if hasPendingNotification(r, "child") {
+				t.Fatal("completion escaped initial suppression")
+			}
+
+			if tc.newParent == "" {
+				child.ParentSessionID = nil
+			} else {
+				parent := centralstore.SessionID(tc.newParent)
+				child.ParentSessionID = &parent
+			}
+			// Unread may already have arrived while suppressed. Changing the edge
+			// must release that withheld attention when the new parent permits it.
+			child.Unread = true
+			r.handleOutcome(upsertOutcome("child", child))
+			if got := hasPendingNotification(r, "child"); got != tc.want {
+				t.Fatalf("pending notification = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCentralNotifyFusedCompletionUnreadUsesParentSuppression(t *testing.T) {
 	r := newParentNotifyTestRouter(t)
 	r.handleOutcome(upsertOutcome("parent", notifyRow("pi", true, "", false)))
