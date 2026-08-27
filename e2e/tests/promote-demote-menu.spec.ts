@@ -70,8 +70,8 @@ test.describe('promote/demote in the ⋮ session menu (mock fixtures)', () => {
   })
 
   test('a promoted root offers Return to family and names the current parent', async ({ page }) => {
-    // famApromoted carries promoted_to_root with famAroot as its
-    // organizational parent — it renders as a root but can rejoin.
+    // famApromoted is parentless with famAroot as its launch parent, so it
+    // renders as a root but can rejoin.
     await openMock(page, '/my-project/claude/~famApromoted')
     await openMenu(page)
     const item = promotionItem(page)

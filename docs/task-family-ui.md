@@ -168,13 +168,14 @@ state; an active error remains a hollow red current-status ring and is not
 family attention.
 
 Notification delivery is suppressed only when the session's current direct
-parent is active at the committed completion instant. Reparenting changes the
-suppressor immediately; promoting removes it, so a promoted root always
-notifies. A missing parent fails safe as inactive, so the notification is
-delivered. Agent activity is semantic turn activity; terminal activity
-currently comes from the runner's OSC 133 prompt cycle (active command to idle
-prompt). This parent check is one hop and one shot—later parent activity never
-retro-delivers a suppressed notification.
+parent is active when the completion outcome is published. The publisher
+re-reads the session after the completion commit, so a reparent that commits in
+that narrow window can be the parent it observes. Reparenting otherwise changes
+the suppressor immediately; promoting removes it. A missing parent fails safe
+as inactive, so the notification is delivered. Agent activity is semantic turn
+activity; terminal activity currently comes from the runner's OSC 133 prompt
+cycle (active command to idle prompt). Suppression is best-effort, one hop, and
+one shot—later parent activity never retro-delivers a suppressed notification.
 
 `gmux wait` (on success), `gmux tail`, `gmux agent logs`, prompts, steering,
 raw sends, and web interaction consume unread. The family panel's bulk

@@ -6,8 +6,8 @@ import type { ProjectItem, Session } from './types'
 
 /** Resolve one potential task-family edge without trusting the rest of the
  * ancestry. The parent must be a semantic agent; its child may be any session.
- * Unresolved provenance is not a presentation edge. Promotion breaks only the
- * presentation edge without erasing parent_session_id provenance. */
+ * Unresolved provenance is not a presentation edge. Promotion clears the
+ * parent edge; launch provenance remains available for Return to family. */
 function potentialFamilyParent(session: Session, byId: ReadonlyMap<string, Session>): Session | undefined {
   if (!session.parent_session_id
     || session.parent_session_id === session.id) return undefined
@@ -156,36 +156,32 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
 
 /** The one promotion mutation this session admits right now, or null.
  *
- * Presentation promotion is sticky, user-authored state on the session
- * (ADR 0026 §8): promoting breaks the presentation edge — the
- * organizational parent keeps owning the session — and demoting rejoins
- * the *current* organizational parent's presentation family. (Not *only*
- * presentation: the daemon also re-roots the active-subagent budget under
- * the promoted session, and notification suppression stays with the
- * immutable launch parent either way — see the docs.) Eligibility
- * mirrors the projection's own edge rule (`familyIndex`), so the
+ * Families have one mutable axis: `parent_session_id`. Promoting clears that
+ * edge, making the session a genuine root for presentation, ownership,
+ * active-subagent budgeting, recursive dismissal, and notification
+ * suppression. Return to family restores the immutable launch parent when it
+ * is still a valid local agent; arbitrary reparenting remains a CLI operation.
+ * Eligibility mirrors the projection's own edge rule (`familyIndex`), so the
  * menu can never offer a mutation whose result the sidebar wouldn't show:
  *
  *  - peer-projected sessions (network peers and Local/devcontainer peers
  *    alike) get nothing: the daemon refuses promote/demote for sessions it
  *    doesn't own (`local_only`), so offering the verb would be a lie;
- *  - a family child (cycle-safe, parent local and a semantic agent, not
- *    already promoted) can be promoted — but only if the promoted row has
+ *  - a family child (cycle-safe, parent local and a semantic agent) can be
+ *    promoted — but only if the resulting root row has
  *    the same real stamp-backed placement the sidebar uses. A matching rule
  *    alone is not enough: `buildProjectFolders` buckets only stamped rows,
  *    including retained-dead sessions. The daemon deliberately has no
  *    parentage fallback for project placement (ADR 0026 §8), so an unstamped
  *    or unknown-project child gets a visible blocked action instead of a
  *    mutation that strands it;
- *  - a promoted session can return to its family only while that family still
- *    exists and the *post-demotion presentation root* has that same placement.
- *    A parent outside every project is not a safe demote target, even if the
- *    promoted child itself is placed. Deleted/non-agent parents leave the flag
- *    inert and hidden; an existing but unplaced family root is blocked with a
- *    reason.
+ *  - a parentless session with launch provenance can return only while that
+ *    launch family still exists and the post-reparent root has that same
+ *    placement. A parent outside every project is not a safe target, even if
+ *    the child itself is placed. Deleted/non-agent launch parents hide the
+ *    action; an existing but unplaced family root blocks it with a reason.
  *
- * `parent` is the session the copy names: the owner that keeps the child
- * after a promote, the family a demote rejoins. */
+ * `parent` is the session named by the copy: the family being left or rejoined. */
 export type PromotionAction =
   | { readonly kind: 'promote'; readonly parent: Session; readonly blocked?: 'no-project' }
   | { readonly kind: 'demote'; readonly parent: Session; readonly blocked?: 'no-project' }
@@ -212,8 +208,7 @@ export function promotionAction(
       ? { kind: 'promote', parent }
       : { kind: 'promote', parent, blocked: 'no-project' }
   }
-  // During the transition, a legacy promoted flag is also a root. The return
-  // target is immutable launch provenance, never the current parent edge.
+  // A parentless session can return to its immutable launch parent.
   if (session.parent_session_id) return null
   if (!session.launched_from_session_id || session.launched_from_session_id === session.id) return null
   const parent = index.byId.get(session.launched_from_session_id)

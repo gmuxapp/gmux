@@ -1872,7 +1872,7 @@ function clearPromotionTimer(id: string): void {
   promotionTimers.delete(id)
 }
 
-export function beginPromotion(id: string, kind: 'promote' | 'demote', targetParent: string | null = kind === 'promote' ? null : ''): number {
+export function beginPromotion(id: string, kind: 'promote' | 'demote', targetParent: string | null): number {
   clearPromotionTimer(id)
   const seq = ++_promotionSeq
   const next = new Map(promotionPending.value)

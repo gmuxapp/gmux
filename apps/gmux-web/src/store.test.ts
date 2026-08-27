@@ -708,8 +708,8 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
 
 describe('promote/demote pending request ownership', () => {
   it('settles only the matching request token, including across sessions', () => {
-    const sessionA = beginPromotion('session-a', 'promote')
-    const sessionB = beginPromotion('session-b', 'demote')
+    const sessionA = beginPromotion('session-a', 'promote', null)
+    const sessionB = beginPromotion('session-b', 'demote', 'root')
 
     settlePromotion('session-a', sessionB)
     expect(promotionPending.value.get('session-a')?.seq).toBe(sessionA)
@@ -721,8 +721,8 @@ describe('promote/demote pending request ownership', () => {
   })
 
   it('does not let an older request clear a newer request for one session', () => {
-    const first = beginPromotion('session', 'promote')
-    const second = beginPromotion('session', 'promote')
+    const first = beginPromotion('session', 'promote', null)
+    const second = beginPromotion('session', 'promote', null)
 
     settlePromotion('session', first)
     expect(promotionPending.value.get('session')?.seq).toBe(second)
@@ -735,7 +735,7 @@ describe('promote/demote pending request ownership', () => {
     const child = makeSession({ id: 'child', parent_session_id: 'root', project_slug: 'p' })
     _setRawWorld({ projects: [{ slug: 'p', match: [{ path: '/p' }] }] })
     _rawSessions.value = [root, child]
-    const seq = beginPromotion('child', 'promote')
+    const seq = beginPromotion('child', 'promote', null)
 
     // A is not selected/mounted; the central snapshot boundary still consumes it.
     reconcilePromotionPending([root, { ...child, parent_session_id: undefined }])
@@ -780,7 +780,7 @@ describe('promote/demote pending request ownership', () => {
   it('clears a hung request at the explicit final safety deadline', () => {
     vi.useFakeTimers()
     try {
-      beginPromotion('hung', 'promote')
+      beginPromotion('hung', 'promote', null)
       expect(promotionPending.value.has('hung')).toBe(true)
       vi.advanceTimersByTime(PROMOTION_PENDING_TTL_MS)
       expect(promotionPending.value.has('hung')).toBe(false)

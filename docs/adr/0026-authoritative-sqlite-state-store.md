@@ -99,7 +99,7 @@ Durable common state includes, where applicable:
 - creation, start, exit, activity, and dismissal timestamps;
 - exit code;
 - last-known terminal columns and rows;
-- parent-session provenance and root-promotion preference.
+- mutable parent-session ownership and immutable launch provenance.
 
 `command` and `remotes` may be JSON values because they are consumed as whole common values. Domain state and queried/constrained fields use ordinary columns. Timestamps are Unix milliseconds in SQLite and are converted to the existing wire representation at the API boundary.
 
@@ -123,7 +123,7 @@ Dismissal:
 
 - sets nullable `dismissed_at`;
 - removes project placement/order;
-- retains the session row, conversation identity, parent provenance, promotion preference, and scrollback;
+- retains the session row, conversation identity, parent and launch provenance, and scrollback;
 - recursively dismisses descendants after UI confirmation makes that scope clear.
 
 There is no default destructive “forget completely” operation. Adapter reconciliation eventually removes sessions that are no longer resumable.
@@ -144,7 +144,7 @@ ADR 0025's complete host-ownership model is preserved:
 
 Placement is recalculated at existing discovery/registration points and, in a later feature, when runner/adapter common state reports a CWD/workspace change or project rules change. A project change removes the old placement and appends the session to its newly derived project transactionally. Users do not manually move sessions between projects.
 
-Ordering within a project is durable user state. It uses dense, zero-based integer positions among display siblings. The schema uses an explicit non-null sibling-scope key for roots and grouped children, avoiding SQLite's nullable-unique-index hole. Promotion, unpromotion, explicit reparenting, project reassignment, dismissal, and parent deletion rewrite every affected old/new scope to its canonical `0..n-1` order in one collision-safe transaction. Reparenting closes the old direct-parent scope and appends to the new scope atomically. Fractional ranks and linked-list ordering are rejected: they optimize writes that are negligible at sidebar scale while adding exhaustion/rebalancing or integrity complexity.
+Ordering within a project is durable user state. It uses dense, zero-based integer positions among display siblings. The schema uses an explicit non-null sibling-scope key for roots and grouped children, avoiding SQLite's nullable-unique-index hole. Promotion, return-to-family, explicit reparenting, project reassignment, dismissal, and parent deletion rewrite every affected old/new scope to its canonical `0..n-1` order in one collision-safe transaction. Reparenting closes the old direct-parent scope and appends to the new scope atomically. Fractional ranks and linked-list ordering are rejected: they optimize writes that are negligible at sidebar scale while adding exhaustion/rebalancing or integrity complexity.
 
 Dismissed sessions have no placement or preserved order. If they register again, they are newly assigned at the normal bottom.
 
@@ -163,13 +163,9 @@ The explicit reparent operation may assign any retained session on the same daem
 
 The motivating orchestration workflow is to launch worker sessions, launch a reviewer session, then reparent the workers under the reviewer so it owns their attention. Arbitrary ownership trees are therefore an orchestration primitive rather than an accidental record of process launch order. Reparenting also changes which parent's activity suppresses child notifications.
 
-`promoted_to_root` remains separate, sticky, user-authored presentation state:
+**Amendment (2026-08-27):** As with the [ADR 0009 amendment](0009-session-state-and-events.md), migration 00005 removed `promoted_to_root` and collapsed family behavior onto the single mutable `parent_session_id` edge. Promotion clears that edge; Return to family restores `launched_from_session_id` when valid. Presentation, ownership, dismissal, budgeting, and notification suppression now agree on that edge.
 
-- when true, the session renders as a project root without losing its organizational parent and receives full root visibility and notification semantics;
-- when false, it groups beneath its parent only when both are visible in the same derived project;
-- sessions whose parent resolves to another project render as roots while retaining both stored facts.
-
-A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging may reorder siblings and promote/unpromote without rewriting `parent_session_id`; explicit reparenting is the sole adoption operation.
+A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging may reorder siblings; promotion and all reparenting rewrite `parent_session_id`.
 
 Dismissing a parent recursively dismisses descendants reachable through current `parent_session_id` edges. Permanently reconciling away a parent does not delete resumable descendants; the deletion transaction clears its direct children's parent edges and makes them genuine roots. Their own descendant edges remain intact. Deletion repair never touches `launched_from_session_id`, so launch history survives deletion of the launching session.
 
