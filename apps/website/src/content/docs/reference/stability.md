@@ -3,7 +3,7 @@ title: Interface stability
 description: Interfaces covered by the gmux 2.x compatibility covenant.
 ---
 
-This page defines the public interfaces that gmux 2.x keeps compatible. Covenanted interfaces evolve additively: existing variables, files, and keys keep their meaning throughout 2.x.
+This page defines the public interfaces that gmux 2.x keeps compatible. Covenanted interfaces evolve additively: existing variables, files, and keys keep their meaning throughout 2.x. Surfaces listed under [Experimental](#experimental) below are excluded from the covenant until they are moved into it, even where another page documents them.
 
 ## Covenanted for 2.x
 
@@ -42,8 +42,11 @@ resumability, health, or capability support.
 #### Diagnostic session fields
 
 The session fields `pid`, `socket_path`, `runner_version`, and `binary_hash`
-are origin-local diagnostics, not scripting inputs. They keep their JSON type
-while present, but they are best-effort: any of them may be absent on any row,
+— wherever session JSON is served (`gmux ls --json`, the HTTP and SSE session
+payloads, peer projections) — are origin-local diagnostics, not scripting
+inputs. They keep their JSON type
+while present, but they are best-effort: any of them may be absent on any row
+(`binary_hash` never appears in `gmux ls --json` at all),
 they carry no meaning outside the host that owns the session (a `pid` or
 `socket_path` from another host is not usable where you read it), and gmux may
 stop emitting them in a future release without a major version. Do not build
@@ -51,7 +54,7 @@ on them; use `ref`, `alive`, `status`, and the exit-code taxonomy instead.
 
 ### Configuration files
 
-- `host.toml` contains host-local daemon configuration. Existing keys keep their meaning, but the file is strictly validated: unknown keys are rejected to catch mistakes, except for the documented deprecated `tailscale.hostname`, `discovery.tailscale`, and `[[peers]]` shapes, which are ignored with warnings. See the [host.toml reference](/reference/host-toml/#strict-validation) for details. A `host.toml` using keys from a newer gmux release may therefore require the matching daemon version.
+- `host.toml` contains host-local daemon configuration. Existing keys keep their meaning — except the keys listed under [Experimental](#experimental), which are documented for use but not yet covenanted — and the file is strictly validated: unknown keys are rejected to catch mistakes, except for the documented deprecated `tailscale.hostname`, `discovery.tailscale`, and `[[peers]]` shapes, which are ignored with warnings. See the [host.toml reference](/reference/host-toml/#strict-validation) for details. A `host.toml` using keys from a newer gmux release may therefore require the matching daemon version.
 - `settings.jsonc` and `theme.jsonc` contain portable frontend preferences. Their keys evolve additively, and unknown fields are tolerated for forward compatibility.
 
 ## Experimental

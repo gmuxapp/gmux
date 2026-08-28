@@ -50,7 +50,7 @@ gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream
 | `command` | ✓ | ✓ | ✓ | title fallback only |
 | `cwd` | ✓ | ✓ | ✓ | ✓ header, grouping |
 | `adapter` | ✓ | ✓ | ✓ | ✓ adapter badge, URLs |
-| `drive_mode` | — | ✓ | ✓ | ✓ terminal vs. conversation view |
+| `drive_mode` | ✓ | ✓ | ✓ | ✓ terminal vs. conversation view |
 | `semantic_agent` | — | ✓ derived | ✓ | ✓ family-edge eligibility |
 | `peer` | — | ✓ (hub) | ✓ | ✓ host attribution |
 | `parent_session_id` | ✓ | ✓ | ✓ | ✓ family grouping, sidebar placement |
@@ -121,7 +121,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | Field | Type | Description |
 |-------|------|-------------|
 | `alive` | boolean | Is the process running? Derived from socket reachability. |
-| `pid` | number | Process ID when alive |
+| `pid` | number? | Process ID when alive. Diagnostic; may be absent on any row. |
 | `exit_code` | number? | Exit code when dead |
 | `started_at` | ISO 8601 | When the process was started |
 | `exited_at` | ISO 8601? | When the process exited |
@@ -156,7 +156,7 @@ The stored launch `command` is preserved across exit. Resuming derives a tool-sp
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `socket_path` | string | Runner's Unix socket. The frontend uses this as a truthiness check for attachability; the actual path is unused by the browser. |
+| `socket_path` | string? | Runner's Unix socket. The frontend uses this as a truthiness check for attachability; the actual path is unused by the browser. Diagnostic; may be absent on any row. |
 | `terminal_cols` | number? | Current terminal width. Used for initial sizing on attach. |
 | `terminal_rows` | number? | Current terminal height. |
 
@@ -164,8 +164,8 @@ The stored launch `command` is preserved across exit. Resuming derives a tool-sp
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `runner_version` | string | Version of the runner binary hosting the session. |
-| `binary_hash` | string | sha256 of the runner binary. The frontend compares both against `GET /v1/health` to derive the "outdated" badge (version mismatch, or hash drift in dev). |
+| `runner_version` | string? | Version of the runner binary hosting the session. |
+| `binary_hash` | string? | sha256 of the runner binary. The frontend compares both against `GET /v1/health` to derive the "outdated" badge (version mismatch, or hash drift in dev). |
 
 `pid`, `socket_path`, `runner_version`, and `binary_hash` are origin-local,
 best-effort diagnostics: any of them may be absent on any row, and they carry

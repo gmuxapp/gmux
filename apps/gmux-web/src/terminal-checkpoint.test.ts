@@ -59,6 +59,24 @@ describe('prepareBrowserCheckpoint version skew', () => {
   it('passes empty chunk lists through untouched', () => {
     expect(prepareBrowserCheckpoint([], true, { top: 1, bottom: 24, rows: 24 })).toEqual([])
   })
+
+  it('treats a BSU frame without the wire reset as legacy', () => {
+    // A frame that opens synchronized update but lacks the runner's reset
+    // preamble is not a state checkpoint; never invent buffer or margins.
+    const frame = encoder.encode(bsu + 'partial output' + esu)
+    const prepared = prepare(frame, false, { top: 1, bottom: 24, rows: 24 })
+    expect(prepared).toBe(SGR_RESET + decoder.decode(frame))
+  })
+
+  it('rewrites only the first chunk and preserves the rest verbatim', () => {
+    const first = sharedFrame('body')
+    const rest = [encoder.encode('later output'), encoder.encode('even later')]
+    const out = prepareBrowserCheckpoint([first, ...rest], false, { top: 2, bottom: 20, rows: 24 })
+    expect(out).toHaveLength(3)
+    expect(decoder.decode(out[0])).toContain('\x1b[?1049l')
+    expect(out[1]).toBe(rest[0])
+    expect(out[2]).toBe(rest[1])
+  })
 })
 
 describe('prepareBrowserCheckpoint with authoritative metadata', () => {

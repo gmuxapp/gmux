@@ -32,7 +32,13 @@ Dev builds (`version=dev`) skip version checking and never replace — this avoi
 
 ## Contract versioning
 
-Breaking API or schema changes require a new version prefix. Non-breaking additions (new optional fields) are fine within a version.
+For the covenanted API surface — the endpoints and schemas documented in the
+public references — breaking changes require a new version prefix. Non-breaking
+additions (new optional fields) are fine within a version. Undocumented
+endpoints under `/v1/` (internal daemon↔CLI plumbing such as launch
+reservations) and surfaces listed as
+[experimental](/reference/stability/#experimental) are exempt: they may change
+without a version bump, which is why external callers must not use them.
 
 ## What is NOT published
 
