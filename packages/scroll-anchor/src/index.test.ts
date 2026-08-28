@@ -225,6 +225,17 @@ describe('ScrollAnchorAddon', () => {
     expect(h.addon.mode).toBe('following')
   })
 
+  it('lets fresh wheel intent supersede a stale programmatic-scroll token', () => {
+    const h = makeHarness()
+    h.setBuffer(20, 20)
+    // Model an addon scroll that xterm clamps/no-ops and therefore never
+    // delivers through onScroll, leaving its suppression token outstanding.
+    ;(h.addon as any).runProgrammaticScroll(() => h.setBuffer(20, 20))
+
+    h.userScroll(12)
+    expect(h.addon.mode).toBe('anchored')
+  })
+
   it('suppresses an asynchronously delivered addon scroll before a later user scroll', async () => {
     const h = makeHarness()
     h.setBuffer(20, 20)
@@ -237,10 +248,13 @@ describe('ScrollAnchorAddon', () => {
     expect(h.addon.mode).toBe('following')
   })
 
-  it('follows structurally when a non-wheel scroll lands at bottom', () => {
+  it('follows structurally only when a non-intent scroll reaches bottom', () => {
     const h = makeHarness()
     h.setBuffer(20, 20)
     h.userScroll(10)
+    expect(h.addon.mode).toBe('anchored')
+
+    h.outputScroll(19)
     expect(h.addon.mode).toBe('anchored')
     h.outputScroll(20)
     expect(h.addon.mode).toBe('following')
