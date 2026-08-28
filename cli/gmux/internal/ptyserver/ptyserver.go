@@ -520,6 +520,7 @@ type terminalCheckpointMetadata struct {
 	ActiveBuffer string `json:"active_buffer"`
 	ScrollTop    int    `json:"scroll_top"`
 	ScrollBottom int    `json:"scroll_bottom"`
+	Cols         int    `json:"cols"`
 	Rows         int    `json:"rows"`
 }
 
@@ -1717,7 +1718,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// changes, so full-screen/default state is represented explicitly.
 		meta := terminalCheckpointMetadata{
 			Type: "terminal_checkpoint", ActiveBuffer: activeBuffer,
-			ScrollTop: margins.top, ScrollBottom: margins.bottom, Rows: int(s.ptyRows),
+			ScrollTop: margins.top, ScrollBottom: margins.bottom,
+			Cols: int(s.ptyCols), Rows: int(s.ptyRows),
 		}
 		metaBytes, _ := json.Marshal(meta)
 		if err := client.write(websocket.MessageText, metaBytes); err != nil {

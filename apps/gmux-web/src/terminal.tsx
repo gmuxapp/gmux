@@ -15,6 +15,7 @@ import { refreshAtlasWhenIconFontLoads } from './nerd-font'
 import { BSU, createReplayBuffer, ESU, startsWith } from './replay'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
+import { resolveCheckpointGeometry } from './terminal-checkpoint-geometry'
 import { TerminalFindBar } from './terminal-find'
 import { canSendTerminalInput } from './terminal-input'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
@@ -437,7 +438,7 @@ export function TerminalView({
     processViewportResizeRef.current?.(true)
   }, [])
 
-  const applyOwnedResize = useCallback((size: TerminalSize, queueTerminalResize = true) => {
+  const applyOwnedResize = useCallback((size: TerminalSize, queueTerminalResize = true, announceAlways = false) => {
     const prevPty = ptySizeRef.current
 
     // Optimistically sync ptySize so the pill hides immediately, before the
@@ -446,7 +447,7 @@ export function TerminalView({
     setPtySize(size); ptySizeRef.current = size
     if (queueTerminalResize) queueResize(size)
 
-    if (sameSize(prevPty, size)) return
+    if (!announceAlways && sameSize(prevPty, size)) return
 
     // A new outbound resize supersedes any older echo wait or pending dirty
     // viewport event. The server echo for this exact size re-opens the gate.
@@ -526,7 +527,9 @@ export function TerminalView({
     const dims = measureTerminalFit(term, shell)
     setViewportSize(dims); viewportSizeRef.current = dims
     if (!dims) return null
-    applyOwnedResize(dims, false)
+    // A claim is also the ownership assertion and reconnect-redraw trigger,
+    // so it must reach the runner even when checkpoint and viewport match.
+    applyOwnedResize(dims, false, true)
     return dims
   }, [applyOwnedResize])
 
@@ -1034,6 +1037,7 @@ export function TerminalView({
       // staged; the existing screen remains visible during failed attempts.
       let checkpointAlt: boolean | null = null
       let checkpointMargins: CheckpointMargins | null = null
+      let checkpointCols: number | undefined
       // Keep post-checkpoint bytes out of TerminalIO until the initial replay
       // has committed and xterm has claimed the browser geometry.
       let attachPhase: 'replay' | 'claiming' | 'claimed' = isFirstConnect ? 'replay' : 'claimed'
@@ -1048,12 +1052,16 @@ export function TerminalView({
         const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins)
         const claiming = attachPhase === 'replay'
         if (claiming) attachPhase = 'claiming'
-        // Newly launched sessions can reach the WS before their first SSE
-        // dimensions. The runner's pre-resize default is 80 columns; sessions
-        // with an established geometry carry it in session/resize metadata.
-        const cols = sessionRef.current.terminal_cols ?? ptySizeRef.current?.cols ?? 80
-        const rows = checkpointMargins?.rows
-        const checkpointSize = claiming && cols && rows ? { cols, rows } : null
+        // New runners declare the exact geometry used to render this frame.
+        // Fall back to the old metadata chain for rolling upgrades.
+        const checkpointSize = resolveCheckpointGeometry(
+          checkpointMargins ? { cols: checkpointCols, rows: checkpointMargins.rows } : null,
+          sessionRef.current.terminal_cols,
+          ptySizeRef.current?.cols,
+        )
+        if (checkpointSize) {
+          setPtySize(checkpointSize); ptySizeRef.current = checkpointSize
+        }
         const onReplayed = () => {
           if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
           scrollAnchorRef.current?.follow()
@@ -1087,8 +1095,8 @@ export function TerminalView({
           termIoRef.current?.enqueueResizeThenMany(claimSize, [], epoch, undefined, onClaimResized)
         }
         if (checkpointSize) {
-          // This ordered barrier resizes xterm before the first checkpoint
-          // byte; a later viewport claim cannot overwrite it.
+          // Every replay gets an ordered local geometry barrier. Reconnects
+          // do not reclaim or send this checkpoint size back to the runner.
           termIoRef.current?.enqueueResizeThenMany(checkpointSize, prepared, epoch, onReplayed)
         } else {
           queueMany(prepared, onReplayed)
@@ -1136,6 +1144,7 @@ export function TerminalView({
             // Use it to initialize ptySize if we don't have one yet.
             if (msg.type === 'terminal_checkpoint') {
               checkpointAlt = msg.active_buffer === 'alternate'
+              checkpointCols = Number.isInteger(msg.cols) && msg.cols > 0 ? msg.cols : undefined
               if (Number.isInteger(msg.scroll_top) && Number.isInteger(msg.scroll_bottom) && Number.isInteger(msg.rows)) {
                 checkpointMargins = { top: msg.scroll_top, bottom: msg.scroll_bottom, rows: msg.rows }
               }
@@ -1240,6 +1249,7 @@ export function TerminalView({
   // terminal) changes ptySize away from our viewport.
   const showDisconnectedPill = wsState === 'lost'
   const showResizePill = !showDisconnectedPill
+    && !termLoading
     && session.alive
     && ptySize != null && viewportSize != null
     && (viewportSize.cols !== ptySize.cols || viewportSize.rows !== ptySize.rows)

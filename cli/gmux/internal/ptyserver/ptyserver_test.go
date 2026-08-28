@@ -927,14 +927,14 @@ func TestShutdownDrainNoRace(t *testing.T) {
 	}
 }
 
-func TestTerminalCheckpointMetadataCarriesMargins(t *testing.T) {
+func TestTerminalCheckpointMetadataCarriesGeometryAndMargins(t *testing.T) {
 	data, err := json.Marshal(terminalCheckpointMetadata{
-		Type: "terminal_checkpoint", ActiveBuffer: "alternate", ScrollTop: 2, ScrollBottom: 4, Rows: 44,
+		Type: "terminal_checkpoint", ActiveBuffer: "alternate", ScrollTop: 2, ScrollBottom: 4, Cols: 91, Rows: 44,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"terminal_checkpoint","active_buffer":"alternate","scroll_top":2,"scroll_bottom":4,"rows":44}`
+	want := `{"type":"terminal_checkpoint","active_buffer":"alternate","scroll_top":2,"scroll_bottom":4,"cols":91,"rows":44}`
 	if string(data) != want {
 		t.Fatalf("metadata = %s, want %s", data, want)
 	}
