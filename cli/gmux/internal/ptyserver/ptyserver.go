@@ -473,7 +473,16 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		if !first && !previousWrapped {
 			sb.WriteString("\r\n")
 		}
-		sb.WriteString(line.Render())
+		rendered := line.Render()
+		sb.WriteString(rendered)
+		if wrapped {
+			// A wrapped row consumed every cell. Render trims only trailing
+			// unstyled blanks, so restore those cells before joining the next
+			// row. Styled blanks remain in rendered and need no extra padding.
+			if padding := len(line) - ansi.StringWidth(rendered); padding > 0 {
+				sb.WriteString(strings.Repeat(" ", padding))
+			}
+		}
 		first = false
 		previousWrapped = wrapped
 	}
@@ -488,8 +497,8 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		}
 	}
 
-	// Visible screen. Line.Render trims unused trailing cells, so joining a
-	// soft wrap never injects viewport padding into the logical line.
+	// Visible rows use the emulator width. Wrapped rows are padded by writeRow;
+	// non-wrapped rows retain Line.Render's trailing-cell trimming.
 	w, h := e.Width(), e.Height()
 	for y := 0; y < h; y++ {
 		line := make(uv.Line, w)

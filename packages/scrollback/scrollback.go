@@ -319,7 +319,8 @@ func extractLines(e *vt.Emulator) []string {
 	var rows []row
 	if sb := e.Scrollback(); sb != nil {
 		for i, line := range sb.Lines() {
-			rows = append(rows, row{plainLine(line), sb.Wrapped(i)})
+			wrapped := sb.Wrapped(i)
+			rows = append(rows, row{plainLine(line, wrapped), wrapped})
 		}
 	}
 
@@ -332,7 +333,8 @@ func extractLines(e *vt.Emulator) []string {
 				line[x] = *c
 			}
 		}
-		visible[y] = row{plainLine(line), e.Wrapped(y)}
+		wrapped := e.Wrapped(y)
+		visible[y] = row{plainLine(line, wrapped), wrapped}
 	}
 	end := len(visible)
 	for end > 0 && strings.TrimSpace(visible[end-1].text) == "" {
@@ -355,9 +357,10 @@ func extractLines(e *vt.Emulator) []string {
 	return lines
 }
 
-// plainLine renders a terminal line as plain text (no ANSI styling),
-// right-trimming trailing spaces so short lines don't emit padding.
-func plainLine(line uv.Line) string {
+// plainLine renders a terminal line as plain text (no ANSI styling). Wrapped
+// rows keep their full cell width because every trailing blank was consumed at
+// the wrap boundary; terminating rows still discard unused padding.
+func plainLine(line uv.Line, wrapped bool) string {
 	var b strings.Builder
 	for _, c := range line {
 		if c.Content == "" {
@@ -365,6 +368,9 @@ func plainLine(line uv.Line) string {
 		} else {
 			b.WriteString(c.Content)
 		}
+	}
+	if wrapped {
+		return b.String()
 	}
 	return strings.TrimRight(b.String(), " ")
 }

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -2070,60 +2071,61 @@ func TestRenderScreenSoftWrapRoundTripReflows(t *testing.T) {
 	}
 }
 
-func TestRealScrollbackCheckpointKeepsPiLogicalLines(t *testing.T) {
-	const dir = "/home/mg/.local/state/gmux/sessions/sbsfn5fi"
-	var raw []byte
-	for _, name := range []string{"scrollback.0", "scrollback"} {
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
+func TestSnapshotFrameWrappedRowsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"boundary spaces", "the quick brown fox jumps"},
+		{"multiple boundaries", "one two three four five six seven eight nine ten eleven twelve"},
+		{"wide forced wrap", "123456789界XY"},
+		{"styled boundary blank", "123456789\x1b[44m \x1b[0mX"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src, srcDrain := newScreen(10, 8, func(bool) {})
+			defer stopScreenDrain(src, srcDrain)
+			if _, err := src.WriteString(tc.input); err != nil {
+				t.Fatal(err)
 			}
-			t.Fatal(err)
-		}
-		raw = append(raw, b...)
-	}
-	if len(raw) == 0 {
-		t.Skip("local sbsfn5fi replay data is unavailable")
-	}
 
-	screen, drain := newScreen(114, 44, func(bool) {})
-	defer stopScreenDrain(screen, drain)
-	screen.SetScrollbackSize(2000)
-	if _, err := screen.Write(raw); err != nil {
-		t.Fatal(err)
-	}
-	checkpoint := renderScreen(screen)
-	plain := ansi.Strip(checkpoint)
-
-	// Every non-wrapped visual row ends one serialized logical line; wrapped
-	// rows must not contribute a CRLF. This checks all provenance bits in the
-	// real replay rather than relying only on the inspected samples below.
-	nonWrappedRows := 0
-	if sb := screen.Scrollback(); sb != nil {
-		for i := 0; i < sb.Len(); i++ {
-			if !sb.Wrapped(i) {
-				nonWrappedRows++
+			frame := snapshotFrameWithScreen(src, false, true)
+			if tc.name == "boundary spaces" && strings.Contains(ansi.Strip(string(frame)), "quickbrown") {
+				t.Fatalf("checkpoint concatenated words: %q", frame)
 			}
-		}
+			dst, dstDrain := newScreen(10, 8, func(bool) {})
+			defer stopScreenDrain(dst, dstDrain)
+			if _, err := dst.Write(frame); err != nil {
+				t.Fatal(err)
+			}
+			assertScreensEqual(t, src, dst)
+		})
 	}
-	for y := 0; y < screen.Height(); y++ {
-		if !screen.Wrapped(y) {
-			nonWrappedRows++
-		}
-	}
-	if logicalLines := strings.Count(checkpoint, "\r\n") + 1; logicalLines != nonWrappedRows {
-		t.Fatalf("serialized logical lines=%d, non-wrapped rows=%d", logicalLines, nonWrappedRows)
-	}
+}
 
-	// These were emitted by pi as individual logical lines and each spans
-	// more than one 114-column visual row in this recording.
-	for _, line := range []string{
-		"The stray empties are orphan working-copy commits from each abandon — not on the branch line, never pushed. Branch is 13 clean commits. Pushing:",
-		"The split landed correctly (30fafd2 = scroll-anchor, 72cd036 = protocol) but both carry the same message. Fixingthe second's description:",
-	} {
-		if !strings.Contains(plain, line) {
-			t.Fatalf("checkpoint split known logical line at a visual boundary: %q", line)
+func assertScreensEqual(t *testing.T, want, got interface {
+	Width() int
+	Height() int
+	Wrapped(int) bool
+	CellAt(int, int) *uv.Cell
+	CursorPosition() uv.Position
+}) {
+	t.Helper()
+	if want.Width() != got.Width() || want.Height() != got.Height() {
+		t.Fatalf("screen sizes differ: %dx%d != %dx%d", want.Width(), want.Height(), got.Width(), got.Height())
+	}
+	if want.CursorPosition() != got.CursorPosition() {
+		t.Errorf("cursor differs: want %+v, got %+v", want.CursorPosition(), got.CursorPosition())
+	}
+	for y := 0; y < want.Height(); y++ {
+		if want.Wrapped(y) != got.Wrapped(y) {
+			t.Errorf("row %d wrapped: want %v, got %v", y, want.Wrapped(y), got.Wrapped(y))
+		}
+		for x := 0; x < want.Width(); x++ {
+			wc, gc := want.CellAt(x, y), got.CellAt(x, y)
+			if (wc == nil) != (gc == nil) || (wc != nil && !wc.Equal(gc)) {
+				t.Errorf("cell (%d,%d) differs: want %#v, got %#v", x, y, wc, gc)
+			}
 		}
 	}
 }
