@@ -1,6 +1,11 @@
 package vt
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	uv "github.com/charmbracelet/ultraviolet"
+)
 
 func write(t *testing.T, e *Emulator, s string) {
 	t.Helper()
@@ -141,6 +146,114 @@ func TestScrollbackWrapTruncation(t *testing.T) {
 	if sb.Len() != 2 || sb.Wrapped(0) || !sb.Wrapped(1) {
 		t.Fatalf("truncated wrap flags are misaligned: len=%d flags=%v,%v", sb.Len(), sb.Wrapped(0), sb.Wrapped(1))
 	}
+}
+
+func TestScrollbackPushWrappedTrailingBlanks(t *testing.T) {
+	line := uv.NewLine(4)
+	line.Set(0, &uv.Cell{Content: "x", Width: 1})
+	sb := NewScrollback(10)
+	sb.PushWrapped(line, true)
+	sb.PushWrapped(line, false)
+	if got := len(sb.Line(0)); got != 4 {
+		t.Fatalf("wrapped row length = %d, want 4", got)
+	}
+	if got := len(sb.Line(1)); got != 1 {
+		t.Fatalf("unwrapped row length = %d, want 1", got)
+	}
+}
+
+func TestNormalBufferWidthReflow(t *testing.T) {
+	t.Run("text spaces wide style cursor and blank lines", func(t *testing.T) {
+		e := NewEmulator(8, 8)
+		write(t, e, "界 ab cdZ\x1b[44m \x1b[0mQ\r\n\r\ntail")
+		e.Resize(11, 8)
+		lines := emulatorLogicalLines(e)
+		if len(lines) < 3 || lines[0] != "界 ab cdZ Q" || lines[1] != "" || lines[2] != "tail" {
+			t.Fatalf("reflowed logical lines = %q", lines)
+		}
+		foundStyledBlank := false
+		for y := 0; y < e.Height(); y++ {
+			for x := 0; x < e.Width(); x++ {
+				if c := e.CellAt(x, y); c != nil && c.Content == " " && c.Style.Bg != nil {
+					foundStyledBlank = true
+				}
+			}
+		}
+		if !foundStyledBlank {
+			t.Fatal("styled blank was lost during reflow")
+		}
+		if got := e.CursorPosition(); got != uv.Pos(4, 2) {
+			t.Fatalf("cursor = %+v, want (4,2)", got)
+		}
+	})
+
+	t.Run("scrollback visible boundary is one logical line", func(t *testing.T) {
+		e := NewEmulator(8, 2)
+		e.SetScrollbackSize(20)
+		text := "one two three four five six seven"
+		write(t, e, text)
+		if e.ScrollbackLen() == 0 || !e.Scrollback().Wrapped(e.ScrollbackLen()-1) {
+			t.Fatal("fixture does not cross the scrollback boundary")
+		}
+		e.Resize(13, 3)
+		if got := strings.Join(emulatorLogicalLines(e), "|"); got != text {
+			t.Fatalf("reflow text = %q, want %q", got, text)
+		}
+		for i, line := range e.Scrollback().Lines() {
+			if e.Scrollback().Wrapped(i) && len(line) != 13 {
+				t.Fatalf("scrollback wrapped row %d width = %d", i, len(line))
+			}
+		}
+	})
+
+	t.Run("scrollback maximum trims oldest reflowed rows", func(t *testing.T) {
+		e := NewEmulator(6, 2)
+		e.SetScrollbackSize(2)
+		write(t, e, "abcdefghijklmnopqrstuv")
+		e.Resize(3, 2)
+		if e.ScrollbackLen() != 2 {
+			t.Fatalf("scrollback len = %d, want max 2", e.ScrollbackLen())
+		}
+	})
+}
+
+func emulatorLogicalLines(e *Emulator) []string {
+	type row struct {
+		line    uv.Line
+		wrapped bool
+	}
+	var rows []row
+	for i, line := range e.Scrollback().Lines() {
+		rows = append(rows, row{line, e.Scrollback().Wrapped(i)})
+	}
+	last := e.CursorPosition().Y
+	for y := e.Height() - 1; y >= 0; y-- {
+		if lineContentLen(e.scr.buf.Line(y)) > 0 {
+			last = max(last, y)
+			break
+		}
+	}
+	for y := 0; y <= last; y++ {
+		rows = append(rows, row{e.scr.buf.Line(y), e.Wrapped(y)})
+	}
+	var out []string
+	var b strings.Builder
+	for _, row := range rows {
+		limit := lineContentLen(row.line)
+		if row.wrapped {
+			limit = len(row.line)
+		}
+		for i := 0; i < limit; i++ {
+			if row.line[i].Width > 0 {
+				b.WriteString(row.line[i].Content)
+			}
+		}
+		if !row.wrapped {
+			out = append(out, strings.TrimRight(b.String(), " "))
+			b.Reset()
+		}
+	}
+	return out
 }
 
 func TestWrapBufferResetAndResize(t *testing.T) {

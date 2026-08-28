@@ -1,6 +1,8 @@
 package vt
 
 import (
+	"slices"
+
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/exp/ordered"
 )
@@ -107,6 +109,145 @@ func (s *Screen) Resize(width int, height int) {
 	}
 	s.wrapped = wrapped
 	s.scroll = s.buf.Bounds()
+}
+
+// reflow resizes the normal screen by rebuilding scrollback and visible rows
+// from logical lines. cursor is relative to the old visible screen.
+func (s *Screen) reflow(width, height int, cursor uv.Position) uv.Position {
+	type sourceRow struct {
+		line    uv.Line
+		wrapped bool
+	}
+	var source []sourceRow
+	sbLen := 0
+	if s.scrollback != nil {
+		sbLen = s.scrollback.Len()
+		for i, line := range s.scrollback.Lines() {
+			source = append(source, sourceRow{slices.Clone(line), s.scrollback.Wrapped(i)})
+		}
+	}
+	lastRow := cursor.Y
+	for y := s.Height() - 1; y >= 0; y-- {
+		if lineContentLen(s.buf.Line(y)) > 0 {
+			lastRow = max(lastRow, y)
+			break
+		}
+	}
+	for y := 0; y <= lastRow && y < s.Height(); y++ {
+		source = append(source, sourceRow{slices.Clone(s.buf.Line(y)), s.Wrapped(y)})
+	}
+	if len(source) == 0 {
+		source = append(source, sourceRow{})
+	}
+
+	type logicalLine struct {
+		cells []uv.Cell
+	}
+	var logical []logicalLine
+	cursorLine, cursorOffset := 0, 0
+	current := logicalLine{}
+	for i, row := range source {
+		consumed := lineContentLen(row.line)
+		if row.wrapped {
+			consumed = len(row.line)
+		}
+		if i == sbLen+cursor.Y {
+			cursorLine = len(logical)
+			cursorOffset = len(current.cells) + min(max(cursor.X, 0), consumed)
+		}
+		current.cells = append(current.cells, row.line[:consumed]...)
+		if !row.wrapped {
+			logical = append(logical, current)
+			current = logicalLine{}
+		}
+	}
+	if len(current.cells) > 0 || source[len(source)-1].wrapped {
+		logical = append(logical, current)
+	}
+	if len(logical) == 0 {
+		logical = append(logical, logicalLine{})
+	}
+	cursorLine = min(cursorLine, len(logical)-1)
+	cursorOffset = min(cursorOffset, len(logical[cursorLine].cells))
+
+	var rows []sourceRow
+	cursorRow, cursorCol := 0, 0
+	for li, line := range logical {
+		lineStart := len(rows)
+		cursorMapped := false
+		if len(line.cells) == 0 {
+			rows = append(rows, sourceRow{line: uv.NewLine(width)})
+		} else {
+			row := uv.NewLine(width)
+			col := 0
+			for i := 0; i < len(line.cells); {
+				cell := line.cells[i]
+				cellWidth := max(cell.Width, 1)
+				if cell.Width == 0 { // placeholder already emitted with its wide cell
+					i++
+					continue
+				}
+				if cellWidth > width-col {
+					rows = append(rows, sourceRow{line: row, wrapped: true})
+					row, col = uv.NewLine(width), 0
+				}
+				if li == cursorLine && !cursorMapped && cursorOffset <= i {
+					cursorRow, cursorCol = len(rows), col
+					cursorMapped = true
+				}
+				row.Set(col, &cell)
+				col += cellWidth
+				i += cellWidth
+				if col == width && i < len(line.cells) {
+					rows = append(rows, sourceRow{line: row, wrapped: true})
+					row, col = uv.NewLine(width), 0
+				}
+			}
+			if li == cursorLine && !cursorMapped {
+				cursorRow, cursorCol = len(rows), min(col, width-1)
+			}
+			rows = append(rows, sourceRow{line: row})
+		}
+		if li == cursorLine && len(line.cells) == 0 {
+			cursorRow, cursorCol = lineStart, 0
+		}
+	}
+
+	windowStart := max(len(rows)-height, 0)
+	windowStart = min(windowStart, cursorRow)
+	if s.scrollback != nil {
+		s.scrollback.Clear()
+		for _, row := range rows[:windowStart] {
+			s.scrollback.PushWrapped(row.line, row.wrapped)
+		}
+	}
+	s.buf = uv.NewRenderBuffer(width, height)
+	s.wrapped = make([]bool, height)
+	for y, row := range rows[windowStart:] {
+		if y >= height {
+			break
+		}
+		for x := range row.line {
+			cell := row.line[x]
+			if cell.Width == 0 {
+				continue
+			}
+			s.buf.SetCell(x, y, &cell)
+		}
+		s.wrapped[y] = row.wrapped
+	}
+	s.scroll = s.buf.Bounds()
+	s.touchArea(s.buf.Bounds())
+	return uv.Pos(cursorCol, cursorRow-windowStart)
+}
+
+func lineContentLen(line uv.Line) int {
+	for i := len(line) - 1; i >= 0; i-- {
+		if !line[i].IsZero() && !line[i].Equal(&uv.EmptyCell) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // Width returns the width of the screen.

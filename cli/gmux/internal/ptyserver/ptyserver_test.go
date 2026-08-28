@@ -2103,29 +2103,57 @@ func TestSnapshotFrameWrappedRowsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSnapshotFrameAfterWidthChangesDoesNotJoinOldWraps(t *testing.T) {
-	text := strings.Repeat("the quick brown fox jumps over the lazy dog ", 7)
-	src, srcDrain := newScreen(80, 8, func(bool) {})
-	defer stopScreenDrain(src, srcDrain)
-	if _, err := src.WriteString(text); err != nil {
-		t.Fatal(err)
+func TestSnapshotFrameAfterWidthChangesReflowsWithoutCorruption(t *testing.T) {
+	words := make([]string, 60)
+	for i := range words {
+		words[i] = fmt.Sprintf("word%02d", i)
 	}
+	sentence := strings.Join(words, " ")
+	for _, tc := range []struct {
+		name           string
+		prefix, suffix string
+	}{
+		{"visible", "", ""},
+		{"scrollback", strings.Repeat("old line\r\n", 5), "\r\n" + strings.Repeat("new line\r\n", 30)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src, srcDrain := newScreen(80, 25, func(bool) {})
+			defer stopScreenDrain(src, srcDrain)
+			src.SetScrollbackSize(200)
+			if _, err := src.WriteString(tc.prefix + sentence + tc.suffix); err != nil {
+				t.Fatal(err)
+			}
 
-	// Production sequence: content wraps at launch width, browser attachment
-	// widens the non-reflowing buffer, and detach shrinks it by one column.
-	src.Resize(114, 8)
-	src.Resize(113, 8)
-	frame := snapshotFrameWithScreen(src, false, true)
-	if plain := ansi.Strip(string(frame)); strings.Contains(plain, "  ") {
-		t.Fatalf("checkpoint padded an old-width row at the new width: %q", plain)
-	}
+			// Production sequence: launch width, browser claim, then the
+			// detach shrink. Normal history must reflow at both width changes.
+			src.Resize(114, 44)
+			src.Resize(113, 44)
+			frame := snapshotFrameWithScreen(src, false, true)
+			plain := ansi.Strip(string(frame))
+			if !strings.Contains(plain, sentence) {
+				t.Fatalf("checkpoint lost sentence word fidelity: %q", plain)
+			}
+			if strings.Contains(plain, "  ") {
+				t.Fatalf("checkpoint injected interior padding: %q", plain)
+			}
 
-	dst, dstDrain := newScreen(113, 8, func(bool) {})
-	defer stopScreenDrain(dst, dstDrain)
-	if _, err := dst.Write(frame); err != nil {
-		t.Fatal(err)
+			dst, dstDrain := newScreen(113, 44, func(bool) {})
+			defer stopScreenDrain(dst, dstDrain)
+			dst.SetScrollbackSize(200)
+			if _, err := dst.Write(frame); err != nil {
+				t.Fatal(err)
+			}
+			assertScreensEqual(t, src, dst)
+			if src.Scrollback().Len() != dst.Scrollback().Len() {
+				t.Fatalf("scrollback lengths differ: %d != %d", src.Scrollback().Len(), dst.Scrollback().Len())
+			}
+			for i, line := range src.Scrollback().Lines() {
+				if line.Render() != dst.Scrollback().Line(i).Render() || src.Scrollback().Wrapped(i) != dst.Scrollback().Wrapped(i) {
+					t.Fatalf("scrollback row %d differs after replay", i)
+				}
+			}
+		})
 	}
-	assertScreensEqual(t, src, dst)
 }
 
 func assertScreensEqual(t *testing.T, want, got interface {

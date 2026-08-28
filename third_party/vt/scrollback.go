@@ -37,19 +37,21 @@ func (s *Scrollback) PushWrapped(line uv.Line, wrapped bool) {
 		return
 	}
 
-	// Find last non-empty cell to trim trailing empty cells.
-	// This helps with wrapping and window resizing.
-	lastNonEmpty := -1
-	for i := len(line) - 1; i >= 0; i-- {
-		c := &line[i]
-		if !c.IsZero() && !c.Equal(&uv.EmptyCell) {
-			lastNonEmpty = i
-			break
+	last := len(line)
+	if !wrapped {
+		// Only a terminating row has unused trailing cells. Every cell of a
+		// wrapped row was consumed at its wrap width, including boundary
+		// spaces and the skipped blank before an early-wrapped wide cell.
+		last = 0
+		for i := len(line) - 1; i >= 0; i-- {
+			c := &line[i]
+			if !c.IsZero() && !c.Equal(&uv.EmptyCell) {
+				last = i + 1
+				break
+			}
 		}
 	}
-
-	// Clone the line content up to and including the last non-empty cell
-	cloned := slices.Clone(line[:lastNonEmpty+1])
+	cloned := slices.Clone(line[:last])
 
 	if len(s.lines) >= s.maxLines {
 		// Remove oldest line and append new one
