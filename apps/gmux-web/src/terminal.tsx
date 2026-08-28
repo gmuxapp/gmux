@@ -438,7 +438,7 @@ export function TerminalView({
     processViewportResizeRef.current?.(true)
   }, [])
 
-  const applyOwnedResize = useCallback((size: TerminalSize, queueTerminalResize = true) => {
+  const applyOwnedResize = useCallback((size: TerminalSize, queueTerminalResize = true, announceAlways = false) => {
     const prevPty = ptySizeRef.current
 
     // Optimistically sync ptySize so the pill hides immediately, before the
@@ -447,7 +447,7 @@ export function TerminalView({
     setPtySize(size); ptySizeRef.current = size
     if (queueTerminalResize) queueResize(size)
 
-    if (sameSize(prevPty, size)) return
+    if (!announceAlways && sameSize(prevPty, size)) return
 
     // A new outbound resize supersedes any older echo wait or pending dirty
     // viewport event. The server echo for this exact size re-opens the gate.
@@ -527,7 +527,9 @@ export function TerminalView({
     const dims = measureTerminalFit(term, shell)
     setViewportSize(dims); viewportSizeRef.current = dims
     if (!dims) return null
-    applyOwnedResize(dims, false)
+    // A claim is also the ownership assertion and reconnect-redraw trigger,
+    // so it must reach the runner even when checkpoint and viewport match.
+    applyOwnedResize(dims, false, true)
     return dims
   }, [applyOwnedResize])
 
@@ -1247,6 +1249,7 @@ export function TerminalView({
   // terminal) changes ptySize away from our viewport.
   const showDisconnectedPill = wsState === 'lost'
   const showResizePill = !showDisconnectedPill
+    && !termLoading
     && session.alive
     && ptySize != null && viewportSize != null
     && (viewportSize.cols !== ptySize.cols || viewportSize.rows !== ptySize.rows)
