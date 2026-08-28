@@ -115,6 +115,35 @@ func (c *freshRunnerClient) Meta(context.Context, string) (RunnerMeta, error) {
 	return c.meta, nil
 }
 
+func TestReducePreservesBufferedConversationRebindBoundary(t *testing.T) {
+	refA, refB := "A", "B"
+	titleA, subtitleA, slugA := "Title A", "subtitle A", "title-a"
+	reg := centralstore.RunnerRegistration{Facts: centralstore.RunnerFacts{
+		ConversationRef: &refA, AdapterTitle: &titleA, Subtitle: &subtitleA, Slug: &slugA,
+	}}
+
+	// /meta described A, then a conversation_file(B) event arrived before the
+	// registration commit. Flattening must not pair B's ref with A's metadata.
+	reduce(&reg, RunnerEvent{Facts: centralstore.RunnerFacts{ConversationRef: &refB}})
+	if reg.Facts.ConversationRef == nil || *reg.Facts.ConversationRef != refB {
+		t.Fatalf("rebind ref not reduced: %+v", reg.Facts)
+	}
+	if reg.Facts.AdapterTitle != nil || reg.Facts.Subtitle != nil || reg.Facts.Slug != nil {
+		t.Fatalf("buffered rebind retained A metadata beside B ref: %+v", reg.Facts)
+	}
+
+	// A later B metadata event is ordered after the boundary and must survive.
+	titleB, subtitleB, slugB := "Title B", "subtitle B", "title-b"
+	reduce(&reg, RunnerEvent{Facts: centralstore.RunnerFacts{
+		AdapterTitle: &titleB, Subtitle: &subtitleB, Slug: &slugB,
+	}})
+	if reg.Facts.AdapterTitle == nil || *reg.Facts.AdapterTitle != titleB ||
+		reg.Facts.Subtitle == nil || *reg.Facts.Subtitle != subtitleB ||
+		reg.Facts.Slug == nil || *reg.Facts.Slug != slugB {
+		t.Fatalf("post-rebind metadata not reduced: %+v", reg.Facts)
+	}
+}
+
 func TestDirectRegistrationRejectsDurableIDButDiscoveryRemainsExempt(t *testing.T) {
 	id := centralstore.SessionID("abcd1234")
 	client := newFakeClient(liveMeta(id, "pi", ""))

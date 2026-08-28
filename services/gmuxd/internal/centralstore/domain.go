@@ -542,7 +542,12 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	previousSlugBase := v.SlugBase
 	if p.ConversationRef != nil {
 		if *p.ConversationRef != "" && *p.ConversationRef != v.ConversationRef {
+			// A positive different ref is the conversation authority boundary.
+			// Status and adapter-derived display metadata belong to the old
+			// conversation and must not leak into the new one. Facts carried by
+			// this same observation are applied below after the clear.
 			v.Active, v.Error, v.Interrupted, v.StatusReported = false, false, false, false
+			v.AdapterTitle, v.Subtitle, v.Slug, v.SlugBase = "", "", "", ""
 		}
 		v.ConversationRef = *p.ConversationRef
 	}

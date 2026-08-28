@@ -480,9 +480,12 @@ func validateRunnerFacts(f RunnerFacts) error {
 func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 	if f.ConversationRef != nil {
 		if *f.ConversationRef != "" && *f.ConversationRef != v.ConversationRef {
-			// Terminal status is conversation-local. Clear it on the authoritative
-			// rebind before applying any status facts carried by this same update.
+			// Status and adapter-derived display metadata are conversation-local.
+			// Clear both on the authoritative non-empty rebind before applying any
+			// facts carried by this same update. Registration snapshots omit an
+			// empty/unbound ref, so only a positive different ref reaches here.
 			v.Active, v.Error, v.Interrupted, v.StatusReported = false, false, false, false
+			v.AdapterTitle, v.Subtitle, v.Slug, v.SlugBase = "", "", "", ""
 		}
 		v.ConversationRef = *f.ConversationRef
 	}
