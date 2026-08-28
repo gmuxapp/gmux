@@ -50,8 +50,11 @@ gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream
 | `command` | ✓ | ✓ | ✓ | title fallback only |
 | `cwd` | ✓ | ✓ | ✓ | ✓ header, grouping |
 | `adapter` | ✓ | ✓ | ✓ | ✓ adapter badge, URLs |
+| `drive_mode` | — | ✓ | ✓ | ✓ terminal vs. conversation view |
+| `semantic_agent` | — | ✓ derived | ✓ | ✓ family-edge eligibility |
 | `peer` | — | ✓ (hub) | ✓ | ✓ host attribution |
-| `parent_session_id` | ✓ | ✓ | ✓ | ✓ sidebar placement of editor children |
+| `parent_session_id` | ✓ | ✓ | ✓ | ✓ family grouping, sidebar placement |
+| `launched_from_session_id` | — | ✓ stamped | ✓ | ✓ “Return to family” |
 | `workspace_root` | ✓ | ✓ | ✓ | ✓ project grouping |
 | `remotes` | ✓ | ✓ | ✓ | ✓ project grouping |
 | **Process state** |
@@ -66,6 +69,7 @@ gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream
 | `subtitle` | ✓ | ✓ | ✓ | — |
 | `status` | ✓ | ✓ | ✓ | ✓ dots, header indicator |
 | `unread` | ✓ | ✓ | ✓ | ✓ dots, tab badge |
+| `unread_token` | ✓ | ✓ | ✓ | ✓ read acknowledgement identity |
 | **Resume & conversations** |
 | `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
 | `conversation_file` | ✓ (hook) | ✓ | ✓ | ✓ duplicate-conversation warning |
@@ -102,7 +106,15 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for project grouping. |
 | `remotes` | map? | Git/jj remote URLs. Used for cross-machine project grouping. |
 | `peer` | string? | Owning gmuxd instance; empty = local. Set by the hub for remote sessions, never by runners. |
-| `parent_session_id` | string? | Session this one was spawned from (`gmux edit` as `$EDITOR`); places the child next to its parent in the sidebar. |
+| `drive_mode` | string | How gmux hosts the harness (ADR 0033): `"terminal"` (PTY) or `"acp"` (terminal-less). Absent on the wire means `terminal`, so older payloads normalize cleanly. |
+| `semantic_agent` | boolean | The adapter exposes gmux's conversation-backed semantic-agent capability; both endpoints of a task-family edge must have it. |
+| `launched_from_session_id` | string? | Immutable launch provenance: the session this one was launched from. Survives every parent mutation; powers “Return to family”. |
+
+### Family edge (mutable)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `parent_session_id` | string? | The session's *current* behavioral parent: family grouping, subagent budget depth, recursive dismissal, and notification suppression all follow this edge. Unlike the fields above it is mutable: `POST /v1/sessions/{id}/reparent` with `{"parent_session_id": "<id>"}` moves the session, and with `{"parent_session_id": null}` promotes it to a root (`gmux promote` / `gmux reparent` are thin wrappers over this endpoint). Local sessions only; cycles, self-parenting, and peer-owned targets are refused. |
 
 ### Process State (owned by gmux, authoritative)
 
@@ -138,6 +150,7 @@ The stored launch `command` is preserved across exit. Resuming derives a tool-sp
 | `subtitle` | string? | Secondary context line. |
 | `status` | Status? | Application-reported status (see below). |
 | `unread` | boolean | Whether this session has unseen activity. |
+| `unread_token` | string | Opaque runner-owned identity of the unseen result. Read acknowledgements name the token they observed so a delayed read cannot clear a newer completion, including across runner replacement. Treat as opaque; compare only for equality. |
 
 ### Terminal
 
@@ -153,6 +166,11 @@ The stored launch `command` is preserved across exit. Resuming derives a tool-sp
 |-------|------|-------------|
 | `runner_version` | string | Version of the runner binary hosting the session. |
 | `binary_hash` | string | sha256 of the runner binary. The frontend compares both against `GET /v1/health` to derive the "outdated" badge (version mismatch, or hash drift in dev). |
+
+`pid`, `socket_path`, `runner_version`, and `binary_hash` are origin-local,
+best-effort diagnostics: any of them may be absent on any row, and they carry
+no meaning outside the owning host. They are not covenanted scripting inputs
+— see [Interface stability](/reference/stability/#diagnostic-session-fields).
 
 ### Status Object (set by child process)
 

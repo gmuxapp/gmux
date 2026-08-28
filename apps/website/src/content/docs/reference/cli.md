@@ -656,7 +656,9 @@ this shell's env and cwd, on the local daemon only — and sends the prompt as
 its first work. Pass either a session id or `--new`, never both.
 
 - `--model M` / `--name N` — pi's `--model` and `--name`. Valid **only** with
-  `--new`; without it they are usage errors.
+  `--new`; without it they are usage errors. The flags are stable; the
+  `--model` *value* grammar belongs to the launched adapter and may change
+  with it (see [Interface stability](/reference/stability/#experimental)).
 - `--follow-up` and `--steer` are **refused** with `--new`: a session that does
   not exist yet has no work to queue behind or steer.
 - `--no-wait` and `--timeout` mean what they always mean. `--timeout` bounds

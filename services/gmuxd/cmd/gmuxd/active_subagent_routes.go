@@ -18,6 +18,12 @@ const (
 	codeInvalidSubagentReservation = "invalid_subagent_reservation"
 )
 
+// registerActiveSubagentRoutes registers the launch-admission reservation
+// endpoints. These are internal daemon↔CLI plumbing for the active-subagent
+// budget: they happen to live under /v1/ but are NOT part of the covenanted
+// HTTP surface (see the website's Interface stability page). Their request
+// shape, token lifecycle, and error codes may change in any release; external
+// callers must not depend on them.
 func registerActiveSubagentRoutes(mux *http.ServeMux, coord *sessioncoord.Coordinator) {
 	mux.HandleFunc("POST /v1/agent-launch-reservations", func(w http.ResponseWriter, r *http.Request) {
 		handleActiveSubagentReservation(w, r, coord)

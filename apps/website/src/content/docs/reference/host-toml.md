@@ -68,6 +68,10 @@ What `gmux agent …` and the web launch flow may do on this host. The budget
 counts semantic agents only, so shell and process children in a family are
 never charged against it.
 
+**Experimental.** The `max_subagents_by_depth` grammar and its budget
+semantics are new and may change incompatibly in a minor release; see
+[Interface stability](/reference/stability/#experimental).
+
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
 | `max_subagents_by_depth` | `number[]` or `false` | `[-1, 8]` | 1–8 entries; each -1 or 0–1024 | Shared live semantic-agent budget per behavioral root and descendant depth. Only the first entry may be `-1` (unlimited). |
@@ -114,6 +118,10 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 Session values must be non-negative.
 
 ### `[notifications.ntfy]`
+
+**Experimental.** These keys and their delivery semantics may change
+incompatibly in a minor release; see
+[Interface stability](/reference/stability/#experimental).
 
 Publishes a privacy-safe notification after gmux's existing completion grace period and presence checks. Publishing is **best effort**: gmux makes one asynchronous request with a short timeout. It does not retry, queue, persist, or replay notifications after restart. A network error, daemon shutdown, or busy publisher may lose a notification. Browser notifications continue independently.
 
