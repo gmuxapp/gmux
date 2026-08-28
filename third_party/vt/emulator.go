@@ -221,9 +221,27 @@ func (e *Emulator) Resize(width int, height int) {
 	x, y := e.scr.CursorPosition()
 	if e.atPhantom {
 		if x < width-1 {
-			e.atPhantom = false
 			x++
 		}
+		e.atPhantom = false
+	}
+
+	oldWidth := e.Width()
+	if oldWidth != width {
+		nx, ny := e.scrs[0].CursorPosition()
+		normalCursor := uv.Pos(nx, ny)
+		if e.scr == &e.scrs[0] {
+			normalCursor = uv.Pos(x, y)
+		}
+		normalCursor = e.scrs[0].reflow(width, height, normalCursor)
+		e.scrs[0].setCursor(normalCursor.X, normalCursor.Y, false)
+		e.scrs[1].Resize(width, height)
+		if e.scr == &e.scrs[0] {
+			x, y = normalCursor.X, normalCursor.Y
+		}
+	} else {
+		e.scrs[0].Resize(width, height)
+		e.scrs[1].Resize(width, height)
 	}
 
 	if y < 0 {
@@ -238,9 +256,6 @@ func (e *Emulator) Resize(width int, height int) {
 	if x >= width {
 		x = width - 1
 	}
-
-	e.scrs[0].Resize(width, height)
-	e.scrs[1].Resize(width, height)
 	e.tabstops = uv.DefaultTabStops(width)
 
 	e.setCursor(x, y)

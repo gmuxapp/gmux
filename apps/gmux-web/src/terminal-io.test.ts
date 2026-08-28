@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
 import { ScrollAnchorAddon } from '@gmux/scroll-anchor'
+import { describe, expect, it, vi } from 'vitest'
 import { createTerminalIO } from './terminal-io'
 
 const enc = (s: string) => new TextEncoder().encode(s)
@@ -83,6 +83,50 @@ describe('createTerminalIO', () => {
     expect(h.resizes).toEqual([])
     h.flushOne()
     expect(h.resizes).toEqual([{ cols: 80, rows: 24 }])
+  })
+
+  it('holds an ordered resize barrier and its writes behind the busy fence', () => {
+    let busy = true
+    const h = makeHarness(() => busy)
+    h.io.reset(1)
+    h.io.enqueueResizeThenMany({ cols: 80, rows: 25 }, [enc('a'), enc('b')], 1)
+
+    expect(h.resizes).toEqual([])
+    expect(h.writes).toEqual([])
+
+    busy = false
+    h.io.busyStateChanged()
+    expect(h.resizes).toEqual([{ cols: 80, rows: 25 }])
+    expect(h.writes).toEqual(['a'])
+    h.flushOne()
+    expect(h.writes).toEqual(['a', 'b'])
+  })
+
+  it('drops every queued old-epoch payload behind an unfinished write', () => {
+    const h = makeHarness()
+    h.io.reset(1)
+    h.io.enqueueMany([enc('old-in-flight'), enc('old-queued-a'), enc('old-queued-b')], 1)
+    expect(h.writes).toEqual(['old-in-flight'])
+
+    h.io.reset(2)
+    h.io.enqueueMany([enc('new-a'), enc('new-b')], 2)
+    h.flushOne()
+    expect(h.writes).toEqual(['old-in-flight', 'new-a'])
+    h.flushOne()
+    expect(h.writes).toEqual(['old-in-flight', 'new-a', 'new-b'])
+  })
+
+  it('suppresses a resize callback when applying the resize resets its epoch', () => {
+    const onApplied = vi.fn()
+    let io: ReturnType<typeof createTerminalIO>
+    const term = {
+      write(_data: string | Uint8Array, callback?: () => void) { callback?.() },
+      resize() { io.reset(2) },
+    }
+    io = createTerminalIO(term)
+    io.reset(1)
+    io.enqueueResizeThenMany({ cols: 80, rows: 25 }, [], 1, undefined, onApplied)
+    expect(onApplied).not.toHaveBeenCalled()
   })
 
   it('applies enqueueResizeThenMany before writes and completes after its final chunk', () => {

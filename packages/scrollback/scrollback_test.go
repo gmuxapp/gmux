@@ -651,12 +651,42 @@ func TestRenderTailRaceFreeWithResponses(t *testing.T) {
 }
 
 func TestRenderTailJoinsSoftWrappedRows(t *testing.T) {
-	text := strings.Repeat("wrap-provenance-", 8)
-	lines, err := RenderTail(strings.NewReader(text+"\r\nHARD\r\n"), 40, 8, 10)
+	texts := []string{
+		strings.Repeat("wrap-provenance-", 8),
+		"the quick brown fox jumps over the lazy dog and then crosses another boundary",
+	}
+	for _, text := range texts {
+		lines, err := RenderTail(strings.NewReader(text+"\r\nHARD\r\n"), 10, 16, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{text, "HARD"}
+		if !equalLines(lines, want) {
+			t.Fatalf("got %q, want %q", lines, want)
+		}
+	}
+}
+
+// The final written space wraps onto a blank continuation row. Trimming that
+// blank visible row leaves a wrap-marked row as the final extracted row, which
+// must still be flushed as a logical line.
+func TestRenderTailOmitsSyntheticWideWrapSkip(t *testing.T) {
+	lines, err := RenderTail(strings.NewReader("abc界X"), 4, 4, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{text, "HARD"}
+	want := []string{"abc界X"}
+	if !equalLines(lines, want) {
+		t.Fatalf("got %q, want %q", lines, want)
+	}
+}
+
+func TestRenderTailFlushesFinalWrappedRow(t *testing.T) {
+	lines, err := RenderTail(strings.NewReader("123456789  "), 10, 4, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"123456789 "}
 	if !equalLines(lines, want) {
 		t.Fatalf("got %q, want %q", lines, want)
 	}

@@ -473,7 +473,19 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		if !first && !previousWrapped {
 			sb.WriteString("\r\n")
 		}
-		sb.WriteString(line.Render())
+		rendered := line.Render()
+		sb.WriteString(rendered)
+		if wrapped {
+			// Restore trimmed written spaces, but not trailing zero cells: those
+			// mark columns skipped when a wide grapheme wrapped early.
+			targetWidth := len(line)
+			for targetWidth > 0 && line[targetWidth-1].IsZero() {
+				targetWidth--
+			}
+			if padding := targetWidth - ansi.StringWidth(rendered); padding > 0 {
+				sb.WriteString(strings.Repeat(" ", padding))
+			}
+		}
 		first = false
 		previousWrapped = wrapped
 	}
@@ -488,8 +500,8 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		}
 	}
 
-	// Visible screen. Line.Render trims unused trailing cells, so joining a
-	// soft wrap never injects viewport padding into the logical line.
+	// Visible rows use the emulator width. Wrapped rows are padded by writeRow;
+	// non-wrapped rows retain Line.Render's trailing-cell trimming.
 	w, h := e.Width(), e.Height()
 	for y := 0; y < h; y++ {
 		line := make(uv.Line, w)
@@ -508,6 +520,7 @@ type terminalCheckpointMetadata struct {
 	ActiveBuffer string `json:"active_buffer"`
 	ScrollTop    int    `json:"scroll_top"`
 	ScrollBottom int    `json:"scroll_bottom"`
+	Cols         int    `json:"cols"`
 	Rows         int    `json:"rows"`
 }
 
@@ -1705,7 +1718,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// changes, so full-screen/default state is represented explicitly.
 		meta := terminalCheckpointMetadata{
 			Type: "terminal_checkpoint", ActiveBuffer: activeBuffer,
-			ScrollTop: margins.top, ScrollBottom: margins.bottom, Rows: int(s.ptyRows),
+			ScrollTop: margins.top, ScrollBottom: margins.bottom,
+			Cols: int(s.ptyCols), Rows: int(s.ptyRows),
 		}
 		metaBytes, _ := json.Marshal(meta)
 		if err := client.write(websocket.MessageText, metaBytes); err != nil {
