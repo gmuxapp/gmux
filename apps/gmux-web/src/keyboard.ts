@@ -291,76 +291,84 @@ function executeAction(
 /**
  * Result of applying armed mobile modifiers to an input payload.
  *
- * `ctrlApplied` / `altApplied` tell the caller which arms were actually
- * encoded into `seq`, so only those get consumed (disarmed). A ctrl arm
- * stays armed when the payload has no ctrl encoding (e.g. a digit),
- * matching the long-standing sendInput behavior.
+ * The `*Applied` flags tell the caller which arms were actually encoded into
+ * `seq`, so only those get consumed (disarmed). An arm stays armed when the
+ * payload has no supported encoding (for example Shift+1); we deliberately do
+ * not guess keyboard-layout-dependent printable mappings.
  */
 export interface ArmedModifierResult {
   seq: string
   ctrlApplied: boolean
   altApplied: boolean
+  shiftApplied: boolean
 }
 
 /**
- * Apply armed ctrl/alt modifiers to an outgoing input payload.
+ * Apply armed mobile modifiers to one outgoing xterm input payload.
+ * Shift uppercases ASCII letters, turns Tab into canonical BackTab, and joins
+ * the existing xterm modifier parameter for supported CSI/CSI-u keys. It does
+ * not remap punctuation because that is keyboard-layout dependent. Already
+ * uppercase keyboard input stays uppercase (rather than being shifted twice).
  *
- * This is the single source of truth for the mobile "arm a modifier, then
- * press a key" feature. It understands more than bare characters:
- *
- *  - Single characters: ctrl via ctrlSequenceFor (legacy control codes,
- *    CSI-u for uppercase), alt via ESC prefix, both combined when armed
- *    together (legacy ESC + control code; CSI-u modifier bits for
- *    uppercase).
- *  - CSI cursor keys (arrows, Home, End, BackTab): modifier parameter injection,
- *    e.g. \x1b[D + ctrl → \x1b[1;5D (the standard word-left encoding).
- *  - Enter / Tab / Esc: alt uses the universal ESC prefix. Ctrl has no
- *    legacy encoding for these (ctrl+enter is byte-identical to enter),
- *    so CSI-u is emitted — consistent with ctrlSequenceFor's uppercase
- *    handling. Apps without kitty-protocol support won't see it, but
- *    nothing else can represent the combo at all.
- *
- * The CSI-u modifier parameter is 1 + shift(1) + alt(2) + ctrl(4).
+ * The terminal modifier parameter is 1 + shift(1) + alt(2) + ctrl(4).
  */
 export function applyArmedModifiers(
   data: string,
   ctrl: boolean,
   alt: boolean,
+  shift = false,
 ): ArmedModifierResult {
-  const unchanged = { seq: data, ctrlApplied: false, altApplied: false }
-  if (!ctrl && !alt) return unchanged
-  const mod = 1 + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+  const unchanged = { seq: data, ctrlApplied: false, altApplied: false, shiftApplied: false }
+  if (!ctrl && !alt && !shift) return unchanged
+  const mod = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0)
 
-  // CSI cursor-key sequences: inject the modifier parameter.
+  // CSI cursor keys are precisely the set already supported by this encoder.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching real ESC (\x1b) in terminal control sequences
   const csi = /^\x1b\[([A-DFHZ])$/.exec(data)
-  if (csi) return { seq: `\x1b[1;${mod}${csi[1]}`, ctrlApplied: ctrl, altApplied: alt }
+  if (csi) return { seq: `\x1b[1;${mod}${csi[1]}`, ctrlApplied: ctrl, altApplied: alt, shiftApplied: shift }
 
-  // Enter / Tab / Esc with ctrl involved: CSI-u (no legacy encoding exists).
+  // Shift+Tab has a canonical legacy encoding. With additional modifiers,
+  // CSI-u is the existing encoder's lossless representation.
+  if (data === '\t' && shift && !ctrl && !alt) {
+    return { seq: '\x1b[Z', ctrlApplied: false, altApplied: false, shiftApplied: true }
+  }
+
   const csiUCode = data === '\r' ? 13 : data === '\t' ? 9 : data === '\x1b' ? 27 : null
   if (csiUCode !== null && ctrl) {
-    return { seq: `\x1b[${csiUCode};${mod}u`, ctrlApplied: true, altApplied: alt }
+    return { seq: `\x1b[${csiUCode};${mod}u`, ctrlApplied: true, altApplied: alt, shiftApplied: shift }
+  }
+
+  if (data.length === 1 && /[A-Za-z]/.test(data)) {
+    const letter = shift ? data.toUpperCase() : data
+    if (ctrl) {
+      const impliedShift = letter >= 'A' && letter <= 'Z'
+      const ctrlMod = 1 + (impliedShift || shift ? 1 : 0) + (alt ? 2 : 0) + 4
+      return {
+        seq: impliedShift
+          ? `\x1b[${letter.toLowerCase().charCodeAt(0)};${ctrlMod}u`
+          : `${alt ? '\x1b' : ''}${String.fromCharCode(letter.charCodeAt(0) - 96)}`,
+        ctrlApplied: true,
+        altApplied: alt,
+        shiftApplied: shift,
+      }
+    }
+    return { seq: alt ? `\x1b${letter}` : letter, ctrlApplied: false, altApplied: alt, shiftApplied: shift }
   }
 
   if (data.length === 1 && ctrl) {
-    // Uppercase: ctrlSequenceFor would emit CSI-u with mod 6 (shift+ctrl);
-    // fold an armed alt into the modifier bits instead of ESC-prefixing.
-    if (data >= 'A' && data <= 'Z') {
-      return {
-        seq: `\x1b[${data.toLowerCase().charCodeAt(0)};${mod + 1}u`,
-        ctrlApplied: true,
-        altApplied: alt,
-      }
-    }
     const code = ctrlSequenceFor(data)
-    if (code) return { seq: alt ? `\x1b${code}` : code, ctrlApplied: true, altApplied: alt }
+    if (code) return { seq: alt ? `\x1b${code}` : code, ctrlApplied: true, altApplied: alt, shiftApplied: false }
   }
 
-  // Alt fallback: ESC prefix is the universal legacy alt encoding and is
-  // valid for any remaining payload (chars, \r, \t, even whole sequences).
-  if (alt) return { seq: `\x1b${data}`, ctrlApplied: false, altApplied: true }
+  // Text from an IME, dictation, or a keyboard that already produced its
+  // shifted punctuation passes through verbatim, but still consumes the
+  // one-shot Shift arm so composition cannot leave it stuck.
+  if (shift && data.length > 0 && !data.startsWith('\x1b')) {
+    return { seq: alt ? `\x1b${data}` : data, ctrlApplied: false, altApplied: alt, shiftApplied: true }
+  }
 
-  // Ctrl armed but no encoding for this payload: leave it armed.
+  // Alt's universal legacy encoding remains valid for other payloads.
+  if (alt) return { seq: `\x1b${data}`, ctrlApplied: false, altApplied: true, shiftApplied: false }
   return unchanged
 }
 
