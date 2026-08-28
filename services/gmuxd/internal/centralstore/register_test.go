@@ -112,7 +112,6 @@ func TestRegisterRunnerRetainsConversationMetadataUntilAuthoritativeRebind(t *te
 
 	// A replacement runner registers before its adapter hook binds. The wire
 	// projection represents its empty /meta metadata as unobserved facts.
-	empty := ""
 	unbound := registration("session", "pi", "/work", true, 2)
 	unbound.NewGeneration = true
 	got, _, err := s.RegisterRunner(ctx, unbound)
@@ -147,14 +146,12 @@ func TestRegisterRunnerRetainsConversationMetadataUntilAuthoritativeRebind(t *te
 		t.Fatalf("positive refresh not applied: %#v", got)
 	}
 
-	// A different non-empty ref is an authoritative rebind. Empty metadata
-	// belongs to the new untitled conversation and must clear A's cache.
+	// A different non-empty ref is an authoritative rebind. The production
+	// pre-registration reducer drops A's metadata facts at this boundary, so
+	// this ref-only update must clear A's cache by itself.
 	refB := "/conversations/b.jsonl"
 	rebound := registration("session", "pi", "/work", true, 4)
 	rebound.Facts.ConversationRef = &refB
-	rebound.Facts.AdapterTitle = &empty
-	rebound.Facts.Subtitle = &empty
-	rebound.Facts.Slug = &empty
 	got, _, err = s.RegisterRunner(ctx, rebound)
 	if err != nil {
 		t.Fatal(err)

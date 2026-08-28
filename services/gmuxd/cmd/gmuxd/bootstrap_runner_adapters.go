@@ -330,22 +330,21 @@ type runnerMetaWire struct {
 func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
 	// Conversation metadata is a last-known-good materialized projection of
 	// the adapter-owned conversation. A runner can register before its hook has
-	// rebound (all of these strings are then empty), so empty /meta values are
-	// unobserved rather than authoritative clears. A later non-empty
-	// conversation_file event is the rebind boundary; centralstore clears the
-	// previous conversation's metadata there before applying the new facts.
-	// Live meta events remain tri-state and can still carry an explicit empty.
+	// rebound (the ref and metadata are all empty), so that pre-bind snapshot is
+	// unobserved rather than an authoritative clear. Once the ref is non-empty,
+	// the whole metadata snapshot is authoritative, including empty clears.
+	// A later different conversation_file event is the rebind boundary;
+	// centralstore clears the previous conversation's metadata there before
+	// applying facts for the new binding.
 	f := centralstore.RunnerFacts{CWD: &s.CWD, WorkspaceRoot: &s.WorkspaceRoot, ShellTitle: &s.ShellTitle, Command: &s.Command, Remotes: &s.Remotes}
 	if s.ConversationRef != "" {
+		// Once the runner is positively bound, its metadata snapshot is
+		// authoritative even when a value is empty: a clear that happened while
+		// gmuxd was disconnected must converge on registration. Only the
+		// pre-bind empty-ref window treats these fields as unobserved.
 		f.ConversationRef = &s.ConversationRef
-	}
-	if s.Slug != "" {
 		f.Slug = &s.Slug
-	}
-	if s.AdapterTitle != "" {
 		f.AdapterTitle = &s.AdapterTitle
-	}
-	if s.Subtitle != "" {
 		f.Subtitle = &s.Subtitle
 	}
 	if s.Status != nil {

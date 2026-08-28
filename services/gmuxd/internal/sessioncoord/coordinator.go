@@ -829,6 +829,18 @@ loop:
 }
 
 func reduce(reg *centralstore.RunnerRegistration, ev RunnerEvent) {
+	// Buffered events are folded into the registration snapshot before the
+	// first durable commit. Preserve the conversation boundary while doing so:
+	// if /meta described A and a later replay/live event rebinds to B, A's
+	// title/subtitle/slug facts must not survive beside B's ref in the flattened
+	// registration. Later metadata events for B can populate them again.
+	if ev.Facts.ConversationRef != nil && *ev.Facts.ConversationRef != "" &&
+		reg.Facts.ConversationRef != nil && *reg.Facts.ConversationRef != "" &&
+		*ev.Facts.ConversationRef != *reg.Facts.ConversationRef {
+		reg.Facts.AdapterTitle = nil
+		reg.Facts.Subtitle = nil
+		reg.Facts.Slug = nil
+	}
 	_ = mergeFacts(&reg.Facts, ev.Facts)
 	if ev.Alive != nil {
 		reg.Alive = *ev.Alive

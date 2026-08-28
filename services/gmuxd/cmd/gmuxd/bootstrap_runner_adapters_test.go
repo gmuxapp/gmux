@@ -144,6 +144,18 @@ func TestRunnerMetaFactsTreatsUnboundConversationMetadataAsUnobserved(t *testing
 		f.Slug == nil || *f.Slug != "fix-auth" {
 		t.Fatalf("positive conversation metadata not projected: %+v", f)
 	}
+
+	// A bound snapshot is authoritative as a whole. Empty values here are
+	// clears that may have happened while gmuxd was disconnected.
+	f = runnerMetaFacts(runnerMetaWire{
+		ConversationRef: "/conversations/a.jsonl",
+		Command:         []string{"pi"}, Remotes: map[string]string{},
+	})
+	if f.AdapterTitle == nil || *f.AdapterTitle != "" ||
+		f.Subtitle == nil || *f.Subtitle != "" ||
+		f.Slug == nil || *f.Slug != "" {
+		t.Fatalf("bound empty metadata did not project authoritative clears: %+v", f)
+	}
 }
 
 func TestProductionRunnerMetaClosesConnections(t *testing.T) {
