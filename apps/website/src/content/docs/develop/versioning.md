@@ -32,13 +32,16 @@ Dev builds (`version=dev`) skip version checking and never replace — this avoi
 
 ## Contract versioning
 
-For the covenanted API surface — the endpoints and schemas documented in the
-public references — breaking changes require a new version prefix. Non-breaking
-additions (new optional fields) are fine within a version. Undocumented
-endpoints under `/v1/` (internal daemon↔CLI plumbing such as launch
-reservations) and surfaces listed as
-[experimental](/reference/stability/#experimental) are exempt: they may change
-without a version bump, which is why external callers must not use them.
+For the covenanted API surface — what the
+[Interface stability](/reference/stability/) page covenants — breaking changes
+require a new version prefix. Non-breaking additions (new optional fields) are
+fine within a version. Everything outside the covenant follows the stability
+page instead of this rule: undocumented endpoints under `/v1/` (internal
+daemon↔CLI plumbing such as launch reservations),
+[experimental](/reference/stability/#experimental) surfaces, and
+[diagnostic session fields](/reference/stability/#diagnostic-session-fields)
+may change without a version bump, which is why external callers must not
+build on them.
 
 ## What is NOT published
 
