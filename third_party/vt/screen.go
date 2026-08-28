@@ -88,6 +88,10 @@ func (s *Screen) Height() int {
 
 // Resize resizes the screen.
 func (s *Screen) Resize(width int, height int) {
+	oldWidth := 0
+	if s.buf != nil {
+		oldWidth = s.buf.Width()
+	}
 	if s.buf == nil {
 		s.buf = uv.NewRenderBuffer(width, height)
 	} else {
@@ -95,7 +99,12 @@ func (s *Screen) Resize(width int, height int) {
 		s.buf.Touched = nil
 	}
 	wrapped := make([]bool, height)
-	copy(wrapped, s.wrapped)
+	// RenderBuffer resize is non-reflowing. A width change therefore makes
+	// the old wrap column unknowable; retaining its bit would falsely join
+	// the row at the new width. Height-only resizes preserve row provenance.
+	if oldWidth == width {
+		copy(wrapped, s.wrapped)
+	}
 	s.wrapped = wrapped
 	s.scroll = s.buf.Bounds()
 }

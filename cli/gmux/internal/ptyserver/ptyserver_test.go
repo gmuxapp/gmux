@@ -2103,6 +2103,31 @@ func TestSnapshotFrameWrappedRowsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapshotFrameAfterWidthChangesDoesNotJoinOldWraps(t *testing.T) {
+	text := strings.Repeat("the quick brown fox jumps over the lazy dog ", 7)
+	src, srcDrain := newScreen(80, 8, func(bool) {})
+	defer stopScreenDrain(src, srcDrain)
+	if _, err := src.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+
+	// Production sequence: content wraps at launch width, browser attachment
+	// widens the non-reflowing buffer, and detach shrinks it by one column.
+	src.Resize(114, 8)
+	src.Resize(113, 8)
+	frame := snapshotFrameWithScreen(src, false, true)
+	if plain := ansi.Strip(string(frame)); strings.Contains(plain, "  ") {
+		t.Fatalf("checkpoint padded an old-width row at the new width: %q", plain)
+	}
+
+	dst, dstDrain := newScreen(113, 8, func(bool) {})
+	defer stopScreenDrain(dst, dstDrain)
+	if _, err := dst.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	assertScreensEqual(t, src, dst)
+}
+
 func assertScreensEqual(t *testing.T, want, got interface {
 	Width() int
 	Height() int

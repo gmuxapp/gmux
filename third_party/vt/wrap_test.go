@@ -159,16 +159,32 @@ func TestWrapBufferResetAndResize(t *testing.T) {
 			t.Fatal("normal scrollback unavailable")
 		}
 	})
-	t.Run("resize preserves surviving rows", func(t *testing.T) {
+	t.Run("height-only resize preserves surviving rows", func(t *testing.T) {
 		e := NewEmulator(4, 3)
 		write(t, e, "abcde")
-		e.Resize(8, 4)
+		e.Resize(4, 4)
 		if !e.Wrapped(0) {
-			t.Fatal("wider resize lost provenance")
+			t.Fatal("taller resize lost provenance")
 		}
-		e.Resize(3, 2)
+		e.Resize(4, 2)
 		if !e.Wrapped(0) {
-			t.Fatal("narrower resize lost surviving provenance")
+			t.Fatal("shorter resize lost surviving provenance")
+		}
+	})
+	t.Run("width resize clears both buffers", func(t *testing.T) {
+		e := NewEmulator(4, 2)
+		write(t, e, "abcde")
+		write(t, e, "\x1b[?1049habcde")
+		if !e.Wrapped(0) {
+			t.Fatal("alternate buffer missing wrap before resize")
+		}
+		e.Resize(8, 2)
+		if e.Wrapped(0) {
+			t.Fatal("alternate buffer retained wrap across width change")
+		}
+		write(t, e, "\x1b[?1049l")
+		if e.Wrapped(0) {
+			t.Fatal("normal buffer retained wrap across width change")
 		}
 	})
 	t.Run("RIS clears both buffers", func(t *testing.T) {

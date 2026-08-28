@@ -18,15 +18,20 @@ intended for upstreaming.
   cursor movement, and controls can cancel phantom state.
 - Full-width insert/delete/scroll operations move bits with their rows;
   partial-width vertical operations clear the affected ambiguous provenance.
-  Whole-row erase/fill and reset clear bits. Resize preserves surviving row
-  bits, matching the underlying buffer's current non-reflowing resize.
+  Whole-row erase/fill and reset clear bits. Height-only resize preserves
+  surviving row bits, but width changes clear all visible-row bits on both
+  screens. The buffer is non-reflowing, so after a width change the old wrap
+  column is unknowable; clearing restores the invariant that every retained
+  bit identifies a wrap at exactly the row's current width, which is required
+  for faithful logical-line joining.
 - Full-width scroll regions carry the discarded rows' bits into normal
   scrollback, matching vt's existing history behavior. Normal and alternate
   screens retain independent visible-row bits; public scrollback remains the
   normal buffer's.
 - `wrap_test.go` covers phantom confirmation/cancellation, DECAWM off,
   bottom-row scrolling, wide and combining graphemes, margins, row edits,
-  alternate-buffer isolation, resize, RIS, and ED3.
+  alternate-buffer isolation, width-change clearing, height-only resize
+  preservation, RIS, and ED3.
 
 No parser, cell, rendering, or hyperlink representation was replaced. In
 particular, `ultraviolet.Cell.Link` and existing ANSI rendering remain intact.
