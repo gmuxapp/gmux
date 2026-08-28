@@ -455,8 +455,9 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
     return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner) }
   }, [selected.id])
 
-  // Promotion intentionally defers provenance: promoted sessions present as
-  // roots even though parent_session_id remains immutable on the wire.
+  // Promotion is structural: promote clears parent_session_id on the wire,
+  // so promoted sessions are roots here by that edge alone. The immutable
+  // launched_from_session_id keeps the provenance “Return to family” uses.
   const projection = projectFamily(selected, sessions.value)
   const stateFilter = filter === 'processes' ? null : filter
   // Structural agent ancestors remain context under a state filter, but a
