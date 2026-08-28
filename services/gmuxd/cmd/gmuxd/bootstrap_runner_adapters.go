@@ -328,7 +328,26 @@ type runnerMetaWire struct {
 }
 
 func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
-	f := centralstore.RunnerFacts{ConversationRef: &s.ConversationRef, CWD: &s.CWD, WorkspaceRoot: &s.WorkspaceRoot, Slug: &s.Slug, ShellTitle: &s.ShellTitle, AdapterTitle: &s.AdapterTitle, Subtitle: &s.Subtitle, Command: &s.Command, Remotes: &s.Remotes}
+	// Conversation metadata is a last-known-good materialized projection of
+	// the adapter-owned conversation. A runner can register before its hook has
+	// rebound (all of these strings are then empty), so empty /meta values are
+	// unobserved rather than authoritative clears. A later non-empty
+	// conversation_file event is the rebind boundary; centralstore clears the
+	// previous conversation's metadata there before applying the new facts.
+	// Live meta events remain tri-state and can still carry an explicit empty.
+	f := centralstore.RunnerFacts{CWD: &s.CWD, WorkspaceRoot: &s.WorkspaceRoot, ShellTitle: &s.ShellTitle, Command: &s.Command, Remotes: &s.Remotes}
+	if s.ConversationRef != "" {
+		f.ConversationRef = &s.ConversationRef
+	}
+	if s.Slug != "" {
+		f.Slug = &s.Slug
+	}
+	if s.AdapterTitle != "" {
+		f.AdapterTitle = &s.AdapterTitle
+	}
+	if s.Subtitle != "" {
+		f.Subtitle = &s.Subtitle
+	}
 	if s.Status != nil {
 		f.Active = &s.Status.Active
 		f.Error = &s.Status.Error

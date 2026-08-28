@@ -97,6 +97,73 @@ func TestRegisterRunnerNewLiveAndFastDead(t *testing.T) {
 	}
 }
 
+func TestRegisterRunnerRetainsConversationMetadataUntilAuthoritativeRebind(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	ref, title, subtitle, slug := "/conversations/a.jsonl", "Fix auth", "working", "fix-auth"
+	first := registration("session", "pi", "/work", true, 1)
+	first.Facts.ConversationRef = &ref
+	first.Facts.AdapterTitle = &title
+	first.Facts.Subtitle = &subtitle
+	first.Facts.Slug = &slug
+	if _, _, err := s.RegisterRunner(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	// A replacement runner registers before its adapter hook binds. The wire
+	// projection represents its empty /meta metadata as unobserved facts.
+	empty := ""
+	unbound := registration("session", "pi", "/work", true, 2)
+	unbound.NewGeneration = true
+	got, _, err := s.RegisterRunner(ctx, unbound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConversationRef != ref || got.AdapterTitle != title || got.Subtitle != subtitle || got.Slug != slug {
+		t.Fatalf("unbound replacement lost conversation metadata: %#v", got)
+	}
+
+	// A transient same-ref parse represented as no positive display facts has
+	// the same stale-while-revalidate semantics.
+	same := registration("session", "pi", "/work", true, 3)
+	same.Facts.ConversationRef = &ref
+	got, _, err = s.RegisterRunner(ctx, same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AdapterTitle != title || got.Subtitle != subtitle || got.Slug != slug {
+		t.Fatalf("same-ref refresh lost conversation metadata: %#v", got)
+	}
+
+	// A positive same-ref refresh remains authoritative.
+	renamed, renamedSlug := "Auth repaired", "auth-repaired"
+	same.Facts.AdapterTitle = &renamed
+	same.Facts.Slug = &renamedSlug
+	got, _, err = s.RegisterRunner(ctx, same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AdapterTitle != renamed || got.Slug != renamedSlug {
+		t.Fatalf("positive refresh not applied: %#v", got)
+	}
+
+	// A different non-empty ref is an authoritative rebind. Empty metadata
+	// belongs to the new untitled conversation and must clear A's cache.
+	refB := "/conversations/b.jsonl"
+	rebound := registration("session", "pi", "/work", true, 4)
+	rebound.Facts.ConversationRef = &refB
+	rebound.Facts.AdapterTitle = &empty
+	rebound.Facts.Subtitle = &empty
+	rebound.Facts.Slug = &empty
+	got, _, err = s.RegisterRunner(ctx, rebound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConversationRef != refB || got.AdapterTitle != "" || got.Subtitle != "" || got.Slug != "" || got.SlugBase != "" {
+		t.Fatalf("authoritative rebind retained stale metadata: %#v", got)
+	}
+}
+
 func TestRegisterRunnerTriStateFactsAndActivityTransitions(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
