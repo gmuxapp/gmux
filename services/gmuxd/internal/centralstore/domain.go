@@ -58,7 +58,6 @@ type Session struct {
 	ExitCode                                         *int
 	TerminalCols, TerminalRows                       *uint16
 	ParentSessionID, LaunchedFromSessionID           *SessionID
-	PromotedToRoot                                   bool
 }
 
 // NewSession contains only facts legal at registration. New registrations are
@@ -119,8 +118,8 @@ var (
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
 	ErrSessionNotFound    = errors.New("centralstore: session not found")
-	ErrSessionParentSelf  = errors.New("centralstore: session cannot parent itself")
-	ErrSessionParentCycle = errors.New("centralstore: session parent cycle")
+	ErrSessionParentSelf  = errors.New("session cannot parent itself")
+	ErrSessionParentCycle = errors.New("session parent cycle")
 	// ErrCatalogHasPlacements marks the bootstrap-only catalog boundary. This
 	// primitive cannot authoritatively rematch subjects once placement exists.
 	ErrCatalogHasPlacements = errors.New("centralstore: catalog replacement requires zero placements")
@@ -309,7 +308,7 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	if v.RowVersion < 1 || v.CreatedAtMs < 0 {
 		return Session{}, errors.New("centralstore: corrupt session numeric value")
 	}
-	for name, x := range map[string]int64{"active": v.Active, "interrupted": v.Interrupted, "unread": v.Unread, "error": v.HasError, "promotion": v.PromotedToRoot, "status-reported": v.StatusReported} {
+	for name, x := range map[string]int64{"active": v.Active, "interrupted": v.Interrupted, "unread": v.Unread, "error": v.HasError, "status-reported": v.StatusReported} {
 		if x != 0 && x != 1 {
 			return Session{}, fmt.Errorf("centralstore: corrupt %s boolean", name)
 		}
@@ -319,7 +318,6 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	out.Unread = v.Unread == 1
 	out.UnreadToken = v.UnreadToken
 	out.Error = v.HasError == 1
-	out.PromotedToRoot = v.PromotedToRoot == 1
 	out.StatusReported = v.StatusReported == 1
 	if (out.Active || out.Error || out.Interrupted) && !out.StatusReported {
 		return Session{}, errors.New("centralstore: status facts without status-reported bit")
@@ -1119,7 +1117,6 @@ type placementRec struct {
 	local, peer, session, parent, scope string
 	pos                                 int64
 	created                             int64
-	promoted                            bool
 	oldProject                          int64
 	oldScope                            string
 	oldPos                              int64
@@ -1135,7 +1132,7 @@ func placements(ctx context.Context, q *db.Queries) ([]*placementRec, error) {
 	for _, x := range rows {
 		localArm := x.LocalSessionID.Valid
 		peerArm := x.LocalPeerKey.Valid && x.PeerSessionID.Valid
-		if x.ID <= 0 || x.ProjectEntryID <= 0 || x.Position < 0 || x.SiblingScope == "" || localArm == peerArm || x.LocalPromotedToRoot < 0 || x.LocalPromotedToRoot > 1 {
+		if x.ID <= 0 || x.ProjectEntryID <= 0 || x.Position < 0 || x.SiblingScope == "" || localArm == peerArm {
 			return nil, errors.New("centralstore: corrupt placement value")
 		}
 		if localArm && (x.LocalSessionID.String == "" || x.LocalCreatedAtMs < 0) {
@@ -1144,7 +1141,7 @@ func placements(ctx context.Context, q *db.Queries) ([]*placementRec, error) {
 		if peerArm && (x.LocalPeerKey.String == "" || x.PeerSessionID.String == "") {
 			return nil, errors.New("centralstore: corrupt Local-peer placement")
 		}
-		r := &placementRec{id: x.ID, project: x.ProjectEntryID, local: x.LocalSessionID.String, peer: x.LocalPeerKey.String, session: x.PeerSessionID.String, parent: x.PeerParentSessionID.String, scope: x.SiblingScope, pos: x.Position, created: x.LocalCreatedAtMs, promoted: x.LocalPromotedToRoot == 1, oldProject: x.ProjectEntryID, oldScope: x.SiblingScope, oldPos: x.Position}
+		r := &placementRec{id: x.ID, project: x.ProjectEntryID, local: x.LocalSessionID.String, peer: x.LocalPeerKey.String, session: x.PeerSessionID.String, parent: x.PeerParentSessionID.String, scope: x.SiblingScope, pos: x.Position, created: x.LocalCreatedAtMs, oldProject: x.ProjectEntryID, oldScope: x.SiblingScope, oldPos: x.Position}
 		if r.local != "" {
 			r.parent = x.ParentSessionID.String
 		}
@@ -1159,9 +1156,6 @@ func recKey(r *placementRec) string {
 	return "p:" + escape(r.peer) + ":" + escape(r.session)
 }
 func desiredScope(all []*placementRec, r *placementRec) string {
-	if r.promoted {
-		return "r"
-	}
 	parentKey := ""
 	if r.local != "" && r.parent != "" {
 		parentKey = "l:" + r.parent
@@ -1438,7 +1432,7 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 			return MutationResult{}, e
 		}
 		if target == nil {
-			target = &placementRec{project: int64(project), local: string(sub.LocalSessionID), parent: facts.ParentSessionID.String, created: facts.CreatedAtMs, promoted: facts.PromotedToRoot == 1, isNew: true}
+			target = &placementRec{project: int64(project), local: string(sub.LocalSessionID), parent: facts.ParentSessionID.String, created: facts.CreatedAtMs, isNew: true}
 			all = append(all, target)
 		}
 	} else {
@@ -1666,84 +1660,6 @@ func (s *Store) SetSessionParent(ctx context.Context, id SessionID, parent *Sess
 		Changed: true, SessionVersion: RowVersion(row.RowVersion + 1),
 		SessionsDirty: true, WorldDirty: true,
 	}, nil
-}
-
-func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, index *int) (MutationResult, error) {
-	tx, err := s.database.BeginTx(ctx, nil)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	defer tx.Rollback()
-	q := s.queries.WithTx(tx)
-	ver, err := q.SessionVersion(ctx, string(id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return MutationResult{}, ErrSessionNotFound
-	}
-	if err != nil {
-		return MutationResult{}, err
-	}
-	n, err := q.SetPromotion(ctx, db.SetPromotionParams{PromotedToRoot: boolInt(promoted), ID: string(id), PromotedToRoot_2: boolInt(promoted)})
-	if err != nil {
-		return MutationResult{}, err
-	}
-	all, err := placements(ctx, q)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	changed, err := rewritePlacements(ctx, q, all, nil, s.beforePlacementFinalize)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	if index != nil {
-		var target *placementRec
-		for _, r := range all {
-			if r.local == string(id) {
-				target = r
-				break
-			}
-		}
-		if target == nil {
-			return MutationResult{}, errors.New("centralstore: cannot position an unplaced session")
-		}
-		k := scopeKey{target.project, desiredScope(all, target)}
-		var group []*placementRec
-		for _, r := range all {
-			if r.project == k.project && desiredScope(all, r) == k.scope && r != target {
-				group = append(group, r)
-			}
-		}
-		sort.Slice(group, func(i, j int) bool { return group[i].pos < group[j].pos })
-		if *index < 0 || *index > len(group) {
-			return MutationResult{}, errors.New("centralstore: invalid insertion index")
-		}
-		group = append(group, nil)
-		copy(group[*index+1:], group[*index:])
-		group[*index] = target
-		orderChanged, er := rewritePlacements(ctx, q, all, map[scopeKey][]*placementRec{k: group}, s.beforePlacementFinalize)
-		if er != nil {
-			return MutationResult{}, er
-		}
-		changed = changed || orderChanged
-	}
-	if n == 0 && !changed {
-		if err = tx.Commit(); err != nil {
-			return MutationResult{}, err
-		}
-		return MutationResult{SessionVersion: RowVersion(ver)}, nil
-	}
-	if err = tx.Commit(); err != nil {
-		return MutationResult{}, err
-	}
-	version := RowVersion(ver)
-	if n == 1 {
-		version++
-		changed = true
-	}
-	// A promoted-flag write (n == 1) has already set changed above, and an
-	// order-only change sets it too — so both kinds follow changed: the flag
-	// lives on the session row, and positions ride session rows as
-	// project_index stamps (see the note in place()). No-ops returned early.
-	return MutationResult{Changed: changed, SessionVersion: version, SessionsDirty: changed, WorldDirty: changed}, nil
 }
 
 func (s *Store) PruneLocalPeer(ctx context.Context, key PeerKey) (MutationResult, error) {

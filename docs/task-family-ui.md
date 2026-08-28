@@ -1,32 +1,33 @@
 # Task-family UI integration seam
 
-Task-family presentation uses durable `parent_session_id` as its organizational
-edge. `launched_from_session_id` is write-once launch history and is never sent
-to the frontend. `promoted_to_root` breaks only the presentation edge; it does
-not erase either stored fact.
+A task family is defined by one mutable edge: `parent_session_id`. A session
+with no current parent is a root. That edge is the only behavioral one: it
+drives sidebar grouping, recursive dismissal, active-subagent budget roots and
+depth, and completion-notification suppression.
+
+`launched_from_session_id` is immutable launch provenance. It has no automatic
+behavior. Its only consumer is the web menu's **Return to family** suggestion,
+which reparents a root back to its launch parent.
 
 A resolved parent relationship is a family edge when its direct parent carries
 `semantic_agent: true`; the child may be an agent or any other process session.
 Missing parents and children of shells, editors, or terminal helpers remain
 presentation roots and cannot be hidden accidentally.
 
-`gmux session promote|demote` exposes the sticky presentation override; the
-web UI exposes the same pair in the session's `⋮` menu ("Promote to root" /
+`gmux promote <id>` severs the current edge and makes a session a root;
+`gmux reparent <id> <parent-id>` moves it under another session. The web UI
+exposes the same pair in the session's `⋮` menu ("Promote to root" /
 "Return to family", `promotionAction` in `family.ts`), offered only for
-daemon-owned sessions and only while the demote target — the current
-organizational parent — resolves locally as a semantic agent. Promote is
-additionally blocked (visible, disabled, with the reason) when no project
-places the session: an unplaced promoted root has no sidebar row and no
-routable URL, and the daemon deliberately gives parentage no say in project
-matching. Promotion also re-roots the active-subagent budget under the
-promoted session; demotion is offered only when the post-demotion family root
-has the same stamp-backed sidebar placement, so an outside-project parent cannot
-strand the selected child. Notification suppression is untouched by both
-promote and reparent — it follows the immutable launch parent (see below).
-`gmux session reparent <id> <parent-id>` (or `--clear`) changes the direct
-parent used by this projection, recursive dismissal, and the active-subagent
-budget. Both rows must exist on the local daemon; self-parenting, ancestor
-cycles, and cross-peer reassignment are rejected transactionally.
+daemon-owned sessions and only while the return target resolves locally as a
+semantic agent. Promote is blocked (visible, disabled, with the reason) when no
+project places the session: an unplaced root has no sidebar row and no routable
+URL, and the daemon deliberately gives parentage no say in project matching.
+Return to family is blocked the same way when the resulting family root has no
+stamp-backed placement, so an outside-project parent cannot strand the selected
+child. Promotion re-roots the active-subagent budget under the promoted session
+and removes its notification suppressor. Both mutations are local-only;
+self-parenting, ancestor cycles, and cross-peer reassignment are rejected
+transactionally.
 
 The daemon derives `semantic_agent` from the existing
 `adapter.ConversationSource` capability. It covers the conversation-backed Pi,
@@ -165,19 +166,21 @@ process command records unread until a consumer reads or acts on that session.
 Reading clears unread only. An acknowledged inactive error has no presentation
 state; an active error remains a hollow red current-status ring and is not
 family attention.
-Notification delivery is suppressed only when the direct launch parent is
-active at the committed completion instant. Agent activity is semantic turn
+
+Notification delivery is suppressed only when the session's current direct
+parent is active when the completion outcome is published. The publisher
+re-reads the session after the completion commit, so a reparent that commits in
+that narrow window can be the parent it observes. A parent-edge change is
+observed and the latch reconsidered on the session's next outcome; promotion
+removes the suppressor once such an outcome arrives. A missing parent fails safe
+as inactive, so the notification is delivered. Agent activity is semantic turn
 activity; terminal activity currently comes from the runner's OSC 133 prompt
-cycle (active command to idle prompt). This parent check is one hop and one
-shot—later parent activity never retro-delivers a suppressed notification.
+cycle (active command to idle prompt). Suppression is best-effort, one hop, and
+one shot—later parent activity never retro-delivers a suppressed notification.
 
 `gmux wait` (on success), `gmux tail`, `gmux agent logs`, prompts, steering,
-raw sends, and web interaction consume unread. To remediate
-retained child piles created by versions where waits did not consume, run:
-
-```sh
-gmux read --family <root-id>
-```
+raw sends, and web interaction consume unread. The family panel's bulk
+**mark read** clears a retained pile in one action.
 
 The focused-session notification check intentionally has no inactivity timer;
 a future idle-delivery policy can use the existing presence interaction stamp

@@ -332,7 +332,7 @@ func TestPruneScrollbackFailedRemoveKeepsEvicting(t *testing.T) {
 
 	writeDead(t, s, "1586ep4g", now.Add(-3*time.Hour).Format(time.RFC3339), "")
 	writeDead(t, s, "1mi4w464", now.Add(-1*time.Hour).Format(time.RFC3339), "")
-	writeScrollback(t, s, "1586ep4g", 100, now.Add(-3*time.Hour))     // oldest, remove will fail
+	writeScrollback(t, s, "1586ep4g", 100, now.Add(-3*time.Hour)) // oldest, remove will fail
 	writeScrollback(t, s, "1mi4w464", 100, now.Add(-1*time.Hour)) // total 200 > 150
 
 	// Make the oldest session's dir unwritable so os.Remove fails.

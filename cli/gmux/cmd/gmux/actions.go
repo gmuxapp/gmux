@@ -51,6 +51,7 @@ type cliSession struct {
 // so it cannot disagree with the id/peer decomposition.
 func (s cliSession) MarshalJSON() ([]byte, error) {
 	type wireSession cliSession
+	s.UnreadToken = ""
 	return json.Marshal(struct {
 		Ref string `json:"ref"`
 		wireSession
@@ -461,61 +462,66 @@ func cmdKill(ref string) int {
 	return 0
 }
 
-func cmdSession(cmd *command) int {
-	sess, err := resolveSession(cmd.ref)
+func cmdPromote(ref string) int {
+	return cmdReparentMutation(ref, "", true)
+}
+
+func cmdReparent(ref, parentRef string) int {
+	return cmdReparentMutation(ref, parentRef, false)
+}
+
+func cmdReparentMutation(ref, parentRef string, promote bool) int {
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
+	verb := "reparent"
+	if promote {
+		verb = "promote"
+	}
 	if sess.Peer != "" {
-		fmt.Fprintln(os.Stderr, "gmux: session family mutations require a session owned by this daemon; run gmux on the owning host")
+		fmt.Fprintf(os.Stderr, "gmux: %s requires a session owned by this daemon; run gmux on the owning host\n", verb)
 		return 1
 	}
-
-	body := "{}"
-	if cmd.sessionSub == "reparent" {
-		var parentID any
-		if !cmd.clearParent {
-			parent, resolveErr := resolveSession(cmd.parentRef)
-			if resolveErr != nil {
-				fmt.Fprintln(os.Stderr, "gmux:", resolveErr)
-				return 1
-			}
-			if parent.Peer != "" {
-				fmt.Fprintln(os.Stderr, "gmux: parent session must be owned by this daemon; cross-peer reparenting is not supported")
-				return 1
-			}
-			parentID = parent.ID
-		}
-		encoded, marshalErr := json.Marshal(map[string]any{"parent_session_id": parentID})
-		if marshalErr != nil {
-			fmt.Fprintln(os.Stderr, "gmux:", marshalErr)
+	var parentID any
+	if !promote {
+		parent, resolveErr := resolveSession(parentRef)
+		if resolveErr != nil {
+			fmt.Fprintln(os.Stderr, "gmux:", resolveErr)
 			return 1
 		}
-		body = string(encoded)
+		if parent.Peer != "" {
+			fmt.Fprintln(os.Stderr, "gmux: parent session must be owned by this daemon; cross-peer reparenting is not supported")
+			return 1
+		}
+		parentID = parent.ID
 	}
-
-	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/" + cmd.sessionSub
-	resp, err := gmuxdClient().Post(url, "application/json", strings.NewReader(body))
+	body, err := json.Marshal(map[string]any{"parent_session_id": parentID})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/reparent"
+	resp, err := gmuxdClient().Post(url, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
 	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "gmux: session %s failed: %s: %s\n", cmd.sessionSub, resp.Status, strings.TrimSpace(string(responseBody)))
+		message := extractMessage(responseBody)
+		if message == "" {
+			message = resp.Status
+		}
+		fmt.Fprintln(os.Stderr, "gmux:", message)
 		return 1
 	}
-	switch {
-	case cmd.sessionSub == "reparent" && cmd.clearParent:
-		fmt.Printf("cleared parent of %s\n", displayID(sess))
-	case cmd.sessionSub == "reparent":
-		fmt.Printf("reparented %s under %s\n", displayID(sess), cmd.parentRef)
-	case cmd.sessionSub == "promote":
-		fmt.Printf("promoted %s to root\n", displayID(sess))
-	default:
-		fmt.Printf("demoted %s\n", displayID(sess))
+	if promote {
+		fmt.Printf("promoted %s to a root\n", displayID(sess))
+	} else {
+		fmt.Printf("reparented %s under %s\n", displayID(sess), parentRef)
 	}
 	return 0
 }

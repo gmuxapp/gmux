@@ -1,15 +1,15 @@
-import { describe, it, expect } from 'vitest'
-import type { ProjectItem } from './types'
+import { describe, expect, it } from 'vitest'
 import {
+  hasSessionSlugCollision,
   parseSessionPath,
-  sessionPath,
   resolveSessionFromPath,
   resolveViewFromPath,
-  viewToPath,
+  sessionPath,
   viewsEqual,
-  hasSessionSlugCollision,
+  viewToPath,
 } from './routing'
 import { makeSession } from './test-helpers'
+import type { ProjectItem } from './types'
 
 describe('parseSessionPath', () => {
   it('parses full local path', () => {
@@ -284,7 +284,7 @@ describe('task-family project routing', () => {
   })
 
   it('uses normal matching without root fallback after promotion', () => {
-    const promoted = { ...child, promoted_to_root: true }
+    const promoted = { ...child, parent_session_id: undefined }
     expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, promoted])).toBe('/child-project/pi/child')
     expect(resolveViewFromPath('/root-project/pi/child', projects, [root, promoted])).toEqual({ kind: 'home' })
   })

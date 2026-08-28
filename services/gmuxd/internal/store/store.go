@@ -33,17 +33,18 @@ type Session struct {
 	// ParentSessionID is the session this one was spawned from (e.g.
 	// `gmux edit` invoked as $EDITOR inside an existing session). The
 	// UI uses it to place the child next to its parent in the sidebar.
-	ParentSessionID string  `json:"parent_session_id,omitempty"`
-	Alive           bool    `json:"alive"`
-	Pid             int     `json:"pid,omitempty"`
-	ExitCode        *int    `json:"exit_code,omitempty"`
-	StartedAt       string  `json:"started_at,omitempty"`
-	ExitedAt        string  `json:"exited_at,omitempty"`
-	Title           string  `json:"title,omitempty"`
-	Subtitle        string  `json:"subtitle,omitempty"`
-	Status          *Status `json:"status"`
-	Unread          bool    `json:"unread"`
-	UnreadToken     string  `json:"unread_token"`
+	ParentSessionID       string  `json:"parent_session_id,omitempty"`
+	LaunchedFromSessionID string  `json:"launched_from_session_id,omitempty"`
+	Alive                 bool    `json:"alive"`
+	Pid                   int     `json:"pid,omitempty"`
+	ExitCode              *int    `json:"exit_code,omitempty"`
+	StartedAt             string  `json:"started_at,omitempty"`
+	ExitedAt              string  `json:"exited_at,omitempty"`
+	Title                 string  `json:"title,omitempty"`
+	Subtitle              string  `json:"subtitle,omitempty"`
+	Status                *Status `json:"status"`
+	Unread                bool    `json:"unread"`
+	UnreadToken           string  `json:"unread_token"`
 
 	// LastOutputAt timestamps the last time this session produced
 	// *unseen* output — the read→unread transition. Used by the UI as
@@ -144,42 +145,44 @@ type Session struct {
 // fields (ShellTitle, AdapterTitle) that are resolved into Title before sending.
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		ID              string            `json:"id"`
-		Peer            string            `json:"peer,omitempty"`
-		CreatedAt       string            `json:"created_at,omitempty"`
-		Command         []string          `json:"command,omitempty"`
-		Cwd             string            `json:"cwd,omitempty"`
-		Adapter         string            `json:"adapter"`
-		WorkspaceRoot   string            `json:"workspace_root,omitempty"`
-		Remotes         map[string]string `json:"remotes,omitempty"`
-		ParentSessionID string            `json:"parent_session_id,omitempty"`
-		Alive           bool              `json:"alive"`
-		Pid             int               `json:"pid,omitempty"`
-		ExitCode        *int              `json:"exit_code,omitempty"`
-		StartedAt       string            `json:"started_at,omitempty"`
-		ExitedAt        string            `json:"exited_at,omitempty"`
-		Title           string            `json:"title,omitempty"`
-		Subtitle        string            `json:"subtitle,omitempty"`
-		Status          *Status           `json:"status"`
-		Unread          bool              `json:"unread"`
-		UnreadToken     string            `json:"unread_token"`
-		Resumable       bool              `json:"resumable,omitempty"`
-		SocketPath      string            `json:"socket_path,omitempty"`
-		TerminalCols    uint16            `json:"terminal_cols,omitempty"`
-		TerminalRows    uint16            `json:"terminal_rows,omitempty"`
-		Slug            string            `json:"slug,omitempty"`
-		ConversationRef string            `json:"conversation_file,omitempty"`
-		RunnerVersion   string            `json:"runner_version,omitempty"`
-		BinaryHash      string            `json:"binary_hash,omitempty"`
-		ProjectSlug     string            `json:"project_slug,omitempty"`
-		ProjectIndex    int               `json:"project_index,omitempty"`
-		LastOutputAt    string            `json:"last_output_at,omitempty"`
+		ID                    string            `json:"id"`
+		Peer                  string            `json:"peer,omitempty"`
+		CreatedAt             string            `json:"created_at,omitempty"`
+		Command               []string          `json:"command,omitempty"`
+		Cwd                   string            `json:"cwd,omitempty"`
+		Adapter               string            `json:"adapter"`
+		WorkspaceRoot         string            `json:"workspace_root,omitempty"`
+		Remotes               map[string]string `json:"remotes,omitempty"`
+		ParentSessionID       string            `json:"parent_session_id,omitempty"`
+		LaunchedFromSessionID string            `json:"launched_from_session_id,omitempty"`
+		Alive                 bool              `json:"alive"`
+		Pid                   int               `json:"pid,omitempty"`
+		ExitCode              *int              `json:"exit_code,omitempty"`
+		StartedAt             string            `json:"started_at,omitempty"`
+		ExitedAt              string            `json:"exited_at,omitempty"`
+		Title                 string            `json:"title,omitempty"`
+		Subtitle              string            `json:"subtitle,omitempty"`
+		Status                *Status           `json:"status"`
+		Unread                bool              `json:"unread"`
+		UnreadToken           string            `json:"unread_token"`
+		Resumable             bool              `json:"resumable,omitempty"`
+		SocketPath            string            `json:"socket_path,omitempty"`
+		TerminalCols          uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows          uint16            `json:"terminal_rows,omitempty"`
+		Slug                  string            `json:"slug,omitempty"`
+		ConversationRef       string            `json:"conversation_file,omitempty"`
+		RunnerVersion         string            `json:"runner_version,omitempty"`
+		BinaryHash            string            `json:"binary_hash,omitempty"`
+		ProjectSlug           string            `json:"project_slug,omitempty"`
+		ProjectIndex          int               `json:"project_index,omitempty"`
+		LastOutputAt          string            `json:"last_output_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
 		Cwd: s.Cwd, Adapter: s.Adapter, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: s.Remotes, ParentSessionID: s.ParentSessionID,
-		Alive: s.Alive, Pid: s.Pid,
+		LaunchedFromSessionID: s.LaunchedFromSessionID,
+		Alive:                 s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
 		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
 		Unread: s.Unread, UnreadToken: s.UnreadToken, Resumable: s.Resumable,

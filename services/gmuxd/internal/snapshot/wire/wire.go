@@ -45,39 +45,39 @@ type Status struct {
 // peer's own snapshot.sessions feed, which is why the peer overlay
 // (PeerSessionSource) traffics in this type verbatim.
 type Session struct {
-	ID              string            `json:"id"`
-	Peer            string            `json:"peer,omitempty"`
-	CreatedAt       string            `json:"created_at,omitempty"`
-	Command         []string          `json:"command,omitempty"`
-	Cwd             string            `json:"cwd,omitempty"`
-	Adapter         string            `json:"adapter"`
-	DriveMode       string            `json:"drive_mode,omitempty"` // ADR 0033; omitted = terminal
-	WorkspaceRoot   string            `json:"workspace_root,omitempty"`
-	Remotes         map[string]string `json:"remotes,omitempty"`
-	ParentSessionID string            `json:"parent_session_id,omitempty"`
-	SemanticAgent   bool              `json:"semantic_agent,omitempty"`
-	PromotedToRoot  bool              `json:"promoted_to_root,omitempty"`
-	Alive           bool              `json:"alive"`
-	Pid             int               `json:"pid,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	StartedAt       string            `json:"started_at,omitempty"`
-	ExitedAt        string            `json:"exited_at,omitempty"`
-	Title           string            `json:"title,omitempty"`
-	Subtitle        string            `json:"subtitle,omitempty"`
-	Status          *Status           `json:"status"`
-	Unread          bool              `json:"unread"`
-	UnreadToken     string            `json:"unread_token"`
-	Resumable       bool              `json:"resumable,omitempty"`
-	SocketPath      string            `json:"socket_path,omitempty"`
-	TerminalCols    uint16            `json:"terminal_cols,omitempty"`
-	TerminalRows    uint16            `json:"terminal_rows,omitempty"`
-	Slug            string            `json:"slug,omitempty"`
-	ConversationRef string            `json:"conversation_file,omitempty"`
-	RunnerVersion   string            `json:"runner_version,omitempty"`
-	BinaryHash      string            `json:"binary_hash,omitempty"`
-	ProjectSlug     string            `json:"project_slug,omitempty"`
-	ProjectIndex    int               `json:"project_index,omitempty"`
-	LastOutputAt    string            `json:"last_output_at,omitempty"`
+	ID                    string            `json:"id"`
+	Peer                  string            `json:"peer,omitempty"`
+	CreatedAt             string            `json:"created_at,omitempty"`
+	Command               []string          `json:"command,omitempty"`
+	Cwd                   string            `json:"cwd,omitempty"`
+	Adapter               string            `json:"adapter"`
+	DriveMode             string            `json:"drive_mode,omitempty"` // ADR 0033; omitted = terminal
+	WorkspaceRoot         string            `json:"workspace_root,omitempty"`
+	Remotes               map[string]string `json:"remotes,omitempty"`
+	ParentSessionID       string            `json:"parent_session_id,omitempty"`
+	LaunchedFromSessionID string            `json:"launched_from_session_id,omitempty"`
+	SemanticAgent         bool              `json:"semantic_agent,omitempty"`
+	Alive                 bool              `json:"alive"`
+	Pid                   int               `json:"pid,omitempty"`
+	ExitCode              *int              `json:"exit_code,omitempty"`
+	StartedAt             string            `json:"started_at,omitempty"`
+	ExitedAt              string            `json:"exited_at,omitempty"`
+	Title                 string            `json:"title,omitempty"`
+	Subtitle              string            `json:"subtitle,omitempty"`
+	Status                *Status           `json:"status"`
+	Unread                bool              `json:"unread"`
+	UnreadToken           string            `json:"unread_token"`
+	Resumable             bool              `json:"resumable,omitempty"`
+	SocketPath            string            `json:"socket_path,omitempty"`
+	TerminalCols          uint16            `json:"terminal_cols,omitempty"`
+	TerminalRows          uint16            `json:"terminal_rows,omitempty"`
+	Slug                  string            `json:"slug,omitempty"`
+	ConversationRef       string            `json:"conversation_file,omitempty"`
+	RunnerVersion         string            `json:"runner_version,omitempty"`
+	BinaryHash            string            `json:"binary_hash,omitempty"`
+	ProjectSlug           string            `json:"project_slug,omitempty"`
+	ProjectIndex          int               `json:"project_index,omitempty"`
+	LastOutputAt          string            `json:"last_output_at,omitempty"`
 }
 
 // SessionsPayload is the body of a snapshot.sessions SSE event and the

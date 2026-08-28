@@ -1,4 +1,4 @@
-# ADR 0009: Verb-first CLI, explicit run syntax, and a frozen top-level namespace
+# ADR 0009: Verb-first CLI, explicit run syntax, and a criterion for top-level verbs
 
 **Status:** Accepted
 **Date:** 2026-06-15
@@ -38,17 +38,14 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
    Power users who want terseness alias `gm='gmux --'` — which is shorter
    than the old shorthand and lives in their shell, not the tool.
 
-5. **The top-level verb namespace is deliberately closed and small.**
-   Functionality grows under **namespace groups**, not new top-level
-   verbs:
-   - `gmux daemon start|stop|restart|status|log-path` — daemon process
-     lifecycle (was the `gmuxd` verbs).
-   - `gmux session promote|demote|reparent …` — explicit task-family
-     presentation and ownership mutations.
-   - future groups (e.g. `gmux peer …`) as needed.
-   `auth` and `remote` remain top-level (rare, deliberate, setup-time).
-   Adding a new top-level verb is a breaking change requiring a major
-   bump.
+5. **Top-level verbs are operations on sessions addressed by id.** This
+   criterion keeps common operations composable with the standard addressing,
+   exit taxonomy, and daemon auto-start contract. `promote` and `reparent`
+   therefore belong beside `wait`, `tail`, and `kill`. Namespace groups are
+   reserved for non-session domains (`agent`, `daemon`) and setup (`auth`,
+   `remote`). The unreleased `gmux session promote|demote|reparent` group and
+   `gmux read` experiment are superseded before release; consumption remains an
+   observation side effect rather than a mutation verb.
 
 6. **`gmux daemon …` is the canonical front; `gmuxd` keeps its verbs for
    backwards-compatible ops.** `gmux daemon start|stop|restart|status|
@@ -75,7 +72,7 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
    that infra already invokes.)
 
 7. **Daemon auto-start is intent-driven.** Session verbs (`open`, `ls`,
-   `attach`, `tail`, `send`, `wait`, `kill`, `gmux session …`, and `gmux -- <cmd>`)
+   `attach`, `tail`, `send`, `wait`, `kill`, `promote`, `reparent`, and `gmux -- <cmd>`)
    auto-start `gmuxd` when it is down — the daemon is a *stateful broker*
    that rehydrates dead sessions from disk, so even `ls`/`tail` on a cold
    machine have something to serve. `gmux daemon status` and bare `gmux`
@@ -412,3 +409,12 @@ remains lenient and prints the full usage for everything else.
 `send` stays raw and adapter-blind (its semantic `--steering`/
 `--follow-up` flags are gone); intent-carrying submission is `agent`'s
 job. The two are permanently separate surfaces, not layers of one.
+
+## Amendment (2026-08-17): session-operation criterion
+
+Decision 5 now uses the session-operation criterion above rather than a frozen
+list. This supersedes earlier “closed namespace” wording and the unreleased
+`session` group/read command. `promote` and `reparent` are top-level because
+they operate on one addressed session and share the normal local-only,
+auto-start, and exit-code contracts. `agent` remains a namespace because it is
+a semantic-agent domain, not a generic session mutation.

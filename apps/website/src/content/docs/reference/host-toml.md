@@ -16,6 +16,8 @@ Daemon behavior. gmuxd reads this file once at startup. Create or edit it manual
 # Default: 8790
 port = 8790
 
+# Semantic-agent policy for this host.
+[agent]
 # Per behavioral root, cap live semantic agents at each descendant depth.
 # Direct children are unlimited, grandchildren share 8 slots, deeper spawning is blocked.
 max_subagents_by_depth = [-1, 8]
@@ -59,6 +61,15 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
 | `port` | `number` | `8790` | 1–65535 | TCP port for the HTTP listener. |
+
+### `[agent]`
+
+What `gmux agent …` and the web launch flow may do on this host. The budget
+counts semantic agents only, so shell and process children in a family are
+never charged against it.
+
+| Field | Type | Default | Range | Description |
+|-------|------|---------|-------|-------------|
 | `max_subagents_by_depth` | `number[]` or `false` | `[-1, 8]` | 1–8 entries; each -1 or 0–1024 | Shared live semantic-agent budget per behavioral root and descendant depth. Only the first entry may be `-1` (unlimited). |
 
 `max_subagents_by_depth` is read once at daemon startup. Array element zero
@@ -74,12 +85,13 @@ every parent. This gives the root's whole swarm an absolute budget for
 autonomous hiring: a recursive instruction propagated to 500 children can
 create at most eight grandchildren under the default, rather than 4,000.
 
-The budget follows current family ownership (`parent_session_id` and
-promotion), not immutable launch provenance. Depth counts every family edge,
+The budget follows the current family edge (`parent_session_id`), not immutable
+launch provenance. Depth counts every family edge,
 including an intervening shell/process session; only live semantic-agent
 sessions consume slots at the resulting depth. Reparenting moves a live subtree
-and its depth counts immediately. Promoting a session makes it a root with a
-fresh depth budget; demoting it rejoins its containing root. Dead retained
+and its depth counts immediately. `gmux promote` clears the edge, making the
+session a root with a fresh depth budget; reparenting it back under its former
+parent rejoins that root's budget. Dead retained
 sessions and remote projections do not consume slots. Independent top-level
 `--new` launches create independent roots.
 
@@ -164,7 +176,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
 - **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
-- **`max_subagents_by_depth` is `true`, is not an integer array or `false`, is empty, has over eight entries, has an entry above 1024, or uses `-1` after the first entry**
+- **`agent.max_subagents_by_depth` is `true`, is not an integer array or `false`, is empty, has over eight entries, has an entry above 1024, or uses `-1` after the first entry**
 - **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
 - **ntfy settings are unsafe or malformed** — including a missing/invalid topic, unsupported URL, mixed authentication modes, credentials over plaintext HTTP, priority/tag/timeout violations, or an enabled config file with group/other permissions
 - **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid

@@ -76,11 +76,6 @@ WHERE parent_session_id = ?;
 -- name: DeleteSessionAtVersion :execrows
 DELETE FROM local_sessions WHERE id = ? AND row_version = ?;
 
--- name: SetPromotion :execrows
-UPDATE local_sessions
-SET promoted_to_root = ?, row_version = row_version + 1
-WHERE id = ? AND promoted_to_root <> ?;
-
 -- name: SetSessionParent :execrows
 UPDATE local_sessions
 SET parent_session_id = ?, row_version = row_version + 1
@@ -135,14 +130,13 @@ SELECT COUNT(*) FROM project_placements;
 SELECT p.id, p.project_entry_id, p.local_session_id, p.local_peer_key,
        p.peer_session_id, p.peer_parent_session_id, p.sibling_scope, p.position,
        COALESCE(s.created_at_ms, 0) AS local_created_at_ms,
-       COALESCE(s.promoted_to_root, 0) AS local_promoted_to_root,
        s.parent_session_id
 FROM project_placements p
 LEFT JOIN local_sessions s ON s.id = p.local_session_id
 ORDER BY p.project_entry_id, p.sibling_scope, p.position, p.id;
 
 -- name: LocalSessionPlacementFacts :one
-SELECT created_at_ms, promoted_to_root, parent_session_id
+SELECT created_at_ms, parent_session_id
 FROM local_sessions WHERE id = ?;
 
 -- name: ParkPlacement :execrows

@@ -108,8 +108,6 @@ func TestLoadDropsInvalidItems(t *testing.T) {
 	}
 }
 
-
-
 func TestSaveCreatesNestedDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state", "gmux")
 	s := &State{Items: []Item{{Slug: "a", Match: []MatchRule{{Path: "/tmp/a"}}}}}
@@ -1554,10 +1552,10 @@ func TestPruneNamespacedKeys(t *testing.T) {
 				Slug:  "proj",
 				Match: []MatchRule{{Path: "/x"}},
 				Sessions: []string{
-					"1mw5c5n9@container",   // should be pruned
-					"18wnzse2@container",   // should be pruned
-					"10cel6cx@develop",     // not @container; kept
-					"1or99tfj",             // local id; kept
+					"1mw5c5n9@container", // should be pruned
+					"18wnzse2@container", // should be pruned
+					"10cel6cx@develop",   // not @container; kept
+					"1or99tfj",           // local id; kept
 					"claude-attribution", // slug; kept (survives container restart)
 				},
 			},

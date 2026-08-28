@@ -25,11 +25,11 @@ export const SessionSchema = z.object({
   // $EDITOR inside an existing session). The UI places the child
   // directly under its parent in the sidebar.
   parent_session_id: z.string().optional(),
+  // Immutable provenance: the session from which this one was launched.
+  launched_from_session_id: z.string().optional(),
   // True when the adapter exposes gmux's conversation-backed semantic-agent
   // capability. Both endpoints must be true for a task-family edge.
   semantic_agent: z.boolean().optional().default(false),
-  // Sticky presentation override. Launch provenance remains intact.
-  promoted_to_root: z.boolean().optional().default(false),
   alive: z.boolean(),
   pid: z.number().optional().nullable(),
   exit_code: z.number().optional().nullable(),

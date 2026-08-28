@@ -41,7 +41,6 @@ type LocalSession struct {
 	TerminalCols          sql.NullInt64
 	TerminalRows          sql.NullInt64
 	ParentSessionID       sql.NullString
-	PromotedToRoot        int64
 	DriveMode             string
 	LaunchedFromSessionID sql.NullString
 	UnreadToken           string

@@ -28,11 +28,13 @@ func newParentNotifyTestRouter(t *testing.T) *centralNotifyRouter {
 }
 
 func notifyRow(adapterName string, active bool, parent string, promoted bool) centralstore.Session {
-	row := centralstore.Session{Adapter: adapterName, Active: active, PromotedToRoot: promoted}
+	row := centralstore.Session{Adapter: adapterName, Active: active}
 	if parent != "" {
 		id := centralstore.SessionID(parent)
-		row.ParentSessionID = &id
 		row.LaunchedFromSessionID = &id
+		if !promoted {
+			row.ParentSessionID = &id
+		}
 	}
 	return row
 }
@@ -109,13 +111,18 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 			wantPending: true,
 		},
 		{
-			name: "promoted presentation still has launcher contract",
+			name: "promoted root does not use launch parent",
 			seed: []struct {
 				id  string
 				row centralstore.Session
 			}{{"parent", notifyRow("pi", true, "", false)}},
-			child:       notifyRow("pi", true, "parent", true),
-			wantPending: false,
+			child: func() centralstore.Session {
+				row := notifyRow("pi", true, "", true)
+				parent := centralstore.SessionID("parent")
+				row.LaunchedFromSessionID = &parent
+				return row
+			}(),
+			wantPending: true,
 		},
 		{
 			name:        "missing parent",
@@ -138,6 +145,90 @@ func TestCentralNotifyDirectParentSuppression(t *testing.T) {
 				t.Fatalf("pending child notification = %v, want %v", got, tc.wantPending)
 			}
 		})
+	}
+}
+
+func TestCentralNotifyReparentChangesSuppressor(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
+	r.handleOutcome(upsertOutcome("old", notifyRow("pi", true, "", false)))
+	r.handleOutcome(upsertOutcome("new", notifyRow("pi", false, "", false)))
+	child := notifyRow("pi", true, "old", false)
+	r.handleOutcome(upsertOutcome("child", child))
+	newParent := centralstore.SessionID("new")
+	child.ParentSessionID = &newParent
+	r.handleOutcome(upsertOutcome("child", child))
+	child.Active = false
+	r.handleOutcome(upsertOutcome("child", child))
+	if !hasPendingNotification(r, "child") {
+		t.Fatal("completion must follow the inactive current parent after reparenting")
+	}
+}
+
+func TestCentralNotifyInactiveParentChangeReconsidersSuppression(t *testing.T) {
+	tests := []struct {
+		name       string
+		newParent  string
+		parentLive bool
+		want       bool
+	}{
+		{name: "promotion", want: true},
+		{name: "inactive parent", newParent: "new", want: true},
+		{name: "active parent", newParent: "new", parentLive: true, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newParentNotifyTestRouter(t)
+			r.handleOutcome(upsertOutcome("old", notifyRow("pi", true, "", false)))
+			if tc.newParent != "" {
+				r.handleOutcome(upsertOutcome(tc.newParent, notifyRow("pi", tc.parentLive, "", false)))
+			}
+			child := notifyRow("pi", true, "old", false)
+			r.handleOutcome(upsertOutcome("child", child))
+			child.Active = false
+			r.handleOutcome(upsertOutcome("child", child))
+			if hasPendingNotification(r, "child") {
+				t.Fatal("completion escaped initial suppression")
+			}
+
+			if tc.newParent == "" {
+				child.ParentSessionID = nil
+			} else {
+				parent := centralstore.SessionID(tc.newParent)
+				child.ParentSessionID = &parent
+			}
+			// Unread may already have arrived while suppressed. Changing the edge
+			// must release that withheld attention when the new parent permits it.
+			child.Unread = true
+			r.handleOutcome(upsertOutcome("child", child))
+			if got := hasPendingNotification(r, "child"); got != tc.want {
+				t.Fatalf("pending notification = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCentralNotifyParentChangeDoesNotRedeliverUnreadToken(t *testing.T) {
+	r := newParentNotifyTestRouter(t)
+	r.handleOutcome(upsertOutcome("new-parent", notifyRow("pi", false, "", false)))
+	child := notifyRow("pi", true, "", false)
+	r.handleOutcome(upsertOutcome("child", child))
+	child.Active = false
+	child.Unread = true
+	child.UnreadToken = "result-1"
+	r.handleOutcome(upsertOutcome("child", child))
+	if !hasPendingNotification(r, "child") {
+		t.Fatal("initial unread notification was not scheduled")
+	}
+	r.firePending("child")
+	if hasPendingNotification(r, "child") {
+		t.Fatal("delivered unread remained pending")
+	}
+
+	parent := centralstore.SessionID("new-parent")
+	child.ParentSessionID = &parent
+	r.handleOutcome(upsertOutcome("child", child))
+	if hasPendingNotification(r, "child") {
+		t.Fatal("parent change redelivered an already delivered unread token")
 	}
 }
 

@@ -1,28 +1,23 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { toasts } from './toasts'
-import {
-  sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
-  markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
-  promoteSession, demoteSession, promotionPending, promotionAnnouncements,
-  beginPromotion, settlePromotion, reconcilePromotionPending, acknowledgePromotionAnnouncement,
-  PROMOTION_PENDING_TTL_MS,
-  handleActivity, isSessionActive, isSessionFading, activityMap,
-  sessionStaleness, peers, peerAppearance, peerStatusByName,
-  isSessionUnavailable, urlPath, urlSearch, urlHash, filteredSessions, sidebarSessions, selectedId, familySelectedId, folders,
-  navigateToSession, setNavigate, navigate, tabHref, initStore,
-  applyPending, _rawSessions, _setRawWorld, _pendingMutations,
-  applySessionsSnapshot,
-  toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
-  view, duplicateConversationFiles,
-  sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
-  sidebarActivity, backgroundActivity, setAliveOnly, familyDotById, createViewConsumptionTracker,
-  familyActivityById, selectedFamilyChild, ownDotState,
-  familySlotById,
-} from './store'
 import { SessionSchema } from '@gmux/protocol'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingMutation } from './store'
-import type { Session } from './types'
-import type { ProjectItem } from './types'
+import {
+  _pendingMutations, _rawSessions, _setRawWorld, acknowledgePromotionAnnouncement,
+  activityMap, applyPending, applySessionsSnapshot, backgroundActivity, beginPromotion,
+  createViewConsumptionTracker, discovered, dismissSession, duplicateConversationFiles,
+  familyActivityById, familyDotById, familySelectedId, familySlotById, filteredSessions,
+  folders, handleActivity, homePartition, initStore, isSessionActive, isSessionFading,
+  isSessionUnavailable, killSession, localHostLabel, markSessionRead, navigate,
+  navigateToSession, ownDotState, parseConnectURL, peerAppearance, peerStatusByName, peers,
+  projects, promoteSession, promotionAnnouncements, promotionPending,
+  PROMOTION_PENDING_TTL_MS, reconcilePromotionPending, removeSession, reorderSessions,
+  reparentSession, resumeSession, selectedFamilyChild, selectedId, sessions, sessionsLoaded,
+  sessionStaleness, setAliveOnly, setFilterSelectors, setHostFilter, setNavigate,
+  setSidebarMode, settlePromotion, sidebarActivity, sidebarMode, sidebarSessions, tabHref,
+  toUISession, unreadCount, upsertSession, urlHash, urlPath, urlSearch, view, worldLoaded,
+} from './store'
+import { toasts } from './toasts'
+import type { ProjectItem, Session } from './types'
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
   return {
@@ -713,8 +708,8 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
 
 describe('promote/demote pending request ownership', () => {
   it('settles only the matching request token, including across sessions', () => {
-    const sessionA = beginPromotion('session-a', 'promote')
-    const sessionB = beginPromotion('session-b', 'demote')
+    const sessionA = beginPromotion('session-a', 'promote', null)
+    const sessionB = beginPromotion('session-b', 'demote', 'root')
 
     settlePromotion('session-a', sessionB)
     expect(promotionPending.value.get('session-a')?.seq).toBe(sessionA)
@@ -726,8 +721,8 @@ describe('promote/demote pending request ownership', () => {
   })
 
   it('does not let an older request clear a newer request for one session', () => {
-    const first = beginPromotion('session', 'promote')
-    const second = beginPromotion('session', 'promote')
+    const first = beginPromotion('session', 'promote', null)
+    const second = beginPromotion('session', 'promote', null)
 
     settlePromotion('session', first)
     expect(promotionPending.value.get('session')?.seq).toBe(second)
@@ -740,15 +735,15 @@ describe('promote/demote pending request ownership', () => {
     const child = makeSession({ id: 'child', parent_session_id: 'root', project_slug: 'p' })
     _setRawWorld({ projects: [{ slug: 'p', match: [{ path: '/p' }] }] })
     _rawSessions.value = [root, child]
-    const seq = beginPromotion('child', 'promote')
+    const seq = beginPromotion('child', 'promote', null)
 
     // A is not selected/mounted; the central snapshot boundary still consumes it.
-    reconcilePromotionPending([root, { ...child, promoted_to_root: true }])
+    reconcilePromotionPending([root, { ...child, parent_session_id: undefined }])
     expect(promotionPending.value.has('child')).toBe(false)
     expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq, kind: 'promote' })
 
     // An external demote after that success must not recreate or wedge A.
-    reconcilePromotionPending([root, { ...child, promoted_to_root: false }])
+    reconcilePromotionPending([root, { ...child, parent_session_id: 'root' }])
     expect(promotionPending.value.has('child')).toBe(false)
     expect(promotionAnnouncements.value.get('child')?.message).toBe('Promoted to root.')
     acknowledgePromotionAnnouncement('child', seq)
@@ -757,27 +752,25 @@ describe('promote/demote pending request ownership', () => {
 
   it('reconciles demote success and clears deletion/terminal transitions silently', () => {
     const root = makeSession({ id: 'root', semantic_agent: true, project_slug: 'p' })
-    const child = makeSession({ id: 'child', parent_session_id: 'root', project_slug: 'p', promoted_to_root: true })
+    const child = makeSession({ id: 'child', launched_from_session_id: 'root', project_slug: 'p' })
     _setRawWorld({ projects: [{ slug: 'p', match: [{ path: '/p' }] }] })
 
     _rawSessions.value = [root, child]
-    const demoteSeq = beginPromotion('child', 'demote')
-    // Some legacy wire snapshots omit false optional booleans; false is the
-    // authoritative demote state either way.
-    reconcilePromotionPending([{ ...root }, { ...child, promoted_to_root: undefined }])
+    const demoteSeq = beginPromotion('child', 'demote', 'root')
+    reconcilePromotionPending([{ ...root }, { ...child, parent_session_id: 'root' }])
     expect(promotionPending.value.has('child')).toBe(false)
     expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq: demoteSeq, kind: 'demote', message: 'Returned to family.' })
 
     promotionAnnouncements.value = new Map()
     _rawSessions.value = [root, child]
-    const deletedSeq = beginPromotion('child', 'demote')
+    const deletedSeq = beginPromotion('child', 'demote', 'root')
     reconcilePromotionPending([root])
     expect(deletedSeq).toBeTypeOf('number')
     expect(promotionPending.value.has('child')).toBe(false)
     expect(promotionAnnouncements.value.has('child')).toBe(false)
 
     _rawSessions.value = [root, child]
-    const terminalSeq = beginPromotion('child', 'demote')
+    const terminalSeq = beginPromotion('child', 'demote', 'root')
     reconcilePromotionPending([{ ...child, parent_session_id: undefined }])
     expect(terminalSeq).toBeTypeOf('number')
     expect(promotionPending.value.has('child')).toBe(false)
@@ -787,7 +780,7 @@ describe('promote/demote pending request ownership', () => {
   it('clears a hung request at the explicit final safety deadline', () => {
     vi.useFakeTimers()
     try {
-      beginPromotion('hung', 'promote')
+      beginPromotion('hung', 'promote', null)
       expect(promotionPending.value.has('hung')).toBe(true)
       vi.advanceTimersByTime(PROMOTION_PENDING_TTL_MS)
       expect(promotionPending.value.has('hung')).toBe(false)
@@ -801,15 +794,19 @@ describe('promote/demote: endpoint wiring and failure surfacing', () => {
   beforeEach(() => { toasts.value = [] })
   afterEach(() => { vi.unstubAllGlobals(); toasts.value = [] })
 
-  it('hits the #475 endpoints with POST', async () => {
+  it('posts both mutations to the reparent endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true, status: 200, statusText: 'OK', text: () => Promise.resolve(''),
     })
     vi.stubGlobal('fetch', fetchMock)
     await expect(promoteSession('kid1')).resolves.toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/promote', { method: 'POST' })
-    await expect(demoteSession('kid1')).resolves.toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/demote', { method: 'POST' })
+    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/reparent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"parent_session_id":null}',
+    })
+    await expect(reparentSession('kid1', 'root', 'Return to family')).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/v1/sessions/kid1/reparent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"parent_session_id":"root"}',
+    })
     expect(toasts.value).toHaveLength(0)
   })
 
@@ -835,7 +832,7 @@ describe('promote/demote: endpoint wiring and failure surfacing', () => {
       ok: false, status: 404, statusText: 'Not Found',
       text: () => Promise.resolve(JSON.stringify({ error: { message: 'session not found' } })),
     }))
-    await expect(demoteSession('ghost')).resolves.toBe(false)
+    await expect(reparentSession('ghost', 'root', 'Return to family')).resolves.toBe(false)
     expect(toasts.value[0].message).toBe('Return to family failed: session not found')
   })
 
@@ -862,8 +859,8 @@ describe('promotion snapshots preserve the selected session\u2019s routing', () 
   })
   const childSession = (promoted: boolean) => makeSession({
     id: '1bbbbbbb', cwd: '/dev/beta', adapter: 'pi', slug: 'worker',
-    semantic_agent: true, parent_session_id: '1aaaaaaa',
-    project_slug: 'beta', promoted_to_root: promoted,
+    semantic_agent: true, launched_from_session_id: '1aaaaaaa',
+    project_slug: 'beta', parent_session_id: promoted ? undefined : '1aaaaaaa',
   })
   beforeEach(() => {
     navCalls.length = 0
@@ -1731,7 +1728,7 @@ describe('sidebar family entry derivations', () => {
     it('gives a promoted descendant its own counts, not its old family\u2019s', () => {
       _rawSessions.value = [
         agent('root'),
-        agent('kid', { parent_session_id: 'root', promoted_to_root: true }),
+        agent('kid', { parent_session_id: undefined, launched_from_session_id: 'root' }),
         proc('p', 'kid', { status: { active: true } }),
       ]
       expect(familyActivityById.value.has('root')).toBe(false)
@@ -1850,7 +1847,7 @@ describe('sidebar family entry derivations', () => {
     it('is null for a promoted child (it owns a sidebar row of its own)', () => {
       _rawSessions.value = [
         agent('root', { slug: 'rooty' }),
-        agent('kid', { slug: 'kiddo', parent_session_id: 'root', promoted_to_root: true }),
+        agent('kid', { slug: 'kiddo', parent_session_id: undefined, launched_from_session_id: 'root' }),
       ]
       urlPath.value = '/proj/pi/kiddo'
       expect(selectedId.value).toBe('kid')
@@ -2328,13 +2325,13 @@ describe('parseConnectURL', () => {
 })
 
 describe('family wire mapping', () => {
-  it('preserves parent provenance, semantic capability, and promotion', () => {
+  it('preserves current parent, launch provenance, and semantic capability', () => {
     const parsed = SessionSchema.parse({
       id: 'child', alive: true, parent_session_id: 'root',
-      semantic_agent: true, promoted_to_root: true,
+      launched_from_session_id: 'launcher', semantic_agent: true,
     })
     expect(toUISession(parsed)).toMatchObject({
-      parent_session_id: 'root', semantic_agent: true, promoted_to_root: true,
+      parent_session_id: 'root', launched_from_session_id: 'launcher', semantic_agent: true,
     })
   })
 })

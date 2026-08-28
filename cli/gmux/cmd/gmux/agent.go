@@ -969,7 +969,8 @@ Reads the adapter's native conversation branch without starting a process.
 Each exchange begins at a user message; assistant/model responses are counted
 as iterations and only terminal assistant prose is shown. Earlier exchanges
 are summarized by count. An empty, resolvable timeline prints
-[No exchanges yet]. For the raw terminal view use 'gmux tail <id>'.
+[No exchanges yet]. A successful read marks the session's result consumed.
+For the raw terminal view use 'gmux tail <id>'.
 `)
 	default:
 		fmt.Fprint(w, `gmux agent — drive and read resumable agent conversations

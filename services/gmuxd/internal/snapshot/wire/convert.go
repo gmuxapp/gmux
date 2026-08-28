@@ -105,7 +105,6 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Adapter:         v.Adapter,
 		DriveMode:       wireDriveMode(v.DriveMode),
 		SemanticAgent:   c.SemanticAgents[v.Adapter],
-		PromotedToRoot:  v.PromotedToRoot,
 		WorkspaceRoot:   v.WorkspaceRoot,
 		Remotes:         redactRemotes(v.Remotes),
 		Alive:           row.Alive,
@@ -132,6 +131,9 @@ func (c *Converter) session(row central.SessionRow) Session {
 	}
 	if v.ParentSessionID != nil {
 		out.ParentSessionID = string(*v.ParentSessionID)
+	}
+	if v.LaunchedFromSessionID != nil {
+		out.LaunchedFromSessionID = string(*v.LaunchedFromSessionID)
 	}
 	if v.TerminalCols != nil {
 		out.TerminalCols = *v.TerminalCols

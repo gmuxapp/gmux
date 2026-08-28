@@ -28,10 +28,7 @@ type Config struct {
 	// Port is the TCP port for the HTTP listener (default 8790).
 	Port int `toml:"port"`
 
-	// MaxSubagentsByDepth is the per-behavioral-root budget at each descendant
-	// depth. False disables admission checks while retaining accounting.
-	MaxSubagentsByDepth SubagentDepthLimits `toml:"max_subagents_by_depth"`
-
+	Agent         AgentConfig         `toml:"agent"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
 	Discovery     DiscoveryConfig     `toml:"discovery"`
 	Sessions      SessionsConfig      `toml:"sessions"`
@@ -93,6 +90,16 @@ type SessionsConfig struct {
 	RetentionDays     int `toml:"retention_days"`
 	RetentionMax      int `toml:"retention_max"`
 	ScrollbackCacheMB int `toml:"scrollback_cache_mb"`
+}
+
+// AgentConfig is the semantic-agent subsystem: what `gmux agent …` and the web
+// launch flow may do on this host. It is deliberately not part of [sessions],
+// which owns retention and storage: this budget counts semantic agents only,
+// so shell and process children are never charged against it.
+type AgentConfig struct {
+	// MaxSubagentsByDepth is the per-behavioral-root budget at each descendant
+	// depth. False disables admission checks while retaining accounting.
+	MaxSubagentsByDepth SubagentDepthLimits `toml:"max_subagents_by_depth"`
 }
 
 // NotificationsConfig controls external notification sinks.
@@ -208,6 +215,10 @@ func Load() (Config, error) {
 				log.Printf("config: %s: ignoring deprecated tailscale.hostname (removed in ADR 0007); the node name is now derived from the OS hostname and owned by tailscale. Remove it to silence this warning.", path)
 			case key == "discovery.tailscale":
 				log.Printf("config: %s: ignoring deprecated discovery.tailscale (removed in ADR 0008); tailscale autodiscovery was removed, add tailnet peers via \"Connect to host\". Remove it to silence this warning.", path)
+			case key == "max_subagents_by_depth":
+				// Moved under [agent] before it ever shipped. Name the new home
+				// rather than silently reverting the host to defaults.
+				return Config{}, fmt.Errorf("config: %s: max_subagents_by_depth moved under [agent]; write it as\n\n[agent]\nmax_subagents_by_depth = …", path)
 			case key == "peers" || strings.HasPrefix(key, "peers."):
 				if !warnedPeers {
 					log.Printf("config: %s: ignoring deprecated [[peers]] (removed in ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in state.db). Remove it to silence this warning.", path)
@@ -253,17 +264,17 @@ func validate(cfg Config) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
-	if !cfg.MaxSubagentsByDepth.Disabled {
-		limits := cfg.MaxSubagentsByDepth.Values
+	if !cfg.Agent.MaxSubagentsByDepth.Disabled {
+		limits := cfg.Agent.MaxSubagentsByDepth.Values
 		if len(limits) == 0 || len(limits) > 8 {
-			return fmt.Errorf("max_subagents_by_depth must contain between 1 and 8 entries")
+			return fmt.Errorf("agent.max_subagents_by_depth must contain between 1 and 8 entries")
 		}
 		for i, limit := range limits {
 			if limit == -1 && i == 0 {
 				continue
 			}
 			if limit < 0 || limit > 1024 {
-				return fmt.Errorf("max_subagents_by_depth entry %d must be between 0 and 1024; only the first entry may be -1", i)
+				return fmt.Errorf("agent.max_subagents_by_depth entry %d must be between 0 and 1024; only the first entry may be -1", i)
 			}
 		}
 	}
@@ -438,8 +449,10 @@ func isPrivateOrCGNAT(ip net.IP) bool {
 func defaults() Config {
 	return Config{
 		Port: 8790,
-		MaxSubagentsByDepth: SubagentDepthLimits{
-			Values: []int{-1, 8},
+		Agent: AgentConfig{
+			MaxSubagentsByDepth: SubagentDepthLimits{
+				Values: []int{-1, 8},
+			},
 		},
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,

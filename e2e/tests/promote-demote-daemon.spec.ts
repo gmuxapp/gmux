@@ -6,7 +6,7 @@ import * as path from 'path'
 import { gotoSession, openApp, pollUntil } from '../helpers'
 
 /**
- * The actual promote/demote mutation against the disposable test daemon:
+ * The actual promote/reparent mutation against the disposable test daemon:
  * a real family (stub `claude` parent — adapter resolution matches on the
  * command basename, so the daemon derives `semantic_agent: true` — plus a
  * shell child inheriting GMUX_SESSION_ID), promoted and returned through
@@ -31,7 +31,6 @@ type WireSession = {
   adapter?: string
   parent_session_id?: string
   semantic_agent?: boolean
-  promoted_to_root?: boolean
 }
 
 function api(): { base: string; headers: Record<string, string> } {
@@ -48,9 +47,13 @@ async function listSessions(): Promise<WireSession[]> {
   return body.data
 }
 
-async function post(pathname: string): Promise<number> {
+async function post(pathname: string, body?: unknown): Promise<number> {
   const { base, headers } = api()
-  const resp = await fetch(`${base}${pathname}`, { method: 'POST', headers })
+  const resp = await fetch(`${base}${pathname}`, {
+    method: 'POST',
+    headers: body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
   return resp.status
 }
 
@@ -125,7 +128,7 @@ test.beforeAll(async () => {
   { timeoutMs: 15_000, description: 'family child session registered' })
   childId = child.id
   childTitle = child.title || 'sh'
-  expect(child.promoted_to_root ?? false).toBe(false)
+  expect(child.parent_session_id).toBe(parentId)
 
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
 })
@@ -173,15 +176,18 @@ async function withSidebar(
   }
 }
 
-const promoted = async () =>
-  (await listSessions()).find(s => s.id === childId)?.promoted_to_root === true
+// Single-axis promotion: a promoted session has no current parent at all.
+const promoted = async () => {
+  const child = (await listSessions()).find(s => s.id === childId)
+  return !!child && child.parent_session_id === undefined
+}
 
 for (const [name, viewport, mobile] of [
   ['desktop', { width: 1200, height: 800 }, false],
   ['portrait', { width: 390, height: 844 }, true],
   ['landscape', { width: 844, height: 390 }, true],
 ] as const) {
-  test.describe(`promote/demote round trip (${name})`, () => {
+  test.describe(`promote/reparent round trip (${name})`, () => {
     test.use({ viewport, hasTouch: mobile, isMobile: mobile })
 
     test('menu promote gives the child its own row; return regroups it', async ({ page }) => {
@@ -273,24 +279,24 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
     await expect(item).toBeFocused()
     await item.press('Enter')
     await page.waitForTimeout(300)
-    // No mutation left the browser; the daemon still reports it unpromoted,
-    // and the session is exactly where it was.
-    expect((await listSessions()).find(s => s.id === outside.id)?.promoted_to_root ?? false).toBe(false)
+    // No mutation left the browser; the daemon still reports the family
+    // edge intact, and the session is exactly where it was.
+    expect((await listSessions()).find(s => s.id === outside.id)?.parent_session_id).toBe(parentId)
     expect(page.url()).toContain('/test-project/')
     await expect(page.locator('.xterm')).toBeVisible()
 
     // The CLI/API can still promote such a session. Pin the documented
     // consequence — an unplaced promoted root renders nowhere, like any
     // unplaced session — and the recovery: demote restores the family route.
-    expect(await post(`/v1/sessions/${outside.id}/promote`)).toBe(200)
+    expect(await post(`/v1/sessions/${outside.id}/reparent`, { parent_session_id: null })).toBe(200)
     await pollUntil(async () =>
-      (await listSessions()).find(s => s.id === outside.id)?.promoted_to_root === true,
+      (await listSessions()).find(s => s.id === outside.id)?.parent_session_id === undefined,
     { timeoutMs: 10_000, description: 'promoted via API' })
     await expect.poll(
       () => page.evaluate(id => (window as any).__gmuxNavigateToSession(id), outside.id),
       { timeout: 10_000 },
     ).toBe(false) // unroutable while promoted and unplaced
-    expect(await post(`/v1/sessions/${outside.id}/demote`)).toBe(200)
+    expect(await post(`/v1/sessions/${outside.id}/reparent`, { parent_session_id: parentId })).toBe(200)
     await expect.poll(
       () => page.evaluate(id => (window as any).__gmuxNavigateToSession(id), outside.id),
       { timeout: 10_000 },
@@ -300,7 +306,7 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
 
   test('blocks demote when the family root is outside every project', async ({ page }) => {
     // Mirror the promote-stranding schedule: the promoted child is stamped and
-    // routable, but clearing its flag would rejoin an unplaced parent.
+    // routable, but returning it would rejoin an unplaced parent.
     const outsideParentDir = path.join(tmpDir, 'outside-parent')
     fs.mkdirSync(outsideParentDir, { recursive: true })
     extraProcs.push(spawnGmux(['--', 'claude'], outsideParentDir))
@@ -319,16 +325,16 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
     extraIds.push(placedChild.id)
     expect(placedChild.project_slug).toBe('test-project')
 
-    expect(await post(`/v1/sessions/${placedChild.id}/promote`)).toBe(200)
+    expect(await post(`/v1/sessions/${placedChild.id}/reparent`, { parent_session_id: null })).toBe(200)
     await pollUntil(async () =>
-      (await listSessions()).find(s => s.id === placedChild.id)?.promoted_to_root === true,
+      (await listSessions()).find(s => s.id === placedChild.id)?.parent_session_id === undefined,
     { timeoutMs: 10_000, description: 'placed child promoted' })
 
     await openApp(page)
     await gotoSession(page, placedChild.id)
     expect(page.url()).toContain('/test-project/')
     const posts: string[] = []
-    await page.route(`**/v1/sessions/${placedChild.id}/demote`, async route => {
+    await page.route(`**/v1/sessions/${placedChild.id}/reparent`, async route => {
       posts.push(route.request().url())
       await route.fulfill({ status: 200, body: '{}' })
     })
@@ -340,7 +346,7 @@ test.describe('promotion placement edges (real daemon, desktop)', () => {
     await item.focus()
     await item.press('Enter')
     await expect.poll(() => posts).toHaveLength(0)
-    expect((await listSessions()).find(s => s.id === placedChild.id)?.promoted_to_root).toBe(true)
+    expect((await listSessions()).find(s => s.id === placedChild.id)?.parent_session_id).toBe(undefined)
     expect(page.url()).toContain('/test-project/')
     await expect(page.locator('.xterm')).toBeVisible()
   })

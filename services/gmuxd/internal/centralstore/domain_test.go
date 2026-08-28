@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -113,40 +114,6 @@ func TestChildFirstAndLaterParentCycle(t *testing.T) {
 	_, _, err := s2.InsertSession(ctx, NewSession{ID: "b", Adapter: "shell", Command: []string{}, CWD: "/", Remotes: map[string]string{}, CreatedAt: 1, ParentSessionID: &p})
 	if err == nil {
 		t.Fatal("cycle insertion succeeded")
-	}
-}
-
-func TestDedicatedInsertAndTriStatePatch(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	epoch := UnixMillis(0)
-	cols, rows := uint16(80), uint16(24)
-	v, _, err := s.InsertSession(ctx, NewSession{ID: "s", Adapter: "shell", Command: nil, CWD: "/", Remotes: nil, CreatedAt: 0, StartedAt: &epoch, TerminalCols: &cols, TerminalRows: &rows})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Version != 1 || v.DismissedAt != nil || v.PromotedToRoot || v.Command == nil || v.Remotes == nil || v.StartedAt == nil || *v.StartedAt != 0 {
-		t.Fatalf("round trip=%#v", v)
-	}
-	clear := CommonFactsPatch{StartedAt: NullablePatch[UnixMillis]{Clear: true}, TerminalSize: NullablePatch[TerminalSize]{Clear: true}}
-	r, err := s.ApplyCommonFacts(ctx, "s", 1, clear)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !r.Changed || !r.SessionsDirty || r.WorldDirty || r.SessionVersion != 2 {
-		t.Fatalf("patch result=%#v", r)
-	}
-	got, _, _ := s.Session(ctx, "s")
-	if got.StartedAt != nil || got.TerminalCols != nil || got.TerminalRows != nil {
-		t.Fatalf("clear failed: %#v", got)
-	}
-	x := UnixMillis(1)
-	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &x, Clear: true}}); err == nil {
-		t.Fatal("set+clear accepted")
-	}
-	bad := TerminalSize{Cols: 80}
-	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &bad}}); err == nil {
-		t.Fatal("one-sided terminal size accepted")
 	}
 }
 
@@ -464,20 +431,6 @@ func TestCatalogSlugSwapAndReuse(t *testing.T) {
 	})
 }
 
-func TestSessionMutationsReturnErrSessionNotFound(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	if _, err := s.ApplyCommonFacts(ctx, "missing", 1, CommonFactsPatch{}); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("ApplyCommonFacts err=%v", err)
-	}
-	if _, err := s.RemoveSessionAtVersion(ctx, "missing", 1); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("RemoveSessionAtVersion err=%v", err)
-	}
-	if _, err := s.SetPromotion(ctx, "missing", true, nil); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("SetPromotion err=%v", err)
-	}
-}
-
 func TestLaunchParentUpdateTriggerRejectsRebind(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
@@ -638,55 +591,6 @@ func TestLaterParentRegroupUsesCreationOrder(t *testing.T) {
 	want := []string{"l:z", "l:a"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("regroup order=%v want=%v", got, want)
-	}
-}
-
-func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	p := addProject(t, s)
-	for _, id := range []string{"a", "b"} {
-		addSession(t, s, id, "")
-		if _, err := s.PlaceLocalSession(ctx, SessionID(id), p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Every no-op below must also stay clean on both dirty kinds: placement
-	// now dirties sessions as well as world, so a mutation that reported
-	// dirtiness unconditionally would republish on every idle promotion or
-	// re-assert of the current order.
-	r, err := s.SetPromotion(ctx, "a", false, nil)
-	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 1 {
-		t.Fatalf("promotion noop=%#v err=%v", r, err)
-	}
-	idx := 0
-	r, err = s.SetPromotion(ctx, "a", false, &idx)
-	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 1 {
-		t.Fatalf("order noop=%#v err=%v", r, err)
-	}
-	idx = 1
-	r, err = s.SetPromotion(ctx, "a", false, &idx)
-	// Order-only: the row version doesn't move (no session-row fact
-	// changed) but the sessions kind is still dirty, because positions
-	// reach the wire as session-row project_index stamps.
-	if err != nil || !r.Changed || !r.SessionsDirty || !r.WorldDirty || r.SessionVersion != 1 {
-		t.Fatalf("order-only=%#v err=%v", r, err)
-	}
-	r, err = s.SetPromotion(ctx, "a", true, nil)
-	if err != nil || !r.Changed || !r.SessionsDirty || r.SessionVersion != 2 {
-		t.Fatalf("promotion=%#v err=%v", r, err)
-	}
-	r, err = s.SetPromotion(ctx, "a", true, nil)
-	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 2 {
-		t.Fatalf("second noop=%#v err=%v", r, err)
-	}
-	bad := 9
-	if _, err = s.SetPromotion(ctx, "a", true, &bad); err == nil {
-		t.Fatal("invalid index accepted")
-	}
-	got, _, _ := s.Session(ctx, "a")
-	if got.Version != 2 {
-		t.Fatalf("rollback changed version: %d", got.Version)
 	}
 }
 
@@ -934,59 +838,6 @@ func TestReorderSiblingScopesRollsBackAllScopes(t *testing.T) {
 	}
 }
 
-func TestPromotionAndParentProjectTransitions(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	cat, _, err := s.ReplaceProjectCatalog(ctx, []ProjectEntrySpec{owned("one", "/one"), owned("two", "/two")}, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p1, p2 := cat[0].ID, cat[1].ID
-	addSession(t, s, "root", "")
-	addSession(t, s, "parent", "")
-	addSession(t, s, "child", "parent")
-	addSession(t, s, "sibling", "parent")
-	for _, id := range []SessionID{"root", "parent", "child", "sibling"} {
-		if _, err = s.PlaceLocalSession(ctx, id, p1); err != nil {
-			t.Fatal(err)
-		}
-	}
-	idx := 1
-	result, err := s.SetPromotion(ctx, "child", true, &idx)
-	if err != nil || result.SessionVersion != 2 {
-		t.Fatalf("promote result=%#v err=%v", result, err)
-	}
-	if got := rootOrder(t, s, p1); !reflect.DeepEqual(got, []string{"l:root", "l:child", "l:parent"}) {
-		t.Fatalf("promoted roots=%v", got)
-	}
-	promoted, ok, err := s.Session(ctx, "child")
-	if err != nil || !ok || promoted.ParentSessionID == nil || *promoted.ParentSessionID != "parent" || !promoted.PromotedToRoot {
-		t.Fatalf("promotion lost provenance: child=%#v ok=%v err=%v", promoted, ok, err)
-	}
-	idx = 0
-	result, err = s.SetPromotion(ctx, "child", false, &idx)
-	if err != nil || result.SessionVersion != 3 {
-		t.Fatalf("unpromote result=%#v err=%v", result, err)
-	}
-	if got := scopeOrder(t, s, p1, "c:l:parent"); !reflect.DeepEqual(got, []string{"l:child", "l:sibling"}) {
-		t.Fatalf("unpromoted children=%v", got)
-	}
-	addSession(t, s, "destination", "")
-	if _, err = s.PlaceLocalSession(ctx, "destination", p2); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.PlaceLocalSession(ctx, "parent", p2); err != nil {
-		t.Fatal(err)
-	}
-	if got := rootOrder(t, s, p2); !reflect.DeepEqual(got, []string{"l:destination", "l:parent"}) {
-		t.Fatalf("parent destination append=%v", got)
-	}
-	if got := rootOrder(t, s, p1); !reflect.DeepEqual(got, []string{"l:root", "l:child", "l:sibling"}) {
-		t.Fatalf("children reroot append=%v", got)
-	}
-	assertKernelInvariants(t, s)
-}
-
 func TestPlacedParentRemovalPreservesGrandchildAndOrdering(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
@@ -1198,3 +1049,52 @@ func assertKernelInvariants(t *testing.T, s *Store) {
 	}
 }
 func stringsHasPrefixTemp(s string) bool { return len(s) >= 2 && s[:2] == "~:" }
+
+func TestDedicatedInsertAndTriStatePatch(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	epoch := UnixMillis(0)
+	cols, rows := uint16(80), uint16(24)
+	v, _, err := s.InsertSession(ctx, NewSession{ID: "s", Adapter: "shell", Command: nil, CWD: "/", Remotes: nil, CreatedAt: 0, StartedAt: &epoch, TerminalCols: &cols, TerminalRows: &rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Version != 1 || v.DismissedAt != nil || v.Command == nil || v.Remotes == nil || v.StartedAt == nil || *v.StartedAt != 0 {
+		t.Fatalf("round trip=%#v", v)
+	}
+	clear := CommonFactsPatch{StartedAt: NullablePatch[UnixMillis]{Clear: true}, TerminalSize: NullablePatch[TerminalSize]{Clear: true}}
+	r, err := s.ApplyCommonFacts(ctx, "s", 1, clear)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Changed || !r.SessionsDirty || r.WorldDirty || r.SessionVersion != 2 {
+		t.Fatalf("patch result=%#v", r)
+	}
+	got, _, _ := s.Session(ctx, "s")
+	if got.StartedAt != nil || got.TerminalCols != nil || got.TerminalRows != nil {
+		t.Fatalf("clear failed: %#v", got)
+	}
+	x := UnixMillis(1)
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &x, Clear: true}}); err == nil {
+		t.Fatal("set+clear accepted")
+	}
+	size := TerminalSize{Cols: 80, Rows: 24}
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &size, Clear: true}}); err == nil || !strings.Contains(err.Error(), "terminal patch cannot set and clear") {
+		t.Fatalf("terminal set+clear error = %v", err)
+	}
+	bad := TerminalSize{Cols: 80}
+	if _, err = s.ApplyCommonFacts(ctx, "s", 2, CommonFactsPatch{TerminalSize: NullablePatch[TerminalSize]{Set: &bad}}); err == nil || !strings.Contains(err.Error(), "terminal dimensions must be positive") {
+		t.Fatalf("one-sided terminal size error = %v", err)
+	}
+}
+
+func TestSessionMutationsReturnErrSessionNotFound(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	if _, err := s.ApplyCommonFacts(ctx, "missing", 1, CommonFactsPatch{}); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("ApplyCommonFacts err=%v", err)
+	}
+	if _, err := s.RemoveSessionAtVersion(ctx, "missing", 1); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("RemoveSessionAtVersion err=%v", err)
+	}
+}

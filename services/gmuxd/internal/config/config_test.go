@@ -20,8 +20,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != 8790 {
 		t.Errorf("port = %d, want 8790", cfg.Port)
 	}
-	if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != "[-1 8]" || cfg.MaxSubagentsByDepth.Disabled {
-		t.Errorf("max_subagents_by_depth = %+v, want [-1 8]", cfg.MaxSubagentsByDepth)
+	if got := fmt.Sprint(cfg.Agent.MaxSubagentsByDepth.Values); got != "[-1 8]" || cfg.Agent.MaxSubagentsByDepth.Disabled {
+		t.Errorf("max_subagents_by_depth = %+v, want [-1 8]", cfg.Agent.MaxSubagentsByDepth)
 	}
 	if cfg.Tailscale.Enabled {
 		t.Error("tailscale should be disabled by default")
@@ -39,6 +39,8 @@ func TestLoadFromFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeConfig(t, dir, `
 port = 9999
+
+[agent]
 max_subagents_by_depth = [64, 12]
 
 [tailscale]
@@ -53,8 +55,8 @@ allow = ["alice@github", "bob@github"]
 	if cfg.Port != 9999 {
 		t.Errorf("port = %d, want 9999", cfg.Port)
 	}
-	if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != "[64 12]" {
-		t.Errorf("max_subagents_by_depth = %v, want [64 12]", cfg.MaxSubagentsByDepth.Values)
+	if got := fmt.Sprint(cfg.Agent.MaxSubagentsByDepth.Values); got != "[64 12]" {
+		t.Errorf("max_subagents_by_depth = %v, want [64 12]", cfg.Agent.MaxSubagentsByDepth.Values)
 	}
 	if !cfg.Tailscale.Enabled {
 		t.Error("tailscale should be enabled")
@@ -86,7 +88,7 @@ func TestLoadValidatesMaxSubagentsByDepth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			writeConfig(t, dir, "max_subagents_by_depth = "+tt.value+"\n")
+			writeConfig(t, dir, "[agent]\nmax_subagents_by_depth = "+tt.value+"\n")
 			cfg, err := Load()
 			if tt.wantErr {
 				if err == nil {
@@ -97,8 +99,8 @@ func TestLoadValidatesMaxSubagentsByDepth(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fmt.Sprint(cfg.MaxSubagentsByDepth.Values); got != tt.want || cfg.MaxSubagentsByDepth.Disabled != tt.wantOff {
-				t.Fatalf("got %+v, want values=%s disabled=%v", cfg.MaxSubagentsByDepth, tt.want, tt.wantOff)
+			if got := fmt.Sprint(cfg.Agent.MaxSubagentsByDepth.Values); got != tt.want || cfg.Agent.MaxSubagentsByDepth.Disabled != tt.wantOff {
+				t.Fatalf("got %+v, want values=%s disabled=%v", cfg.Agent.MaxSubagentsByDepth, tt.want, tt.wantOff)
 			}
 		})
 	}
@@ -621,4 +623,20 @@ func writeConfig(t *testing.T, xdgDir, content string) {
 	cfgDir := filepath.Join(xdgDir, "gmux")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "host.toml"), []byte(content), 0o644)
+}
+
+// A host.toml written against the unreleased top-level spelling must name its
+// new home rather than silently reverting the host to default budgets.
+func TestLoadRejectsTopLevelMaxSubagentsByDepth(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, "max_subagents_by_depth = [4, 4]\n")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() = nil error, want a migration error naming [agent]")
+	}
+	if !strings.Contains(err.Error(), "[agent]") {
+		t.Errorf("error = %q, want it to name the [agent] section", err)
+	}
 }

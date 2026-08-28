@@ -1,45 +1,43 @@
-import { Component, Fragment, render, type ComponentChildren } from 'preact'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import { batch } from '@preact/signals'
+import { Component, type ComponentChildren, Fragment, render } from 'preact'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { LocationProvider, lazy, Route, Router, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
-import { applyArmedModifiers } from './keyboard'
+import { copyText } from './clipboard'
 import { keyComboToSequence } from './config'
-import { isTouchDevice } from './touch'
-import { ReplayView } from './replay-view'
-import { TerminalView } from './terminal'
-import { Sidebar } from './sidebar'
-import { usePresence } from './use-presence'
-import { lifecycleAction } from './session-actions'
-import { MenuButton } from './menu-button'
+import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyDrawer } from './family-drawer'
 import { familyDrawerRoot } from './family-drawer-state'
-import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyIcon } from './family-icon'
-
-import type { Session } from './types'
-import { SettingsModal } from './settings'
 import { Home } from './home'
+import { applyArmedModifiers } from './keyboard'
+import { MenuButton } from './menu-button'
 import { installCopySession } from './mock-data/export-session'
-import { installVersionWatch } from './version-watch'
+import { ReplayView } from './replay-view'
+import { viewToPath } from './routing'
+import { lifecycleAction } from './session-actions'
+import { SettingsModal } from './settings'
+import { Sidebar } from './sidebar'
+import {
+  acknowledgePromotionAnnouncement, activityMap, beginPromotion, connState, 
+  dismissSession, familyActivityById, health, 
+  initStore, isPromotionAnnouncementDelivered,keybinds, 
+  keyboardOpen, macCommandIsCtrl,navigate, navigateToSession,peers, projects,promoteSession, promotionAnnouncements,
+  promotionPending, reparentSession,restartSession, resumeSession, selected, selectedId, sessionDotState, 
+  sessionStaleness, 
+  sessions, setNavigate, settlePromotion, tabHref,terminalFindOpen, 
+  terminalOptions, terminalScrolledUp, terminalScrollToBottom,urlHash,
+  urlPath, urlSearch, view, 
+} from './store'
+import { TerminalView } from './terminal'
 import { ToastHost } from './toast-host'
 import { pushError } from './toasts'
-import { copyText } from './clipboard'
-
-import {
-  sessions, connState, selected, selectedId, view, health, peers, projects,
-  terminalOptions, keybinds, macCommandIsCtrl,
-  keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
-  urlPath, urlSearch, urlHash,
-  initStore, setNavigate, navigate, navigateToSession,
-  dismissSession, resumeSession, restartSession, promoteSession, demoteSession,
-  promotionPending, beginPromotion, settlePromotion, promotionAnnouncements,
-  acknowledgePromotionAnnouncement, isPromotionAnnouncementDelivered,
-  sessionStaleness, sessionDotState, activityMap, familyActivityById, tabHref,
-} from './store'
-import { viewToPath } from './routing'
+import { isTouchDevice } from './touch'
+import type { Session } from './types'
+import { usePresence } from './use-presence'
+import { installVersionWatch } from './version-watch'
 
 // Lazy-loaded routes (code-split, not bundled with the main app)
 const InputDiagnostics = lazy(() => import('./input-diagnostics'))
@@ -472,10 +470,11 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
                 // the dropdown, and a keyboard user shouldn't land on <body>.
                 triggerRef.current?.focus()
                 const id = session.id
-                const seq = beginPromotion(id, promotion.kind)
+                const targetParent = promotion.kind === 'promote' ? null : promotion.parent.id
+                const seq = beginPromotion(id, promotion.kind, targetParent)
                 void (promotion.kind === 'promote'
                   ? promoteSession(id)
-                  : demoteSession(id)
+                  : reparentSession(id, targetParent, 'Return to family')
                 ).then(ok => {
                   // Rejection re-arms exactly the entry this request created
                   // (generation-checked), beside its failure toast; success

@@ -274,10 +274,6 @@ func TestUndismissalResurfacesUnderVisibleParent(t *testing.T) {
 	}
 }
 
-// Parent deletion promotes surviving direct children to genuine roots by
-// clearing parent_session_id only. The sticky promoted_to_root bit is
-// user-authored presentation state and is neither set nor cleared by
-// deletion; grandchildren keep their own provenance.
 func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
@@ -287,9 +283,6 @@ func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	mustRegister(t, s, regWithParent("c2", "p", "/one", 30))
 	mustRegister(t, s, regWithParent("g", "c2", "/one", 40))
 	mustRegister(t, s, regWithParent("x", "", "/one", 50))
-	if _, err := s.SetPromotion(ctx, "c1", true, nil); err != nil {
-		t.Fatal(err)
-	}
 	parent := mustSession(t, s, "p")
 
 	result, err := s.RemoveSessionAtVersion(ctx, "p", parent.Version)
@@ -307,12 +300,6 @@ func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	g := mustSession(t, s, "g")
 	if c1.ParentSessionID != nil || c2.ParentSessionID != nil {
 		t.Fatalf("children parents not cleared: %#v %#v", c1.ParentSessionID, c2.ParentSessionID)
-	}
-	if !c1.PromotedToRoot {
-		t.Fatal("existing sticky promotion must survive parent deletion")
-	}
-	if c2.PromotedToRoot {
-		t.Fatal("deletion must not fabricate a sticky promotion")
 	}
 	if g.ParentSessionID == nil || *g.ParentSessionID != "c2" {
 		t.Fatalf("grandchild provenance must survive: %#v", g.ParentSessionID)
@@ -336,35 +323,5 @@ func TestParentDeletionPromotesChildrenAsGenuineRoots(t *testing.T) {
 	}
 	if p := localPlacement(t, s, "g"); p == nil || p.scope != "c:l:c2" || p.pos != 0 {
 		t.Fatalf("grandchild scope: %#v", p)
-	}
-}
-
-// promoted_to_root is sticky presentation state: registration merges never
-// touch it, including re-registration after dismissal — a promoted child
-// resurfaces as a root even when its parent is visible.
-func TestPromotionSurvivesReRegistrationAndDismissal(t *testing.T) {
-	ctx := context.Background()
-	s := openKernelStore(t)
-	treeFixture(t, s)
-	if _, err := s.SetPromotion(ctx, "c", true, nil); err != nil {
-		t.Fatal(err)
-	}
-	mustRegister(t, s, regWithParent("c", "p", "/one", 100))
-	if v := mustSession(t, s, "c"); !v.PromotedToRoot {
-		t.Fatal("promotion lost on re-registration")
-	}
-	if _, _, err := s.DismissSessionTree(ctx, "c", 200); err != nil {
-		t.Fatal(err)
-	}
-	if v := mustSession(t, s, "c"); !v.PromotedToRoot {
-		t.Fatal("promotion lost on dismissal")
-	}
-	mustRegister(t, s, regWithParent("c", "p", "/one", 300))
-	v := mustSession(t, s, "c")
-	if !v.PromotedToRoot || v.DismissedAt != nil {
-		t.Fatalf("undismissed promoted child: %#v", v)
-	}
-	if p := localPlacement(t, s, "c"); p == nil || p.scope != "r" {
-		t.Fatalf("promoted child must resurface as root: %#v", p)
 	}
 }

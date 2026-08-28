@@ -16,25 +16,6 @@ import (
 
 func intPtr(v int) *int { return &v }
 
-func TestProjectionFamilyFactsSurviveCloneAndDriveEquality(t *testing.T) {
-	original := SessionProjection{ID: "child@box", ParentSessionID: "root@box", SemanticAgent: true, PromotedToRoot: true}
-	cloned := cloneProjection(original)
-	if cloned.ParentSessionID != original.ParentSessionID || !cloned.SemanticAgent || !cloned.PromotedToRoot {
-		t.Fatalf("family facts lost in clone: %#v", cloned)
-	}
-	for _, mutate := range []func(*SessionProjection){
-		func(row *SessionProjection) { row.ParentSessionID = "other@box" },
-		func(row *SessionProjection) { row.SemanticAgent = false },
-		func(row *SessionProjection) { row.PromotedToRoot = false },
-	} {
-		changed := cloned
-		mutate(&changed)
-		if projectionsEqual([]SessionProjection{original}, []SessionProjection{changed}) {
-			t.Fatalf("family fact change reported equal: before=%#v after=%#v", original, changed)
-		}
-	}
-}
-
 // Ordering: ADR 0001 gives deterministic wire ordering today, but an
 // order-sensitive gate would turn any future reordering into a permanent loop.
 func TestProjectionsEqualIsOrderInsensitive(t *testing.T) {

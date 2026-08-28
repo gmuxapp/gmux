@@ -36,18 +36,6 @@ func place(row *central.SessionRow, slug, scope string, pos int) {
 	row.SessionView.Placement = &centralstore.SessionPlacement{ProjectSlug: slug, SiblingScope: scope, Position: pos}
 }
 
-func TestSessionConversionPreservesFamilyFacts(t *testing.T) {
-	parent := centralstore.SessionID("parent")
-	got := (&Converter{SemanticAgents: map[string]bool{"pi": true}}).session(central.SessionRow{
-		SessionView: centralstore.SessionView{Session: centralstore.Session{
-			ID: "child", Adapter: "pi", CreatedAt: 1, ParentSessionID: &parent, PromotedToRoot: true,
-		}},
-	})
-	if got.ParentSessionID != "parent" || !got.SemanticAgent || !got.PromotedToRoot {
-		t.Fatalf("family facts dropped: %#v", got)
-	}
-}
-
 // The drive mode rides the wire only when it is not the terminal default:
 // the pre-mode wire shape had no field, so terminal (and a legacy empty
 // value) stays byte-identical and only "acp" is emitted (ADR 0033).

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
-  descendantTree, familyAncestors, familyIndex, familySegments, familyStateOf,
-  childTrailTitle, familyActivityLabel, familyRoot, hasFamily, type FamilyActivity,
-  familyMemberGlyph, isFamilyChild, projectFamily, promotionAction, promotionCopy,
+  childTrailTitle, descendantTree, familyActivityLabel, familyAncestors, familyIndex,
+  familyMemberGlyph, familyRoot, familySegments, familyStateOf, hasFamily, isFamilyChild,
+  projectFamily, promotionAction, promotionCopy, type FamilyActivity,
 } from './family'
 import { makeSession } from './test-helpers'
 
 const agent = (id: string, parent?: string, extra = {}) => makeSession({
-  id, cwd: '/p', title: id, parent_session_id: parent, semantic_agent: true, project_slug: 'p', ...extra,
+  id, cwd: '/p', title: id, parent_session_id: parent, launched_from_session_id: parent,
+  semantic_agent: true, project_slug: 'p', ...extra,
 })
 
 describe('family overview state', () => {
@@ -32,7 +33,7 @@ describe('task-family projection', () => {
     const root = agent('root')
     const child = agent('child', 'root')
     const shell = makeSession({ id: 'shell', cwd: '/p', parent_session_id: 'root', adapter: 'shell' })
-    const promoted = agent('promoted', 'root', { promoted_to_root: true })
+    const promoted = agent('promoted', 'root', { parent_session_id: undefined })
     const sessions = [root, child, shell, promoted]
     expect(isFamilyChild(child, sessions)).toBe(true)
     expect(isFamilyChild(shell, sessions)).toBe(true)
@@ -133,38 +134,34 @@ describe('task-family projection', () => {
       expect(copy.note).toBe('Needs a project: no project contains this session’s folder, so it would have no row of its own. Add one in Settings → Projects.')
     })
 
-    it('blocks demote when the family root has no sidebar placement', () => {
-      const root = agent('root', undefined, { project_slug: undefined })
-      const promoted = agent('promoted', 'root', { promoted_to_root: true })
-      // The promoted child is placed, but demotion would rejoin an unplaced
-      // parent and strand the selected route.
-      const action = promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }])
-      expect(action).toEqual({ kind: 'demote', parent: root, blocked: 'no-project' })
-      expect(promotionCopy(action!).label).toBe('Return to family')
-      expect(promotionCopy(action!).note).toContain('family root has no project-backed sidebar row')
+    it('blocks return when the launch parent has no sidebar placement — visible, with the reason', () => {
+      const root = agent('root', undefined, { project_slug: undefined, cwd: '/elsewhere' })
+      const promoted = agent('promoted', 'root', { parent_session_id: undefined })
+      expect(promotionAction(promoted, [root, promoted], [{ slug: 'p', match: [{ path: '/p' }] }]))
+        .toEqual({ kind: 'demote', parent: root, blocked: 'no-project' })
     })
 
     it('offers demote to a promoted session whose family still exists', () => {
       const root = agent('root', undefined, { title: 'orchestrator' })
-      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      const promoted = agent('promoted', 'root', { parent_session_id: undefined })
       expect(promotionAction(promoted, [root, promoted], placed)).toEqual({ kind: 'demote', parent: root })
     })
 
     it('hides demote when no valid local parent exists', () => {
       // Parent reconciled away: deletion repair normally clears the edge, but
       // a stale id must not offer a demote that rejoins nothing.
-      const orphan = agent('orphan', 'gone', { promoted_to_root: true })
+      const orphan = agent('orphan', 'gone', { parent_session_id: undefined })
       expect(promotionAction(orphan, [orphan], placed)).toBeNull()
       // Edge cleared entirely (post deletion repair).
-      const cleared = agent('cleared', undefined, { promoted_to_root: true })
+      const cleared = agent('cleared', undefined, { parent_session_id: undefined })
       expect(promotionAction(cleared, [cleared], placed)).toBeNull()
       // Parent exists but is not a semantic agent: demoting would not rejoin
       // any presentation family.
       const shellParent = makeSession({ id: 'sh', cwd: '/p', adapter: 'shell' })
-      const flagged = agent('flagged', 'sh', { promoted_to_root: true })
+      const flagged = agent('flagged', 'sh', { parent_session_id: undefined })
       expect(promotionAction(flagged, [shellParent, flagged], placed)).toBeNull()
       // Malformed self-parent.
-      const selfie = agent('selfie', 'selfie', { promoted_to_root: true })
+      const selfie = agent('selfie', 'selfie', { parent_session_id: undefined })
       expect(promotionAction(selfie, [selfie], placed)).toBeNull()
     })
 
@@ -173,7 +170,7 @@ describe('task-family projection', () => {
       // (local_only) — network peers and Local/devcontainer peers alike.
       const root = agent('root', undefined, { peer: 'devbox' })
       const child = agent('child', 'root', { peer: 'devbox' })
-      const promoted = agent('promoted', 'root', { peer: 'devbox', promoted_to_root: true })
+      const promoted = agent('promoted', 'root', { peer: 'devbox', parent_session_id: undefined })
       const snapshot = [root, child, promoted]
       expect(promotionAction(child, snapshot, placed)).toBeNull()
       expect(promotionAction(promoted, snapshot, placed)).toBeNull()
@@ -212,7 +209,7 @@ describe('task-family projection', () => {
       const promote = promotionCopy(promotionAction(child, [root, child], placed)!)
       expect(promote.label).toBe('Promote to root')
       expect(promote.note).toBeUndefined()
-      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      const promoted = agent('promoted', 'root', { parent_session_id: undefined })
       const demote = promotionCopy(promotionAction(promoted, [root, promoted], placed)!)
       expect(demote.label).toBe('Return to family')
       expect(demote.note).toBeUndefined()
@@ -224,7 +221,7 @@ describe('task-family projection', () => {
       const pendingPromote = promotionCopy(promotionAction(child, [root, child], placed)!, true)
       expect(pendingPromote.label).toBe('Promoting…')
       expect(pendingPromote.note).toBeUndefined()
-      const promoted = agent('promoted', 'root', { promoted_to_root: true })
+      const promoted = agent('promoted', 'root', { parent_session_id: undefined })
       const pendingDemote = promotionCopy(promotionAction(promoted, [root, promoted], placed)!, true)
       expect(pendingDemote.label).toBe('Returning…')
       expect(pendingDemote.note).toBeUndefined()
@@ -235,7 +232,7 @@ describe('task-family projection', () => {
     const root = agent('root')
     const parent = agent('parent', 'root')
     const child = agent('child', 'parent')
-    const promoted = agent('promoted', 'parent', { promoted_to_root: true })
+    const promoted = agent('promoted', 'parent', { parent_session_id: undefined })
     const snapshot = [root, parent, child, promoted]
     expect(familyAncestors(root, snapshot)).toEqual([])
     expect(familyAncestors(parent, snapshot).map(s => s.id)).toEqual(['root'])
@@ -246,7 +243,7 @@ describe('task-family projection', () => {
 
   it('keeps a promoted agent full descendant subtree as a new family', () => {
     const root = agent('root')
-    const promoted = agent('promoted', 'root', { promoted_to_root: true })
+    const promoted = agent('promoted', 'root', { parent_session_id: undefined })
     const grandchild = agent('grandchild', 'promoted')
     expect(descendantTree(root, [root, promoted, grandchild]).children).toEqual([])
     expect(descendantTree(promoted, [root, promoted, grandchild]).children[0]?.session).toBe(grandchild)

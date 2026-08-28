@@ -496,6 +496,7 @@ func TestListJSONSchemaIsStable(t *testing.T) {
 		Pid: 42, Title: "title", Slug: "slug", RunnerVersion: "2.0.0",
 		ParentSessionID: "parent", SocketPath: "/run/socket", Command: []string{"pi"},
 		StartedAt: "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z", ExitCode: &exit,
+		UnreadToken: "internal-token",
 	}
 	got := jsonKeys(t, full)
 	wantTypes := map[string]byte{
@@ -510,6 +511,10 @@ func TestListJSONSchemaIsStable(t *testing.T) {
 		} else if len(value) == 0 || value[0] != firstByte {
 			t.Errorf("key %q has value %s, want JSON type beginning %q", key, value, firstByte)
 		}
+	}
+
+	if _, ok := got["unread_token"]; ok {
+		t.Error("ls --json exposes internal unread_token")
 	}
 
 	bare := jsonKeys(t, cliSession{ID: "1va8lvdv"})

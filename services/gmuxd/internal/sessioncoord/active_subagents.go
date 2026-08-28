@@ -53,7 +53,6 @@ type ActiveSubagentReservation struct {
 type activeSubagentNode struct {
 	parent    centralstore.SessionID
 	hasParent bool
-	promoted  bool
 	semantic  bool
 	live      bool
 }
@@ -104,7 +103,7 @@ func newActiveSubagentBudget(limits []int, disabled bool, semantic func(string) 
 		b.semantic = func(string) bool { return false }
 	}
 	for _, row := range rows {
-		n := activeSubagentNode{promoted: row.PromotedToRoot, semantic: b.semantic(row.Adapter)}
+		n := activeSubagentNode{semantic: b.semantic(row.Adapter)}
 		if row.ParentSessionID != nil {
 			n.parent, n.hasParent = *row.ParentSessionID, true
 			b.addChild(n.parent, row.ID)
@@ -147,7 +146,7 @@ func (b *activeSubagentBudget) resolveRoot(start centralstore.SessionID) central
 			}
 			return path[len(path)-1]
 		}
-		if n.promoted || !n.hasParent {
+		if !n.hasParent {
 			return cur
 		}
 		seen[cur] = len(path)
@@ -249,7 +248,7 @@ func (b *activeSubagentBudget) upsert(row centralstore.Session, live bool) {
 	if old, ok := b.nodes[row.ID]; ok && old.hasParent {
 		b.removeChild(old.parent, row.ID)
 	}
-	n := activeSubagentNode{promoted: row.PromotedToRoot, semantic: b.semantic(row.Adapter), live: live}
+	n := activeSubagentNode{semantic: b.semantic(row.Adapter), live: live}
 	if row.ParentSessionID != nil {
 		n.parent, n.hasParent = *row.ParentSessionID, true
 		b.addChild(n.parent, row.ID)
@@ -309,18 +308,6 @@ func (b *activeSubagentBudget) setParent(id centralstore.SessionID, parent *cent
 	} else {
 		n.parent = ""
 	}
-	b.nodes[id] = n
-	b.add(affected)
-}
-
-func (b *activeSubagentBudget) setPromotion(id centralstore.SessionID, promoted bool) {
-	n, ok := b.nodes[id]
-	if !ok {
-		return
-	}
-	affected := b.subtree(id)
-	b.subtract(affected)
-	n.promoted = promoted
 	b.nodes[id] = n
 	b.add(affected)
 }
