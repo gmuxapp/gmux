@@ -15,9 +15,14 @@ intended for upstreaming.
   provenance. Wrapped pushes preserve the complete source row, including
   trailing blank cells consumed at the wrap boundary; only terminating rows
   trim unused padding. Truncation, reflow, and clearing keep metadata aligned.
-- `utf8.go` marks a row only when a subsequent grapheme consumes pending
-  phantom autowrap. Filling the final cell alone does not mark it because CR,
-  cursor movement, and controls can cancel phantom state.
+- `utf8.go` fixes an upstream wide-write bug: with one column remaining,
+  autowrap now moves a width-2 grapheme to the next row instead of passing it
+  to `RenderBuffer` to be clipped and silently lost. The skipped column is an
+  explicit zero cell, distinct from an `EmptyCell` written space. Reflow drops
+  only these trailing synthetic skips and recreates them when a wide grapheme
+  again wraps early. Ordinary pending phantom autowrap is still marked only
+  when a subsequent grapheme consumes it; exactly-fitting wide cells compute
+  phantom state from their post-write edge.
 - Full-width insert/delete/scroll operations move bits with their rows;
   partial-width vertical operations clear the affected ambiguous provenance.
   Whole-row erase/fill and reset clear bits. Height-only resize preserves
@@ -38,7 +43,10 @@ intended for upstreaming.
   alternate-buffer isolation, normal-buffer reflow across the
   scrollback/viewport boundary, boundary spaces, wide and styled cells,
   cursor remapping, blank lines, scrollback bounds, height-only resize
-  preservation, RIS, and ED3.
+  preservation, RIS, and ED3. `BenchmarkReflow2000ScrollbackLines` measured
+  16.1 ms per 2,000-line reflow on an Intel i7-9700K (`-benchtime=5x`).
+  Amortizing repeated reflows caused by `shrinkForReconnect` remains a known
+  follow-up.
 
 No parser, cell, rendering, or hyperlink representation was replaced. In
 particular, `ultraviolet.Cell.Link` and existing ANSI rendering remain intact.

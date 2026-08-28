@@ -88,11 +88,33 @@ func (e *Emulator) handleGrapheme(content string, width int) {
 		e.lastChar, _ = utf8.DecodeRuneInString(content)
 	}
 
+	// A wide grapheme with only one column remaining must wrap before it is
+	// written. RenderBuffer clips a wide cell that does not fit, silently
+	// losing it. Zero cells mark the synthetic skipped columns distinctly from
+	// user-written spaces so reflow and checkpoint rendering can omit them.
+	if awm && cell.Width > 1 && x+cell.Width > e.scr.Width() {
+		e.scr.setWrapped(y, true)
+		for skip := x; skip < e.scr.Width(); skip++ {
+			e.scr.SetCell(skip, y, &uv.Cell{})
+		}
+		e.index()
+		_, y = e.scr.CursorPosition()
+		x = 0
+	}
+
 	e.scr.SetCell(x, y, &cell)
 
-	// Handle phantom state at the end of the line
-	e.atPhantom = awm && x >= e.scr.Width()-1
-	if !e.atPhantom {
+	// Handle phantom state from the post-write edge. This matters for a wide
+	// grapheme that exactly fills the final two columns.
+	if awm {
+		e.atPhantom = x+cell.Width >= e.scr.Width()
+		if e.atPhantom {
+			x = e.scr.Width() - 1
+		} else {
+			x += cell.Width
+		}
+	} else {
+		e.atPhantom = false
 		x += cell.Width
 	}
 

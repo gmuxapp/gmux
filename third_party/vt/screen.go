@@ -150,6 +150,10 @@ func (s *Screen) reflow(width, height int, cursor uv.Position) uv.Position {
 		consumed := lineContentLen(row.line)
 		if row.wrapped {
 			consumed = len(row.line)
+			for consumed > 0 && row.line[consumed-1].IsZero() &&
+				!isWidePlaceholder(row.line, consumed-1) {
+				consumed--
+			}
 		}
 		if i == sbLen+cursor.Y {
 			cursorLine = len(logical)
@@ -188,6 +192,9 @@ func (s *Screen) reflow(width, height int, cursor uv.Position) uv.Position {
 					continue
 				}
 				if cellWidth > width-col {
+					for skip := col; skip < width; skip++ {
+						row[skip] = uv.Cell{}
+					}
 					rows = append(rows, sourceRow{line: row, wrapped: true})
 					row, col = uv.NewLine(width), 0
 				}
@@ -228,17 +235,28 @@ func (s *Screen) reflow(width, height int, cursor uv.Position) uv.Position {
 			break
 		}
 		for x := range row.line {
-			cell := row.line[x]
-			if cell.Width == 0 {
-				continue
+			// Rows were assembled with valid wide-cell placeholders already.
+			// Copy raw cells so synthetic zero skips are not normalized back to
+			// EmptyCell and placeholders do not erase their owning wide cell.
+			if dst := s.buf.CellAt(x, y); dst != nil {
+				*dst = row.line[x]
 			}
-			s.buf.SetCell(x, y, &cell)
 		}
 		s.wrapped[y] = row.wrapped
 	}
 	s.scroll = s.buf.Bounds()
 	s.touchArea(s.buf.Bounds())
 	return uv.Pos(cursorCol, cursorRow-windowStart)
+}
+
+func isWidePlaceholder(line uv.Line, index int) bool {
+	for distance := 1; index-distance >= 0; distance++ {
+		width := line[index-distance].Width
+		if width > 0 {
+			return width > distance
+		}
+	}
+	return false
 }
 
 func lineContentLen(line uv.Line) int {

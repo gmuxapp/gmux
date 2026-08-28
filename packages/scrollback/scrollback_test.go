@@ -670,6 +670,17 @@ func TestRenderTailJoinsSoftWrappedRows(t *testing.T) {
 // The final written space wraps onto a blank continuation row. Trimming that
 // blank visible row leaves a wrap-marked row as the final extracted row, which
 // must still be flushed as a logical line.
+func TestRenderTailOmitsSyntheticWideWrapSkip(t *testing.T) {
+	lines, err := RenderTail(strings.NewReader("abc界X"), 4, 4, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"abc界X"}
+	if !equalLines(lines, want) {
+		t.Fatalf("got %q, want %q", lines, want)
+	}
+}
+
 func TestRenderTailFlushesFinalWrappedRow(t *testing.T) {
 	lines, err := RenderTail(strings.NewReader("123456789  "), 10, 4, 10)
 	if err != nil {

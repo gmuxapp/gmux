@@ -2090,6 +2090,14 @@ func TestSnapshotFrameWrappedRowsRoundTrip(t *testing.T) {
 			}
 
 			frame := snapshotFrameWithScreen(src, false, true)
+			if tc.name == "wide forced wrap" {
+				if !screenContainsCell(src, "界", 2) {
+					t.Fatal("source emulator dropped forced-wrap wide grapheme")
+				}
+				if !strings.Contains(ansi.Strip(string(frame)), "界") {
+					t.Fatalf("checkpoint dropped forced-wrap wide grapheme: %q", frame)
+				}
+			}
 			if tc.name == "boundary spaces" && strings.Contains(ansi.Strip(string(frame)), "quickbrown") {
 				t.Fatalf("checkpoint concatenated words: %q", frame)
 			}
@@ -2101,6 +2109,21 @@ func TestSnapshotFrameWrappedRowsRoundTrip(t *testing.T) {
 			assertScreensEqual(t, src, dst)
 		})
 	}
+}
+
+func screenContainsCell(screen interface {
+	Width() int
+	Height() int
+	CellAt(int, int) *uv.Cell
+}, content string, width int) bool {
+	for y := 0; y < screen.Height(); y++ {
+		for x := 0; x < screen.Width(); x++ {
+			if c := screen.CellAt(x, y); c != nil && c.Content == content && c.Width == width {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestSnapshotFrameAfterWidthChangesReflowsWithoutCorruption(t *testing.T) {

@@ -476,10 +476,13 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		rendered := line.Render()
 		sb.WriteString(rendered)
 		if wrapped {
-			// A wrapped row consumed every cell. Render trims only trailing
-			// unstyled blanks, so restore those cells before joining the next
-			// row. Styled blanks remain in rendered and need no extra padding.
-			if padding := len(line) - ansi.StringWidth(rendered); padding > 0 {
+			// Restore trimmed written spaces, but not trailing zero cells: those
+			// mark columns skipped when a wide grapheme wrapped early.
+			targetWidth := len(line)
+			for targetWidth > 0 && line[targetWidth-1].IsZero() {
+				targetWidth--
+			}
+			if padding := targetWidth - ansi.StringWidth(rendered); padding > 0 {
 				sb.WriteString(strings.Repeat(" ", padding))
 			}
 		}

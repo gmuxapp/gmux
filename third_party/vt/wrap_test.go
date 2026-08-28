@@ -62,11 +62,23 @@ func TestWrapScrollsIntoScrollback(t *testing.T) {
 }
 
 func TestWrapWideAndCombiningBoundary(t *testing.T) {
-	t.Run("wide", func(t *testing.T) {
-		e := NewEmulator(4, 2)
-		write(t, e, "abc界X")
-		if !e.Wrapped(0) {
-			t.Fatal("wide boundary did not wrap")
+	t.Run("wide cell is preserved after forced wrap", func(t *testing.T) {
+		for width := 4; width <= 10; width++ {
+			e := NewEmulator(width, 3)
+			prefix := strings.Repeat("a", width-1)
+			write(t, e, prefix+"界X")
+			for x := 0; x < width-1; x++ {
+				assertCell(t, e.CellAt(x, 0), "a", 1)
+			}
+			if c := e.CellAt(width-1, 0); c == nil || !c.IsZero() {
+				t.Fatalf("width %d skipped cell = %#v, want zero", width, c)
+			}
+			if !e.Wrapped(0) {
+				t.Fatalf("width %d forced row is not wrapped", width)
+			}
+			assertCell(t, e.CellAt(0, 1), "界", 2)
+			assertCell(t, e.CellAt(1, 1), "", 0)
+			assertCell(t, e.CellAt(2, 1), "X", 1)
 		}
 	})
 	t.Run("combining", func(t *testing.T) {
@@ -148,6 +160,13 @@ func TestScrollbackWrapTruncation(t *testing.T) {
 	}
 }
 
+func assertCell(t *testing.T, cell *uv.Cell, content string, width int) {
+	t.Helper()
+	if cell == nil || cell.Content != content || cell.Width != width {
+		t.Fatalf("cell = %#v, want content %q width %d", cell, content, width)
+	}
+}
+
 func TestScrollbackPushWrappedTrailingBlanks(t *testing.T) {
 	line := uv.NewLine(4)
 	line.Set(0, &uv.Cell{Content: "x", Width: 1})
@@ -163,6 +182,55 @@ func TestScrollbackPushWrappedTrailingBlanks(t *testing.T) {
 }
 
 func TestNormalBufferWidthReflow(t *testing.T) {
+	t.Run("grow removes synthetic wide skip", func(t *testing.T) {
+		e := NewEmulator(4, 4)
+		write(t, e, "abc界X")
+		e.Resize(8, 4)
+		assertCell(t, e.CellAt(0, 0), "a", 1)
+		assertCell(t, e.CellAt(1, 0), "b", 1)
+		assertCell(t, e.CellAt(2, 0), "c", 1)
+		assertCell(t, e.CellAt(3, 0), "界", 2)
+		assertCell(t, e.CellAt(4, 0), "", 0)
+		assertCell(t, e.CellAt(5, 0), "X", 1)
+		if e.Wrapped(0) {
+			t.Fatal("grown logical line remained wrapped")
+		}
+	})
+
+	t.Run("shrink recreates synthetic wide skip", func(t *testing.T) {
+		e := NewEmulator(10, 4)
+		write(t, e, "12345678界X")
+		e.Resize(9, 4)
+		for x := 0; x < 8; x++ {
+			assertCell(t, e.CellAt(x, 0), string(rune('1'+x)), 1)
+		}
+		if c := e.CellAt(8, 0); c == nil || !c.IsZero() {
+			t.Fatalf("new skipped cell = %#v, want zero", c)
+		}
+		if !e.Wrapped(0) {
+			t.Fatal("early-wide row not marked wrapped after shrink")
+		}
+		assertCell(t, e.CellAt(0, 1), "界", 2)
+		assertCell(t, e.CellAt(1, 1), "", 0)
+		assertCell(t, e.CellAt(2, 1), "X", 1)
+	})
+
+	t.Run("combining and ZWJ graphemes survive forced wrap and reflow", func(t *testing.T) {
+		e := NewEmulator(5, 4)
+		write(t, e, "abcd")
+		e.handleGrapheme("e\u0301", 1)
+		e.handleGrapheme("👩‍💻", 2)
+		e.handleGrapheme("X", 1)
+		assertCell(t, e.CellAt(3, 0), "d", 1)
+		assertCell(t, e.CellAt(4, 0), "é", 1)
+		assertCell(t, e.CellAt(0, 1), "👩‍💻", 2)
+		e.Resize(9, 4)
+		assertCell(t, e.CellAt(4, 0), "é", 1)
+		assertCell(t, e.CellAt(5, 0), "👩‍💻", 2)
+		assertCell(t, e.CellAt(6, 0), "", 0)
+		assertCell(t, e.CellAt(7, 0), "X", 1)
+	})
+
 	t.Run("text spaces wide style cursor and blank lines", func(t *testing.T) {
 		e := NewEmulator(8, 8)
 		write(t, e, "界 ab cdZ\x1b[44m \x1b[0mQ\r\n\r\ntail")
@@ -215,6 +283,19 @@ func TestNormalBufferWidthReflow(t *testing.T) {
 			t.Fatalf("scrollback len = %d, want max 2", e.ScrollbackLen())
 		}
 	})
+}
+
+func BenchmarkReflow2000ScrollbackLines(b *testing.B) {
+	for b.Loop() {
+		b.StopTimer()
+		e := NewEmulator(80, 25)
+		e.SetScrollbackSize(2000)
+		for range 2025 {
+			_, _ = e.WriteString("the quick brown fox jumps over the lazy dog\r\n")
+		}
+		b.StartTimer()
+		e.Resize(79, 25)
+	}
 }
 
 func emulatorLogicalLines(e *Emulator) []string {

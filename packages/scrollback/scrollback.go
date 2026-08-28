@@ -363,6 +363,11 @@ func extractLines(e *vt.Emulator) []string {
 func plainLine(line uv.Line, wrapped bool) string {
 	var b strings.Builder
 	for _, c := range line {
+		if c.IsZero() {
+			// Wide-cell placeholders and synthetic early-wrap skips carry no
+			// plain-text content.
+			continue
+		}
 		if c.Content == "" {
 			b.WriteString(" ")
 		} else {
