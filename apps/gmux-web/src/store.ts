@@ -616,6 +616,16 @@ export const localPeerNames = computed<ReadonlySet<string>>(() => {
   return set
 })
 
+/** Folder identity keys (`${ownerPeer}::${slug}`) for every catalog entry.
+ *  Shared O(1) membership index for the per-session "does this stamp resolve
+ *  to a folder?" checks in `foldersFrom`; recomputed only when the project
+ *  catalog changes, never per snapshot. */
+const projectKeys = computed<ReadonlySet<string>>(() => {
+  const set = new Set<string>()
+  for (const project of projects.value) set.add(`${project.peer ?? ''}::${project.slug}`)
+  return set
+})
+
 /** Distinct referenced host names absent from the roster. Drives the
  *  Hosts-tab "Referenced but not found" group and the gear pip — a
  *  node_id/name membership check against the roster (ADR 0017). */
@@ -628,29 +638,29 @@ export const unresolvedHosts = computed<UnresolvedHost[]>(
  *  set behind `unreadCount` (a global signal that must ignore the
  *  ?project=/?cwd= view filter). */
 function foldersFrom(ss: Session[]): Folder[] {
+  // One family index per session-list identity (WeakMap-cached), shared with
+  // every other projection of the same snapshot: root/membership lookups are
+  // O(1) here instead of a linear scan per session.
+  const index = familyIndex(sessions.value)
   const forceVisible = new Set<string>()
   const temporaryPlacements = new Map<string, TemporaryPresentationPlacement>()
-  const selectedRoot = familyRootId(selectedId.value, sessions.value)
+  const selectedRoot = familyRootId(selectedId.value, index)
   if (selectedRoot) forceVisible.add(selectedRoot)
   for (const candidate of ss) {
-    if (isFamilyChild(candidate, sessions.value)) {
-      const rootId = familyRootId(candidate.id, sessions.value)
-      if (!rootId) continue
-      forceVisible.add(rootId)
-      const root = sessions.value.find(session => session.id === rootId)
-      if (root?.project_slug || !candidate.project_slug) continue
+    if (index.childIds.has(candidate.id)) {
+      const root = index.rootById.get(candidate.id)
+      if (!root) continue
+      forceVisible.add(root.id)
+      if (root.project_slug || !candidate.project_slug) continue
       const sessionPeer = candidate.peer ?? ''
       const ownerPeer = sessionPeer && !localPeerNames.value.has(sessionPeer) ? sessionPeer : ''
-      const resolves = projects.value.some(project =>
-        project.slug === candidate.project_slug && (project.peer ?? '') === ownerPeer,
-      )
-      if (!resolves) continue
+      if (!projectKeys.value.has(`${ownerPeer}::${candidate.project_slug}`)) continue
       const placement = { ownerPeer, slug: candidate.project_slug }
-      const previous = temporaryPlacements.get(rootId)
+      const previous = temporaryPlacements.get(root.id)
       // A malformed/transitional family can briefly report children in more
       // than one folder. Pick a stable projection until the root stamp lands.
       if (!previous || `${placement.ownerPeer}::${placement.slug}` < `${previous.ownerPeer}::${previous.slug}`) {
-        temporaryPlacements.set(rootId, placement)
+        temporaryPlacements.set(root.id, placement)
       }
     }
   }
@@ -660,7 +670,7 @@ function foldersFrom(ss: Session[]): Folder[] {
     // navigable in the family drawer but have no independent project row.
     // Resolve edges against the complete snapshot, not this tab-filtered
     // subset. A filtered-out parent must not turn its child into a fake root.
-    ss.filter(s => !isFamilyChild(s, sessions.value)),
+    ss.filter(s => !index.childIds.has(s.id)),
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
     referencePresence(peers.value),
@@ -688,26 +698,30 @@ function foldersFrom(ss: Session[]): Folder[] {
 export const sidebarSessions = computed(() => {
   const sel = selectedId.value
   const onlyAlive = aliveOnly.value
+  const index = familyIndex(sessions.value)
   const base = filteredSessions.value.filter(s =>
     s.id === sel || (onlyAlive ? s.alive : s.alive || s.resumable),
   )
+  // Membership set mirrors `out` so dedup is O(1) per push instead of an
+  // `out.some` scan per candidate (the old quadratic hot spot).
+  const out = [...base]
+  const outIds = new Set<string>()
+  for (const s of base) outIds.add(s.id)
+  const push = (s: Session | undefined) => {
+    if (s && !outIds.has(s.id)) { outIds.add(s.id); out.push(s) }
+  }
   // Every relevant child keeps its presentation root locatable, even when the
   // root is dead or outside the tab filter. The child itself is later removed
   // from folders; this turns an active subtree into its single root-led row.
-  const out = [...base]
   for (const candidate of base) {
-    const rootId = familyRootId(candidate.id, sessions.value)
-    const root = sessions.value.find(s => s.id === rootId)
-    if (root && !out.some(s => s.id === root.id)) out.push(root)
+    push(index.rootById.get(candidate.id))
   }
   // The selected session may be absent from `filteredSessions` entirely.
   // Add both it and its family root for stable selected-row highlighting.
   if (sel) {
-    const selectedSession = sessions.value.find(x => x.id === sel)
-    if (selectedSession && !out.some(s => s.id === selectedSession.id)) out.push(selectedSession)
-    const rootId = familyRootId(sel, sessions.value)
-    const root = sessions.value.find(s => s.id === rootId)
-    if (root && !out.some(s => s.id === root.id)) out.push(root)
+    push(index.byId.get(sel))
+    const rootId = familyRootId(sel, index)
+    if (rootId) push(index.byId.get(rootId))
   }
   return out
 })
@@ -872,7 +886,7 @@ export const selectedId = computed(() =>
 export const selected = computed(() => {
   const id = selectedId.value
   if (!id) return null
-  const s = sessions.value.find(s => s.id === id) ?? null
+  const s = familyIndex(sessions.value).byId.get(id) ?? null
   // Expose on window for debugging.
   ;(window as any).__gmuxSession = s
   return s
