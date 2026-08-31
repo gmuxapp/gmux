@@ -251,8 +251,13 @@ row that cannot fit is omitted, identified safely (long IDs become SHA-256
 identities), and does not prevent the rest of the set becoming ready. Browsers
 show a persistent omitted-session total and at most 256 safe details until a
 later complete bootstrap clears it. A non-droppable counted summary keeps the
-total exact above the detail cap; peers retain bounded diagnostics for the
-transaction and log them. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
+total exact above the detail cap. A hub receiving diagnostics on its peer
+stream accumulates an exact omitted total (with a bounded per-code breakdown,
+both clamped against hostile senders) and, when the transaction commits,
+publishes it as `peers[].sessions_omitted` / `sessions_omitted_codes` in its
+own `snapshot.world`, so downstream browsers can flag the merged projection as
+knowingly incomplete instead of the loss dying in a hub log line. A clean
+ready or a legacy single-frame snapshot clears the marker. Likely causes are unusually large `command`, `cwd`, `remotes`, `title`, `subtitle`,
 `socket_path`, or `conversation_file` fields. Session rows do not contain
 scrollback or transcripts. Sender and receiver share 100,000-row / 64 MiB
 transaction bounds, with sender envelope headroom. A rejected malformed

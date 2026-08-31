@@ -237,6 +237,22 @@ export const duplicateConversationFiles = computed<Set<string>>(() => {
   return dups
 })
 export const peers = computed<PeerInfo[]>(() => _rawWorld.value.peers)
+
+/**
+ * Per-peer session-stream omission markers from the world snapshot.
+ * A hub daemon stamps peers[].sessions_omitted when a spoke's last committed
+ * protocol-3 transaction quarantined rows at the sender, meaning that peer's
+ * sessions in the merged list are knowingly incomplete. Bounded server-side;
+ * defensively re-validated here because the values cross a trust boundary.
+ */
+export const peerStreamOmissions = computed<{ peer: string, count: number }[]>(() =>
+  peers.value
+    .map(p => ({ peer: p.name, count: p.sessions_omitted ?? 0 }))
+    .filter(o => Number.isSafeInteger(o.count) && o.count > 0))
+
+/** Total sessions omitted upstream across all peers. */
+export const peerOmittedTotal = computed<number>(() =>
+  peerStreamOmissions.value.reduce((n, o) => n + o.count, 0))
 export const health = computed<HealthData | null>(() => _rawWorld.value.health)
 export const launchers = computed<LauncherDef[]>(() => _rawWorld.value.launchers)
 export const defaultLauncher = computed<string>(() => _rawWorld.value.defaultLauncher)
