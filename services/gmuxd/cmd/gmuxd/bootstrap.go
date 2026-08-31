@@ -153,6 +153,12 @@ type BootstrapConfig struct {
 	SemanticAgent                  func(string) bool
 	RunnerBudget, ConvergeDeadline time.Duration
 	RetryInitial, RetryMaximum     time.Duration
+	// ComposeMinInterval is the composer's minimum coalescing window
+	// between composition passes. Zero means the production default
+	// (central.DefaultMinComposeInterval); negative disables the window
+	// entirely (integration fixtures that drive many sequential awaited
+	// mutations keep pre-window immediacy).
+	ComposeMinInterval time.Duration
 }
 
 // Bootstrap is the fully constructed, still-inert production graph. Store is
@@ -244,7 +250,11 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 		}
 		return out
 	})
-	composer := central.New(cfg.Store, runtimeSource, sink, central.WithVerdictSource(verdictSource), central.WithPeerSource(cfg.Peers), central.WithErrorSink(centralErrorAdapter{cfg.Errors}))
+	minInterval := cfg.ComposeMinInterval
+	if minInterval == 0 {
+		minInterval = central.DefaultMinComposeInterval
+	}
+	composer := central.New(cfg.Store, runtimeSource, sink, central.WithVerdictSource(verdictSource), central.WithPeerSource(cfg.Peers), central.WithErrorSink(centralErrorAdapter{cfg.Errors}), central.WithMinComposeInterval(minInterval))
 	b.Composer = composer
 	b.Runtime = runtimeSource
 	b.Verdicts = verdictSource

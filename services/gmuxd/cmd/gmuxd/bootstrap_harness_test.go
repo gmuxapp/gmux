@@ -87,7 +87,7 @@ func openHarness(t *testing.T, dir string, fleet *harnessFleet, frames func(cont
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := newBootstrap(BootstrapConfig{Store: s, Runners: fleet, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Frames: frames, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return fleet.endpoints(), nil }), Clock: func() centralstore.UnixMillis { return 100 }, RunnerBudget: 30 * time.Millisecond, ConvergeDeadline: 100 * time.Millisecond, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
+	b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: s, Runners: fleet, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Frames: frames, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return fleet.endpoints(), nil }), Clock: func() centralstore.UnixMillis { return 100 }, RunnerBudget: 30 * time.Millisecond, ConvergeDeadline: 100 * time.Millisecond, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
 	if err != nil {
 		s.Close()
 		t.Fatal(err)

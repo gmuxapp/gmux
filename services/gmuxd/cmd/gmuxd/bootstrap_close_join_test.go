@@ -18,7 +18,7 @@ func TestBootstrapCloseJoinsOwnedBlockingWorker(t *testing.T) {
 	defer st.Close()
 	entered, release := make(chan struct{}), make(chan struct{})
 	eps := EndpointSourceFunc(func(context.Context) ([]string, error) { close(entered); <-release; return nil, nil })
-	b, err := newBootstrap(BootstrapConfig{Store: st, Runners: &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, Converter: &wire.Converter{}, Endpoints: eps})
+	b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: st, Runners: &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, Converter: &wire.Converter{}, Endpoints: eps})
 	if err != nil {
 		t.Fatal(err)
 	}
