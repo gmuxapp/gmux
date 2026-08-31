@@ -21,6 +21,13 @@ SELECT * FROM local_sessions WHERE id = ?;
 -- name: ListSessions :many
 SELECT * FROM local_sessions ORDER BY id;
 
+-- name: ListAdapterSlugs :many
+-- Slug-occupancy probe for allocation. The predicate matches the partial
+-- unique index local_sessions_adapter_slug_unique_idx, so this is an index
+-- range scan instead of a full-table hydration.
+SELECT id, slug FROM local_sessions
+WHERE adapter = ? AND slug IS NOT NULL AND slug <> '';
+
 -- name: SessionVersion :one
 SELECT row_version FROM local_sessions WHERE id = ?;
 
