@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -48,6 +49,10 @@ type Index struct {
 	// conversation source is indexing the ref. Rendering the session list is
 	// a hot read path and must not re-read every dead conversation transcript.
 	resumeByRef map[string][]string
+	// snapshotDone flips to true once the initial full snapshot of every
+	// adapter ConversationSource has finished (Snapshot or StartSnapshot).
+	// Until then, a lookup miss means "not indexed yet", not "absent".
+	snapshotDone atomic.Bool
 }
 
 // New creates an empty index.
@@ -72,9 +77,10 @@ func refKey(adapterName, ref string) string {
 }
 
 // LookupResumeCommand returns the command derived when the conversation ref
-// was last observed by its source. Snapshot populates this cache synchronously
-// before the daemon starts serving, and source upserts keep it current. The
-// returned slice is a copy so callers cannot mutate index state.
+// was last observed by its source. The startup snapshot populates this cache
+// progressively (it may still be running while the daemon serves — see
+// SnapshotComplete), and source upserts keep it current. The returned slice
+// is a copy so callers cannot mutate index state.
 func (idx *Index) LookupResumeCommand(adapterName, ref string) []string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -189,6 +195,18 @@ func (idx *Index) uniqueSlugLocked(adapterName, slug, conversationID string) str
 		}
 		slug = base + "-" + strconv.Itoa(i)
 	}
+}
+
+// SnapshotComplete reports whether the initial full snapshot across all
+// adapter ConversationSources has finished. While false, a lookup miss is
+// ambiguous: the conversation may simply not have been scanned yet, so
+// callers should surface "index still loading" instead of a hard not-found.
+func (idx *Index) SnapshotComplete() bool {
+	return idx.snapshotDone.Load()
+}
+
+func (idx *Index) markSnapshotComplete() {
+	idx.snapshotDone.Store(true)
 }
 
 // Count returns the number of indexed conversations.
