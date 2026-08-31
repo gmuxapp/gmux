@@ -251,6 +251,10 @@ type Coordinator struct {
 	// installed registry generations, never durable active/status flags.
 	activeSubagents *activeSubagentBudget
 
+	// semanticSession classifies durable rows for successful process-exit
+	// supervision. Nil disables the policy (useful for embedders and old tests).
+	semanticSession func(centralstore.Session) bool
+
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}
 	convergeClosed     bool
@@ -284,6 +288,13 @@ func WithActiveSubagentBudget(limits []int, disabled bool, semantic func(string)
 	return func(c *Coordinator) {
 		c.activeSubagents = newActiveSubagentBudget(limits, disabled, semantic, initial)
 	}
+}
+
+// WithProcessChildAutoRead enables successful full-exit supervision. The
+// classifier is the server's semantic capability boundary; semantic sessions
+// always retain strict attention.
+func WithProcessChildAutoRead(semantic func(centralstore.Session) bool) Option {
+	return func(c *Coordinator) { c.semanticSession = semantic }
 }
 
 func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtySink, errSink ErrorSink, opts ...Option) *Coordinator {
@@ -678,6 +689,24 @@ loop:
 		}
 	}
 
+	// A runner can finish between Subscribe and the first durable commit. Give
+	// that fused fast-dead result the same lifecycle-serialized supervision
+	// decision as an ordinary exit event. Durable state supplies the current
+	// organizational parent for existing rows; launch metadata is used only for
+	// a genuinely new row.
+	var registrationPolicyErr error
+	if successfulFastDeadRegistrationCandidate(reg) && c.semanticSession != nil {
+		child := centralstore.Session{ID: id, Adapter: reg.Adapter, DriveMode: reg.DriveMode, ParentSessionID: reg.ParentSessionID}
+		if existing, exists, readErr := c.durable.Session(ctx, id); readErr != nil {
+			registrationPolicyErr = fmt.Errorf("sessioncoord: read fast-dead registration policy state for %s: %w", id, readErr)
+		} else {
+			if exists {
+				child = existing
+			}
+			reg.SuppressUnread = c.supervisedSuccessfulExit(child, reg.Facts)
+		}
+	}
+
 	// Fence the old generation before committing the replacement. From this
 	// point apply's current/advance checks fail for the old generation, so an
 	// in-flight observation cannot commit onto the freshly registered row
@@ -688,6 +717,10 @@ loop:
 	}
 
 	session, outcome, err := c.durable.RegisterRunner(ctx, reg)
+	if errors.Is(err, centralstore.ErrSuppressionWouldClearUnread) {
+		reg.SuppressUnread = false
+		session, outcome, err = c.durable.RegisterRunner(ctx, reg)
+	}
 	if err != nil {
 		if hadOld {
 			c.registry.restore(id, old.Generation)
@@ -802,6 +835,9 @@ loop:
 
 	seq := c.outcomes.allocSeq() // stamp commit order before releasing c.mu
 	phase2Unlock()
+	if registrationPolicyErr != nil {
+		c.reportError(ctx, registrationPolicyErr)
+	}
 
 	// Silent-loss guard: a conversation-bearing registration in an embedding
 	// that never configured takeover would silently forfeit conversation
@@ -817,7 +853,7 @@ loop:
 	// re-entrant dirty sink cannot stall lifecycle transitions.
 	c.publish(ctx, outcome)
 	session.ID = id // the store echoes it; make the outcome self-describing even for sparse fakes
-	c.emitUpserted(session, seq)
+	c.emitUpsertedWithAttention(session, seq, reg.SuppressUnread)
 	if len(reg.Evict) > 0 {
 		evicted := make([]centralstore.SessionID, len(reg.Evict))
 		for i, ev := range reg.Evict {
@@ -910,9 +946,10 @@ func mergeFacts(dst *centralstore.RunnerFacts, src centralstore.RunnerFacts) err
 // the context is canceled. It runs in its own goroutine. On exit it removes
 // the generation entry and cancels the stream.
 //
-// The drain loop does not hold the lifecycle mutex. Registry operations use
-// the registry's own lock. The generation check in registry.advance and
-// registry.remove prevents stale-generation writes from reaching the store.
+// Ordinary observations use only the registry lock. A successful full-exit
+// candidate holds the lifecycle mutex from supervision decision through its
+// durable commit and registry removal; publication and stream teardown occur
+// after unlock. Generation checks prevent stale writes from taking ownership.
 // Close prevents new installed streams, cancels every current stream, and
 // joins all drain workers. Cancellation never synthesizes runner death.
 func (c *Coordinator) Close() {
@@ -1014,8 +1051,9 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 	}
 }
 
-// apply persists one ordered event for the given generation. It does not hold
-// the lifecycle mutex across the DB call or the dirty sink. On ErrStaleVersion
+// apply persists one ordered event for the given generation. Successful full
+// exit candidates hold the lifecycle mutex through the policy decision and DB
+// commit; publication and stream teardown always occur after unlock. On ErrStaleVersion
 // it advances the local row-version token and retries: once for ordinary
 // events, and up to three times for exit-carrying events (an exit fact or a
 // death), mirroring ensureDurableExit's budget — a generation's death must
@@ -1025,23 +1063,29 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 // (Alive=false without ExitedAt) are reported but still remove liveness so
 // the registry cannot remain stuck.
 func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, generation uint64, ev RunnerEvent) {
-	// Read the current RowVersion under the registry's own lock. No
-	// lifecycle mutex needed on the fast path.
+	candidate := successfulFullExitCandidate(ev) && c.semanticSession != nil
+	lifecycleLocked := candidate
+	if lifecycleLocked {
+		c.mu.Lock()
+	}
+	unlock := func() {
+		if lifecycleLocked {
+			c.mu.Unlock()
+			lifecycleLocked = false
+		}
+	}
+	defer unlock()
+
 	e, ok := c.registry.current(id)
 	if !ok {
 		if !c.registry.fenced(id) {
 			return
 		}
-		// The entry is fenced: a replacement is inside its commit-to-install
-		// window. Fence resolution is bounded by the lifecycle mutex —
-		// Register either restores the old generation (failed replacement)
-		// or installs the new one before unlocking — so briefly acquiring it
-		// waits out the window, then re-check. If the restore made this
-		// generation current again the event must still commit; a failed
-		// replacement must not silently drop in-flight observations of the
-		// still-installed old generation.
-		c.mu.Lock()
-		c.mu.Unlock() //nolint:staticcheck // empty critical section is the point
+		// Waiting on c.mu resolves a replacement's commit-to-install fence.
+		if !lifecycleLocked {
+			c.mu.Lock()
+			c.mu.Unlock() //nolint:staticcheck // empty critical section is the point
+		}
 		e, ok = c.registry.current(id)
 		if !ok {
 			return
@@ -1051,11 +1095,15 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		return
 	}
 
-	obs := centralstore.RunnerObservation{
-		ID:              id,
-		ObservedVersion: e.RowVersion,
-		ObservedAt:      ev.ObservedAt,
-		Facts:           ev.Facts,
+	obs := centralstore.RunnerObservation{ID: id, ObservedVersion: e.RowVersion, ObservedAt: ev.ObservedAt, Facts: ev.Facts}
+	var deferredErrors []error
+	if candidate {
+		if row, exists, readErr := c.durable.Session(ctx, id); readErr != nil {
+			deferredErrors = append(deferredErrors, fmt.Errorf("sessioncoord: read successful exit policy state for %s: %w", id, readErr))
+		} else if exists {
+			obs.ObservedVersion = row.Version
+			obs.SuppressUnread = c.supervisedSuccessfulExit(row, ev.Facts)
+		}
 	}
 
 	staleRetries := 1
@@ -1063,27 +1111,74 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		staleRetries = 3
 	}
 	result, err := c.durable.ApplyRunnerObservation(ctx, obs)
+	if errors.Is(err, centralstore.ErrSuppressionWouldClearUnread) {
+		obs.SuppressUnread = false
+		result, err = c.durable.ApplyRunnerObservation(ctx, obs)
+	}
 	for retry := 0; err != nil && errors.Is(err, centralstore.ErrStaleVersion) && result.SessionVersion > 0 && retry < staleRetries; retry++ {
-		// The store returned the current version. Advance the local token and
-		// retry with the refreshed version.
 		c.registry.advance(id, generation, result.SessionVersion)
 		e2, ok2 := c.registry.current(id)
 		if !ok2 || e2.Generation != generation {
-			return // generation replaced while retrying
+			unlock()
+			for _, deferredErr := range deferredErrors {
+				c.reportError(ctx, deferredErr)
+			}
+			return
 		}
 		obs.ObservedVersion = e2.RowVersion
+		obs.SuppressUnread = false
+		if candidate {
+			if row, exists, readErr := c.durable.Session(ctx, id); readErr != nil {
+				deferredErrors = append(deferredErrors, fmt.Errorf("sessioncoord: re-read successful exit policy state for %s: %w", id, readErr))
+			} else if exists {
+				obs.ObservedVersion = row.Version
+				obs.SuppressUnread = c.supervisedSuccessfulExit(row, ev.Facts)
+			}
+		}
 		result, err = c.durable.ApplyRunnerObservation(ctx, obs)
+		if errors.Is(err, centralstore.ErrSuppressionWouldClearUnread) {
+			obs.SuppressUnread = false
+			result, err = c.durable.ApplyRunnerObservation(ctx, obs)
+		}
 	}
+
+	// Exit liveness is removed even when persistence fails. The startup sweep
+	// remains the repair authority; a dead process must never stay installed.
 	if err != nil {
+		var removed registryEntry
+		var yes bool
+		if ev.Alive != nil && !*ev.Alive {
+			if !lifecycleLocked {
+				c.mu.Lock()
+			}
+			removed, yes = c.registry.remove(id, generation)
+			if yes && c.activeSubagents != nil {
+				c.activeSubagents.setLive(id, false)
+			}
+			if !lifecycleLocked {
+				c.mu.Unlock()
+			}
+		}
+		unlock()
+		for _, deferredErr := range deferredErrors {
+			c.reportError(ctx, deferredErr)
+		}
 		c.reportError(ctx, fmt.Errorf("sessioncoord: observation failed for session %s gen %d: %w", id, generation, err))
+		if yes {
+			closeEntry(removed)
+		}
 		return
 	}
 
+	attentionSuppressed := obs.SuppressUnread
 	if !c.registry.advance(id, generation, result.SessionVersion) {
-		// Generation replaced (or fenced) while the DB call was in flight. The
-		// commit still happened, so publish it: invalidation is
-		// level-triggered, making publication of a committed outcome always
-		// safe, and it must not depend on the replacement's own publish.
+		// A foreign generation may now own the row. Publish only untagged
+		// invalidation; never attach this generation's suppression decision to a
+		// replacement row.
+		unlock()
+		for _, deferredErr := range deferredErrors {
+			c.reportError(ctx, deferredErr)
+		}
 		c.publish(ctx, result)
 		if result.Changed {
 			c.emitOutcomes(ctx, c.outcomes.allocSeq(), id)
@@ -1091,34 +1186,87 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		return
 	}
 
-	// Handle exit event. Alive=false must carry ExitedAt to be well-formed.
-	// A malformed event is reported but does not prevent liveness removal
-	// so the registry cannot remain stuck.
-	if ev.Alive != nil && !*ev.Alive {
-		if ev.Facts.ExitedAt.Set == nil {
-			c.reportError(ctx, fmt.Errorf("sessioncoord: malformed exit event: Alive=false without ExitedAt for session %s gen %d", id, generation))
+	var captured *centralstore.Session
+	var seq uint64
+	if candidate && attentionSuppressed && result.Changed {
+		row, exists, readErr := c.durable.Session(ctx, id)
+		if readErr != nil {
+			deferredErrors = append(deferredErrors, fmt.Errorf("sessioncoord: capture supervised exit outcome for %s: %w", id, readErr))
+		} else if exists && row.Version == result.SessionVersion {
+			captured = &row
 		}
-		// Exit facts committed (advance succeeded) before liveness removed.
-		// Canceling the stream propagates to the bufferEvents goroutine and
-		// the drain context, causing drain to exit its select loop. Admission
-		// and slot release share the lifecycle mutex.
-		c.mu.Lock()
-		removed, yes := c.registry.remove(id, generation)
-		if yes && c.activeSubagents != nil {
-			c.activeSubagents.setLive(id, false)
-		}
-		c.mu.Unlock()
-		if yes {
-			closeEntry(removed)
-		}
+	}
+	if lifecycleLocked && result.Changed {
+		seq = c.outcomes.allocSeq()
 	}
 
-	// Publish outside all locks so a blocking or re-entrant sink cannot
-	// stall the coordinator or deadlock.
-	c.publish(ctx, result)
-	if result.Changed {
-		c.emitOutcomes(ctx, c.outcomes.allocSeq(), id)
+	var removed registryEntry
+	var removedOK bool
+	if ev.Alive != nil && !*ev.Alive {
+		if ev.Facts.ExitedAt.Set == nil {
+			deferredErrors = append(deferredErrors, fmt.Errorf("sessioncoord: malformed exit event: Alive=false without ExitedAt for session %s gen %d", id, generation))
+		}
+		if !lifecycleLocked {
+			c.mu.Lock()
+		}
+		removed, removedOK = c.registry.remove(id, generation)
+		if removedOK && c.activeSubagents != nil {
+			c.activeSubagents.setLive(id, false)
+		}
+		if !lifecycleLocked {
+			c.mu.Unlock()
+		}
 	}
+	unlock()
+
+	for _, deferredErr := range deferredErrors {
+		c.reportError(ctx, deferredErr)
+	}
+	c.publish(ctx, result)
+	if captured != nil {
+		c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: captured, Sequence: seq, AttentionSuppressed: true})
+	} else if result.Changed {
+		if seq == 0 {
+			seq = c.outcomes.allocSeq()
+		}
+		c.emitOutcomes(ctx, seq, id)
+	}
+	// Stream cancellation and body Close may block; neither belongs under the
+	// lifecycle mutex, and publication above must retain a live context.
+	if removedOK {
+		closeEntry(removed)
+	}
+}
+
+// successfulFastDeadRegistrationCandidate requires the result-bearing facts
+// that distinguish a completed process from a merely disconnected runner.
+// ExitedAt may have been synthesized above when a dead registration omitted
+// it; that does not broaden the policy because exit code, unread=true, and a
+// fresh token must still have been reported by the runner.
+func successfulFastDeadRegistrationCandidate(reg centralstore.RunnerRegistration) bool {
+	return !reg.Alive && reg.Facts.ExitedAt.Set != nil && reg.Facts.ExitCode.Set != nil &&
+		*reg.Facts.ExitCode.Set == 0 && reg.Facts.Unread != nil && *reg.Facts.Unread &&
+		reg.Facts.UnreadToken != nil && *reg.Facts.UnreadToken != ""
+}
+
+func successfulFullExitCandidate(ev RunnerEvent) bool {
+	return ev.Alive != nil && !*ev.Alive && ev.Facts.ExitedAt.Set != nil &&
+		ev.Facts.ExitCode.Set != nil && *ev.Facts.ExitCode.Set == 0 &&
+		ev.Facts.Unread != nil && *ev.Facts.Unread &&
+		ev.Facts.UnreadToken != nil && *ev.Facts.UnreadToken != ""
+}
+
+// supervisedSuccessfulExit runs only while c.mu is held. Registry membership
+// is the authority for current local liveness; durable Alive/Active facts are
+// deliberately irrelevant.
+func (c *Coordinator) supervisedSuccessfulExit(child centralstore.Session, facts centralstore.RunnerFacts) bool {
+	if child.Unread || child.Error || child.Interrupted ||
+		(facts.Error != nil && *facts.Error) || (facts.Interrupted != nil && *facts.Interrupted) ||
+		c.semanticSession(child) || child.ParentSessionID == nil {
+		return false
+	}
+	_, alive := c.registry.current(*child.ParentSessionID)
+	return alive
 }
 
 // invalidateVerdict clears a reconciliation verdict and, while a reconcile

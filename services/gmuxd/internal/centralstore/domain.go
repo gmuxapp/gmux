@@ -113,8 +113,9 @@ type MutationResult struct {
 }
 
 var (
-	ErrStaleVersion       = errors.New("centralstore: stale row version")
-	ErrUnreadTokenChanged = errors.New("centralstore: unread token changed")
+	ErrStaleVersion                = errors.New("centralstore: stale row version")
+	ErrUnreadTokenChanged          = errors.New("centralstore: unread token changed")
+	ErrSuppressionWouldClearUnread = errors.New("centralstore: suppression would clear an older unread result")
 	// ErrSessionNotFound marks a mutation targeting a session row that does
 	// not exist. Session() keeps its (value, ok, err) shape instead.
 	ErrSessionNotFound    = errors.New("centralstore: session not found")
@@ -495,6 +496,10 @@ type RunnerObservation struct {
 	ObservedVersion RowVersion
 	ObservedAt      UnixMillis
 	Facts           RunnerFacts
+	// SuppressUnread commits a fresh runner result generation as already read.
+	// It is completion projection, not acknowledgement: the token, recency, and
+	// error facts are retained. Only the lifecycle coordinator may set it.
+	SuppressUnread bool
 }
 
 // ApplyRunnerObservation conditionally projects runner-owned facts. The
@@ -514,10 +519,19 @@ func (s *Store) ApplyRunnerObservation(ctx context.Context, o RunnerObservation)
 		StartedAt: o.Facts.StartedAt, ExitedAt: o.Facts.ExitedAt, ExitCode: o.Facts.ExitCode,
 		TerminalSize: o.Facts.TerminalSize,
 	}
-	return s.applyCommonFacts(ctx, o.ID, o.ObservedVersion, p, &o.ObservedAt)
+	freshSuppressedResult := false
+	if o.SuppressUnread {
+		if o.Facts.Unread == nil || !*o.Facts.Unread || o.Facts.UnreadToken == nil || *o.Facts.UnreadToken == "" {
+			return MutationResult{}, errors.New("centralstore: suppressed unread requires a fresh unread result")
+		}
+		unread := false
+		p.Unread = &unread
+		freshSuppressedResult = true
+	}
+	return s.applyCommonFacts(ctx, o.ID, o.ObservedVersion, p, &o.ObservedAt, freshSuppressedResult)
 }
 
-func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed RowVersion, p CommonFactsPatch, runnerObservedAt *UnixMillis) (MutationResult, error) {
+func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed RowVersion, p CommonFactsPatch, runnerObservedAt *UnixMillis, freshSuppressedResult ...bool) (MutationResult, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return MutationResult{}, err
@@ -539,6 +553,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 		return MutationResult{SessionVersion: v.Version}, ErrStaleVersion
 	}
 	before := v
+	if len(freshSuppressedResult) > 0 && freshSuppressedResult[0] && before.Unread {
+		return MutationResult{}, ErrSuppressionWouldClearUnread
+	}
 	previousSlugBase := v.SlugBase
 	if p.ConversationRef != nil {
 		if *p.ConversationRef != "" && *p.ConversationRef != v.ConversationRef {
@@ -600,8 +617,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	// bumped when a new unread result token arrives, including a completion
 	// while an older result remains unread. Deliberately NOT bumped by plain
 	// active/error transitions or exit.
-	newUnreadResult := v.Unread && (!before.Unread || (p.UnreadToken != nil && before.UnreadToken != v.UnreadToken))
-	if runnerObservedAt != nil && newUnreadResult {
+	newResult := (v.Unread || (len(freshSuppressedResult) > 0 && freshSuppressedResult[0])) &&
+		(!before.Unread || (p.UnreadToken != nil && before.UnreadToken != v.UnreadToken))
+	if runnerObservedAt != nil && newResult {
 		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
 			x := *runnerObservedAt
 			v.LastActivityAt = &x

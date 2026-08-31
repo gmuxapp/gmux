@@ -275,6 +275,18 @@ func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
 	}
 }
 
+func TestFusedLifetimeExitUpdatesOptionalStatus(t *testing.T) {
+	const id = "1fused00"
+	sessions := store.New()
+	sessions.Upsert(store.Session{ID: id, Alive: true, Status: &store.Status{Active: true}})
+	subs := NewSubscriptions(sessions)
+	subs.handleEvent(id, "", "exit", []byte(`{"exit_code":0,"active":false,"error":false,"interrupted":false}`))
+	got, ok := sessions.Get(id)
+	if !ok || got.Alive || got.Status == nil || got.Status.Active || got.Status.Error || got.Status.Interrupted {
+		t.Fatalf("fused exit status not projected: ok=%v session=%+v", ok, got)
+	}
+}
+
 func TestConversationFileEventRecordsPath(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: "1vshk4fu", Alive: true})

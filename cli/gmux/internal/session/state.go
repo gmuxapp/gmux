@@ -194,7 +194,7 @@ func (s *State) SetRunning(pid int) {
 func (s *State) SetExited(exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setExitedLocked(exitCode, false)
+	s.setExitedLocked(exitCode, false, nil)
 }
 
 // SetExitedUnreadResult publishes process completion and its fresh result token
@@ -203,10 +203,22 @@ func (s *State) SetExited(exitCode int) {
 func (s *State) SetExitedUnreadResult(exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setExitedLocked(exitCode, true)
+	s.setExitedLocked(exitCode, true, nil)
 }
 
-func (s *State) setExitedLocked(exitCode int, unread bool) {
+// SetLifetimeExitedUnreadResult atomically closes the synthetic lifetime turn
+// and publishes its process exit with one fresh result generation. Ordinary
+// OSC prompt-cycle closes continue to use status events and are unaffected.
+func (s *State) SetLifetimeExitedUnreadResult(status *adapter.Status, exitCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.Status
+	s.Status = status
+	s.noteStatusWriteLocked(prev, status)
+	s.setExitedLocked(exitCode, true, status)
+}
+
+func (s *State) setExitedLocked(exitCode int, unread bool, status *adapter.Status) {
 	if unread {
 		s.markUnreadResultStateLocked()
 	}
@@ -214,6 +226,11 @@ func (s *State) setExitedLocked(exitCode int, unread bool) {
 	s.ExitCode = &exitCode
 	s.ExitedAt = time.Now().UTC().Format(time.RFC3339)
 	data := map[string]any{"exit_code": exitCode, "exited_at": s.ExitedAt}
+	if status != nil {
+		data["active"] = status.Active
+		data["error"] = status.Error
+		data["interrupted"] = status.Interrupted
+	}
 	if unread {
 		data["unread"] = true
 		data["unread_token"] = s.UnreadToken

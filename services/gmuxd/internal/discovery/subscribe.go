@@ -271,7 +271,10 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 
 	case "exit":
 		var exit struct {
-			ExitCode int `json:"exit_code"`
+			ExitCode    int   `json:"exit_code"`
+			Active      *bool `json:"active"`
+			Error       *bool `json:"error"`
+			Interrupted *bool `json:"interrupted"`
 		}
 		if err := json.Unmarshal(data, &exit); err != nil {
 			log.Printf("subscribe: %s: bad exit event: %v", sessionID, err)
@@ -287,6 +290,24 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		sess.Alive = false
 		sess.ExitCode = &exit.ExitCode
 		sess.ExitedAt = time.Now().UTC().Format(time.RFC3339)
+		// New runners may fuse a synthetic lifetime-turn close into exit. Pointer
+		// fields preserve backward compatibility with old plain exit events.
+		if exit.Active != nil || exit.Error != nil || exit.Interrupted != nil {
+			status := store.Status{}
+			if sess.Status != nil {
+				status = *sess.Status
+			}
+			if exit.Active != nil {
+				status.Active = *exit.Active
+			}
+			if exit.Error != nil {
+				status.Error = *exit.Error
+			}
+			if exit.Interrupted != nil {
+				status.Interrupted = *exit.Interrupted
+			}
+			sess.Status = &status
+		}
 		// Let the OnExit hook set the resume command before upsert.
 		if sub.OnExit != nil {
 			sub.OnExit(&sess)

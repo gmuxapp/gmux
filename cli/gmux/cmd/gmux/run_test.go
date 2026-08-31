@@ -61,12 +61,9 @@ func collectEvents(t *testing.T, ch chan session.Event, n int) []session.Event {
 	return got
 }
 
-// TestFinalizeSessionStateClosesLifetimeTurnBeforeExit pins the
-// event ordering the daemon's wait machinery depends on (ADR 0023): a
-// lifetime-turn session's exit must emit the turn-close status and unread
-// generation in ONE event before exit. A subscriber that resolves on the
-// first terminal signal it sees must observe both the closed turn and its
-// result token; the store must also persist the final Status.
+// TestFinalizeSessionStateClosesLifetimeTurnBeforeExit pins the atomic event
+// shape the daemon's wait machinery depends on (ADR 0023): lifetime status,
+// exit, and unread generation are one terminal event.
 func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 	st := session.New(session.Config{ID: "1uo92yti", Adapter: "shell"})
 	st.SetStatus(&adapter.Status{Active: true}) // launch state, pre-subscription
@@ -75,9 +72,9 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 
 	finalizeSessionState(st, true, 3)
 
-	got := collectEvents(t, ch, 2)
-	if got[0].Type != "status" || got[1].Type != "exit" {
-		t.Fatalf("events = %+v, want fused status/unread before exit", got)
+	got := collectEvents(t, ch, 1)
+	if got[0].Type != "exit" {
+		t.Fatalf("events = %+v, want one fused lifetime exit", got)
 	}
 	raw, err := json.Marshal(got[0].Data)
 	if err != nil {

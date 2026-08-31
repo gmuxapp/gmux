@@ -212,6 +212,9 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		var v struct {
 			ExitCode    int     `json:"exit_code"`
 			ExitedAt    string  `json:"exited_at"`
+			Active      *bool   `json:"active"`
+			Error       *bool   `json:"error"`
+			Interrupted *bool   `json:"interrupted"`
 			Unread      *bool   `json:"unread"`
 			UnreadToken *string `json:"unread_token"`
 		}
@@ -227,6 +230,9 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		alive := false
 		f.ExitCode = centralstore.NullablePatch[int]{Set: &v.ExitCode}
 		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &exitedAt}
+		f.Active = v.Active
+		f.Error = v.Error
+		f.Interrupted = v.Interrupted
 		f.Unread = v.Unread
 		f.UnreadToken = v.UnreadToken
 		return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Alive: &alive}, true

@@ -35,6 +35,10 @@ type RunnerRegistration struct {
 	ParentSessionID *SessionID
 	ObservedAt      UnixMillis
 	Facts           RunnerFacts
+	// SuppressUnread commits this registration's fresh terminal result as read.
+	// The coordinator may set it only for a lifecycle-serialized fast-dead
+	// successful process child.
+	SuppressUnread bool
 	// Evict is the conversation-takeover loser set: dead retained rows whose
 	// conversation the registering live runner covers (same opaque ref, or an
 	// ancestor per the adapter's lineage — resolved by the coordinator, which
@@ -108,6 +112,9 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 	}
 	if err := validateRunnerFacts(reg.Facts); err != nil {
 		return Session{}, MutationResult{}, err
+	}
+	if reg.SuppressUnread && (reg.Alive || reg.Facts.Unread == nil || !*reg.Facts.Unread || reg.Facts.UnreadToken == nil || *reg.Facts.UnreadToken == "") {
+		return Session{}, MutationResult{}, errors.New("centralstore: suppressed registration requires a fresh dead result")
 	}
 	for _, ev := range reg.Evict {
 		if !reg.Alive {
@@ -207,6 +214,9 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		if err = mergeRunnerFacts(&current, reg.Facts); err != nil {
 			return Session{}, MutationResult{}, err
 		}
+		if reg.SuppressUnread {
+			current.Unread = false
+		}
 		if reg.Facts.Slug != nil {
 			if err = allocateSessionSlug(ctx, q, &current, "", *reg.Facts.Slug); err != nil {
 				return Session{}, MutationResult{}, err
@@ -278,9 +288,15 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			current.StartedAt = nil
 		}
 		genBaseline := current
+		if reg.SuppressUnread && current.Unread {
+			return Session{}, MutationResult{}, ErrSuppressionWouldClearUnread
+		}
 		previousSlugBase := current.SlugBase
 		if err = mergeRunnerFacts(&current, reg.Facts); err != nil {
 			return Session{}, MutationResult{}, err
+		}
+		if reg.SuppressUnread {
+			current.Unread = false
 		}
 		if reg.Facts.Slug != nil {
 			if err = allocateSessionSlug(ctx, q, &current, previousSlugBase, *reg.Facts.Slug); err != nil {

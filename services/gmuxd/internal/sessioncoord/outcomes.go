@@ -48,6 +48,10 @@ type Outcome struct {
 	//
 	// Runtime-only, like Alive and Generation: never a row column.
 	Frame *TurnFrame
+	// AttentionSuppressed identifies the committed successful-exit policy
+	// decision for in-process notification consumers. It is neither durable nor
+	// projected on public/peer wires; Unread remains the durable authority.
+	AttentionSuppressed bool
 }
 
 // outcomeActivityBacklog bounds how many undelivered outcomes a subscriber
@@ -401,12 +405,16 @@ func (c *Coordinator) livenessOf(id centralstore.SessionID) (bool, uint64) {
 // still queued behind it (delivered after) — the subscriber's final state
 // is the newest row either way (review M-2 rides the H-1 watermark).
 func (c *Coordinator) emitUpserted(session centralstore.Session, seq uint64) {
+	c.emitUpsertedWithAttention(session, seq, false)
+}
+
+func (c *Coordinator) emitUpsertedWithAttention(session centralstore.Session, seq uint64, attentionSuppressed bool) {
 	if !c.outcomes.hasSubscribers() {
 		return
 	}
 	alive, generation := c.livenessOf(session.ID)
 	s := session
-	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation, Sequence: seq, Frame: c.frameOf(session.ID)})
+	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation, Sequence: seq, Frame: c.frameOf(session.ID), AttentionSuppressed: attentionSuppressed})
 }
 
 // emitOutcomes publishes one outcome per ID after a commit: a post-commit
