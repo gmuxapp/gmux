@@ -14,6 +14,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
@@ -33,15 +34,89 @@ func decodeProjectState(body []byte) (projects.State, error) {
 
 type fanoutMessage struct {
 	Frames         wire.Frames
+	SessionsEncode *sessionEncodeMemo // non-nil iff Frames.Sessions is
 	ActivityID     string
 	ProjectsUpdate bool
 }
 
 type sseFanout struct {
 	mu       sync.Mutex
+	epoch    uint64 // protocol-3 epoch source; advanced under mu so per-subscriber delivery order matches epoch order
 	sessions *wire.SessionsPayload
 	world    *wire.WorldPayload
 	subs     map[chan fanoutMessage]struct{}
+}
+
+// sessionEncodeMemo encodes one broadcast sessions payload at most once per
+// (filter class × protocol) and shares the result across every SSE
+// subscriber. Before this, encode ran per subscriber per snapshot — the
+// dominant storm cost at O(N × rate × subscribers).
+//
+// Safe because BroadcastFrames fans the identical *wire.SessionsPayload out
+// to every subscriber and no consumer mutates it (the fanout caches its own
+// deep copy; peer subscribers narrow via FilterOwned, which allocates).
+// The protocol-3 epoch is drawn eagerly under the fanout mutex, so any two
+// broadcasts observed by one connection carry strictly increasing epochs
+// regardless of which subscriber triggers encoding first.
+type sessionEncodeMemo struct {
+	epoch   uint64
+	payload *wire.SessionsPayload
+
+	mu           sync.Mutex
+	peerFiltered *wire.SessionsPayload
+	proto2       map[bool][]byte               // peer-filtered? -> marshaled payload
+	proto3       map[bool][]sessionstream.Event // peer-filtered? -> transaction events
+}
+
+func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionEncodeMemo {
+	if payload == nil {
+		return nil
+	}
+	return &sessionEncodeMemo{epoch: epoch, payload: payload, proto2: map[bool][]byte{}, proto3: map[bool][]sessionstream.Event{}}
+}
+
+func (m *sessionEncodeMemo) payloadForLocked(peer bool, isLocalPeer func(string) bool) *wire.SessionsPayload {
+	if !peer {
+		return m.payload
+	}
+	if m.peerFiltered == nil {
+		filtered := m.payload.FilterOwned(isLocalPeer)
+		m.peerFiltered = &filtered
+	}
+	return m.peerFiltered
+}
+
+// Proto2 returns the marshaled snapshot.sessions body for the subscriber's
+// filter class, encoding it on first use.
+func (m *sessionEncodeMemo) Proto2(peer bool, isLocalPeer func(string) bool) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if data, ok := m.proto2[peer]; ok {
+		return data, nil
+	}
+	data, err := json.Marshal(m.payloadForLocked(peer, isLocalPeer))
+	if err != nil {
+		return nil, err
+	}
+	m.proto2[peer] = data
+	return data, nil
+}
+
+// Proto3 returns the protocol-3 transaction events for the subscriber's
+// filter class, encoding them on first use.
+func (m *sessionEncodeMemo) Proto3(peer bool, isLocalPeer func(string) bool) ([]sessionstream.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if events, ok := m.proto3[peer]; ok {
+		return events, nil
+	}
+	p := m.payloadForLocked(peer, isLocalPeer)
+	events, err := sessionstream.Encode(m.epoch, p.Sessions, func(s wire.Session) string { return s.ID })
+	if err != nil {
+		return nil, err
+	}
+	m.proto3[peer] = events
+	return events, nil
 }
 
 func newSSEFanout() *sseFanout { return &sseFanout{subs: make(map[chan fanoutMessage]struct{})} }
@@ -85,12 +160,14 @@ func (f *sseFanout) currentLocked() wire.Frames {
 	return out
 }
 
-func (f *sseFanout) Subscribe() (wire.Frames, <-chan fanoutMessage, func()) {
+func (f *sseFanout) Subscribe() (fanoutMessage, <-chan fanoutMessage, func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ch := make(chan fanoutMessage, 32)
 	f.subs[ch] = struct{}{}
-	initial := f.currentLocked()
+	frames := f.currentLocked()
+	f.epoch++
+	initial := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions)}
 	cancel := func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -134,7 +211,8 @@ func (f *sseFanout) BroadcastFrames(frames wire.Frames) {
 		}
 		f.world = &copy
 	}
-	msg := fanoutMessage{Frames: frames, ProjectsUpdate: frames.World != nil}
+	f.epoch++
+	msg := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions), ProjectsUpdate: frames.World != nil}
 	for ch := range f.subs {
 		fanoutEnqueue(ch, msg)
 	}

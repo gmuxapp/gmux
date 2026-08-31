@@ -79,7 +79,7 @@ func TestFanoutSubscribeSnapshotBoundary(t *testing.T) {
 	f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{{ID: "before"}}}})
 	initial, ch, cancel := f.Subscribe()
 	defer cancel()
-	if got := initial.Sessions.Sessions[0].ID; got != "before" {
+	if got := initial.Frames.Sessions.Sessions[0].ID; got != "before" {
 		t.Fatalf("initial=%q", got)
 	}
 
