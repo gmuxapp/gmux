@@ -126,6 +126,15 @@ type PeerInfo struct {
 	Status          string        `json:"status"`
 	SessionCount    int           `json:"session_count"`
 	LastError       string        `json:"last_error,omitempty"`
+	// SessionsOmitted is the number of session rows the peer's last committed
+	// protocol-3 transaction quarantined at the sender (e.g. row_too_large,
+	// transaction_limit). Non-zero means this peer's sessions in the merged
+	// projection are knowingly incomplete. SessionsOmittedCodes is a bounded
+	// per-code breakdown; counts are exact even past the per-row diagnostic
+	// detail cap. Older daemons never set these fields; older browsers ignore
+	// them.
+	SessionsOmitted      int            `json:"sessions_omitted,omitempty"`
+	SessionsOmittedCodes map[string]int `json:"sessions_omitted_codes,omitempty"`
 	Version         string        `json:"version,omitempty"`
 	DefaultLauncher string        `json:"default_launcher,omitempty"`
 	Launchers       []LauncherDef `json:"launchers,omitempty"`

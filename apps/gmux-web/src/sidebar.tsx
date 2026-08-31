@@ -24,7 +24,7 @@ import {
   unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   sidebarActivity, sidebarMode, setSidebarMode,
   activeSelectors, removeSelector, setHostFilter,
-  aliveOnly, setAliveOnly, tabHref, navigate, sessionStreamWarnings, sessionStreamOmittedTotal,
+  aliveOnly, setAliveOnly, tabHref, navigate, sessionStreamWarnings, sessionStreamOmittedTotal, peerStreamOmissions, peerOmittedTotal,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -913,9 +913,11 @@ export function Sidebar({
   const totalVisible = foldersVal.reduce((n, f) => n + f.sessions.length, 0)
   const connected = connState.value === 'connected'
   const streamWarnings = sessionStreamWarnings.value
-  const omittedSessionCount = sessionStreamOmittedTotal.value
+  const localOmittedCount = sessionStreamOmittedTotal.value
+  const peerOmissions = peerStreamOmissions.value
+  const omittedSessionCount = localOmittedCount + peerOmittedTotal.value
   const detailedOmittedCount = streamWarnings.reduce((sum, warning) => sum + warning.count, 0)
-  const suppressedOmittedCount = Math.max(0, omittedSessionCount - detailedOmittedCount)
+  const suppressedOmittedCount = Math.max(0, localOmittedCount - detailedOmittedCount)
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -962,6 +964,7 @@ export function Sidebar({
               title={[
                 ...streamWarnings.map(w => `${w.id}: ${w.message || w.code}`),
                 ...(suppressedOmittedCount > 0 ? [`${suppressedOmittedCount} additional omitted sessions`] : []),
+                ...peerOmissions.map(o => `${o.peer}: ${o.count} ${o.count === 1 ? 'session' : 'sessions'} omitted upstream`),
               ].join('\n')}
             >
               ⚠ {omittedSessionCount} {omittedSessionCount === 1 ? 'session is' : 'sessions are'} omitted from the live list

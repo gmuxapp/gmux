@@ -326,6 +326,7 @@ func (m *Manager) PeerStatus() []PeerInfo {
 			Local:        mp.peer.Config.Local,
 			Source:       mp.peer.Config.Source,
 		}
+		info.SessionsOmitted, info.SessionsOmittedCodes = mp.peer.SessionOmissions()
 		if h, ok := mp.peer.CachedHealth(); ok {
 			info.Version = h.Version
 			info.DefaultLauncher = h.DefaultLauncher
@@ -429,6 +430,15 @@ func (s managerProjectionSink) RemovePeerSessions(peer string) { s.m.removePeerS
 func (s managerProjectionSink) PeerWorldChanged(name string) {
 	if s.m.sink != nil {
 		s.m.sink.PeerWorldChanged(name)
+	}
+	// Mirror onStatus: the production central path builds the manager with
+	// sink == nil and recomposes snapshot.world only via hooks.PeerWorldDirty,
+	// so a world-relevant peer change (e.g. an omission marker set/clear from
+	// setSessionOmissions) must fire the hook too or it never reaches
+	// browsers. Callers are change-gated, so this cannot re-open the
+	// reciprocal recompose loop.
+	if s.m.hooks.PeerWorldDirty != nil {
+		s.m.hooks.PeerWorldDirty()
 	}
 }
 func (s managerProjectionSink) AliveSessionCount(peer string) int {

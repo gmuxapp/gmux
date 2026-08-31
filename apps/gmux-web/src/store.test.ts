@@ -8,7 +8,7 @@ import {
   familyActivityById, familyDotById, familySelectedId, familySlotById, filteredSessions,
   folders, handleActivity, homePartition, initStore, isSessionActive, isSessionFading,
   isSessionUnavailable, killSession, localHostLabel, markSessionRead, navigate,
-  navigateToSession, ownDotState, parseConnectURL, peerAppearance, peerStatusByName, peers,
+  navigateToSession, ownDotState, parseConnectURL, peerAppearance, peerOmittedTotal, peerStatusByName, peerStreamOmissions, peers,
   projects, promoteSession, promotionAnnouncements, promotionPending,
   PROMOTION_PENDING_TTL_MS, reconcilePromotionPending, removeSession, reorderSessions,
   reparentSession, resumeSession, selectedFamilyChild, selectedId, sessions, sessionsLoaded,
@@ -2356,5 +2356,46 @@ describe('conversation_file (duplicate-open warning)', () => {
     const dups = duplicateConversationFiles.value
     expect(dups.has('/conv.jsonl')).toBe(true)
     expect(dups.has('/other.jsonl')).toBe(false)
+  })
+})
+
+describe('peerStreamOmissions', () => {
+  afterEach(() => { _setRawWorld({ peers: [] }) })
+
+  it('surfaces per-peer upstream omission counts and their total', () => {
+    _setRawWorld({ peers: [
+      { name: 'complete', url: '', status: 'connected', session_count: 3 },
+      { name: 'lossy', url: '', status: 'connected', session_count: 1, sessions_omitted: 6287, sessions_omitted_codes: { transaction_limit: 256, diagnostics_suppressed: 6031 } },
+      { name: 'big-row', url: '', status: 'connected', session_count: 2, sessions_omitted: 1, sessions_omitted_codes: { row_too_large: 1 } },
+    ] })
+    expect(peerStreamOmissions.value).toEqual([
+      { peer: 'lossy', count: 6287 },
+      { peer: 'big-row', count: 1 },
+    ])
+    expect(peerOmittedTotal.value).toBe(6288)
+  })
+
+  it('rejects absent, zero, negative, and non-integer counts', () => {
+    _setRawWorld({ peers: [
+      { name: 'a', url: '', status: 'connected', session_count: 0 },
+      { name: 'b', url: '', status: 'connected', session_count: 0, sessions_omitted: 0 },
+      { name: 'c', url: '', status: 'connected', session_count: 0, sessions_omitted: -4 },
+      { name: 'd', url: '', status: 'connected', session_count: 0, sessions_omitted: 1.5 },
+      { name: 'e', url: '', status: 'connected', session_count: 0, sessions_omitted: Number.MAX_SAFE_INTEGER + 2 },
+    ] })
+    expect(peerStreamOmissions.value).toEqual([])
+    expect(peerOmittedTotal.value).toBe(0)
+  })
+
+  it('clears when a later world snapshot drops the marker', () => {
+    _setRawWorld({ peers: [
+      { name: 'lossy', url: '', status: 'connected', session_count: 1, sessions_omitted: 2 },
+    ] })
+    expect(peerOmittedTotal.value).toBe(2)
+    _setRawWorld({ peers: [
+      { name: 'lossy', url: '', status: 'connected', session_count: 1 },
+    ] })
+    expect(peerOmittedTotal.value).toBe(0)
+    expect(peerStreamOmissions.value).toEqual([])
   })
 })

@@ -48,6 +48,13 @@ type Peer struct {
 	// (host-authoritative; see SpokeDiscovered). Refreshed alongside
 	// cachedProjects in fetchProjects.
 	cachedDiscovered []SpokeDiscovered
+	// sessionsOmitted / sessionsOmittedCodes carry the omission accounting of
+	// the peer's last committed protocol-3 session transaction. Non-zero means
+	// the projection currently held for this peer is knowingly incomplete
+	// (rows quarantined at the sender). Cleared by a clean ready or a legacy
+	// snapshot; retained across disconnects, matching the retained rows.
+	sessionsOmitted      int
+	sessionsOmittedCodes map[string]int
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -136,6 +143,40 @@ func (p *Peer) LastError() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.lastError
+}
+
+// SessionOmissions returns the omission accounting of the last committed
+// session transaction: how many rows the spoke reported as quarantined
+// (omitted from the projection) and a bounded per-code breakdown. Zero means
+// the held projection is complete as far as the spoke reported.
+func (p *Peer) SessionOmissions() (int, map[string]int) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.sessionsOmitted == 0 {
+		return 0, nil
+	}
+	codes := make(map[string]int, len(p.sessionsOmittedCodes))
+	for code, count := range p.sessionsOmittedCodes {
+		codes[code] = count
+	}
+	return p.sessionsOmitted, codes
+}
+
+// setSessionOmissions records a committed transaction's omission summary and,
+// when it changes, marks the world projection dirty so hub subscribers see
+// the incompleteness without waiting for an unrelated world event.
+func (p *Peer) setSessionOmissions(total int, codes map[string]int) {
+	if total <= 0 {
+		total, codes = 0, nil
+	}
+	p.mu.Lock()
+	changed := p.sessionsOmitted != total || !reflect.DeepEqual(p.sessionsOmittedCodes, codes)
+	p.sessionsOmitted = total
+	p.sessionsOmittedCodes = codes
+	p.mu.Unlock()
+	if changed && p.sink != nil {
+		p.sink.PeerWorldChanged(p.Config.Name)
+	}
 }
 
 func (p *Peer) setStatus(s Status) {
@@ -479,16 +520,30 @@ const (
 	sessionStreamLegacy
 	sessionStreamV3
 	maxPeerSessionDiagnostics = 256
+	// maxPeerOmissionCodes bounds the per-code omission breakdown a peer
+	// transaction can accumulate. Codes come from the remote sender, so both
+	// the number of distinct codes and each code string are clamped; overflow
+	// folds into the "other" bucket. The total and every per-code entry
+	// saturate together at MaxStagedRows (the largest omission a bounded
+	// transaction can express), so the breakdown always sums to the total.
+	maxPeerOmissionCodes   = 8
+	maxPeerOmissionCodeLen = 64
 )
 
 type peerSessionBootstrap struct {
-	mode        sessionStreamMode
-	epoch       uint64
-	lastEpoch   uint64
-	active      bool
-	rows        []SessionProjection
-	bytes       int
-	diagnostics []sessionstream.Error
+	mode      sessionStreamMode
+	epoch     uint64
+	lastEpoch uint64
+	active    bool
+	rows      []SessionProjection
+	bytes     int
+	// diagnostics keeps bounded per-row detail for logging; omittedTotal and
+	// omittedCodes carry the exact accounting (including counted summaries
+	// past the detail cap) that ready publishes into the peer's world
+	// projection.
+	diagnostics  []sessionstream.Error
+	omittedTotal int
+	omittedCodes map[string]int
 }
 
 func (s *peerSessionBootstrap) abandon() {
@@ -497,6 +552,38 @@ func (s *peerSessionBootstrap) abandon() {
 	s.rows = nil
 	s.bytes = 0
 	s.diagnostics = nil
+	s.omittedTotal = 0
+	s.omittedCodes = nil
+}
+
+func (s *peerSessionBootstrap) recordOmission(code string, count int) {
+	if count < 1 {
+		count = 1
+	}
+	// Saturate against the shared headroom so the total and the per-code
+	// breakdown always receive the same effective increment: the codes map
+	// sums exactly to omittedTotal, and neither can exceed MaxStagedRows no
+	// matter how many error events a hostile sender streams.
+	if headroom := sessionstream.MaxStagedRows - s.omittedTotal; count > headroom {
+		count = headroom
+	}
+	if count == 0 {
+		return
+	}
+	s.omittedTotal += count
+	if code == "" {
+		code = "row_omitted"
+	}
+	if len(code) > maxPeerOmissionCodeLen {
+		code = code[:maxPeerOmissionCodeLen]
+	}
+	if s.omittedCodes == nil {
+		s.omittedCodes = make(map[string]int)
+	}
+	if _, known := s.omittedCodes[code]; !known && len(s.omittedCodes) >= maxPeerOmissionCodes {
+		code = "other"
+	}
+	s.omittedCodes[code] += count
 }
 
 func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []byte, staging *peerSessionBootstrap) {
@@ -546,8 +633,13 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 			return
 		}
 		rows := staging.rows
+		omittedTotal, omittedCodes := staging.omittedTotal, staging.omittedCodes
 		staging.abandon()
 		p.applySessionsSnapshot(rows)
+		// Publish this transaction's omission accounting after the surviving
+		// rows commit, so the hub's world projection can surface that the
+		// remote list is incomplete instead of losing it in a log line.
+		p.setSessionOmissions(omittedTotal, omittedCodes)
 		return
 	case sessionstream.EventError:
 		// Diagnostics quarantine individual rows; they do not invalidate the
@@ -565,8 +657,14 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 			message = message[:512] + "…"
 		}
 		diagnostic.ID, diagnostic.Message = id, message
-		if staging.active && diagnostic.Epoch == staging.epoch && len(staging.diagnostics) < maxPeerSessionDiagnostics {
-			staging.diagnostics = append(staging.diagnostics, diagnostic)
+		if staging.active && diagnostic.Epoch == staging.epoch {
+			// Detail is capped, but the counted total is exact: the sender's
+			// diagnostics_suppressed summary arrives after the detail cap is
+			// full and must still be accounted.
+			staging.recordOmission(diagnostic.Code, diagnostic.Count)
+			if len(staging.diagnostics) < maxPeerSessionDiagnostics {
+				staging.diagnostics = append(staging.diagnostics, diagnostic)
+			}
 		}
 		log.Printf("peering: %s: session %q omitted: %q (%s, count=%d)", p.Config.Name, id, message, diagnostic.Code, max(diagnostic.Count, 1))
 		return
@@ -583,6 +681,9 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 		staging.abandon()
 		staging.mode = sessionStreamLegacy
 		p.applySessionsSnapshot(payload.Sessions)
+		// A legacy single-frame snapshot has no omission channel: it is by
+		// definition complete, so clear any prior incompleteness marker.
+		p.setSessionOmissions(0, nil)
 		return
 	}
 	p.handleEvent(ctx, eventType, data)

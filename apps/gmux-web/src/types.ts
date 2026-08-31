@@ -201,6 +201,15 @@ export interface PeerInfo {
   status: string // 'connected' | 'connecting' | 'disconnected' | 'offline' (connecting treated as disconnected in UI)
   session_count: number
   last_error?: string
+  /**
+   * Number of session rows this peer's last committed protocol-3 stream
+   * transaction quarantined at the sender (row_too_large, transaction_limit,
+   * …). Non-zero means the peer's sessions in the merged list are knowingly
+   * incomplete. Absent on older daemons and when the projection is complete.
+   */
+  sessions_omitted?: number
+  /** Bounded per-code breakdown of sessions_omitted. */
+  sessions_omitted_codes?: Record<string, number>
   version?: string
   default_launcher?: string
   launchers?: LauncherDef[]
