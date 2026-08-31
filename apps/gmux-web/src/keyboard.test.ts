@@ -219,24 +219,24 @@ describe('ctrlSequenceFor', () => {
 describe('applyArmedModifiers', () => {
   it('passes data through unchanged when nothing is armed', () => {
     expect(applyArmedModifiers('a', false, false))
-      .toEqual({ seq: 'a', ctrlApplied: false, altApplied: false })
+      .toEqual({ seq: 'a', ctrlApplied: false, altApplied: false, shiftApplied: false })
     expect(applyArmedModifiers('\r', false, false))
-      .toEqual({ seq: '\r', ctrlApplied: false, altApplied: false })
+      .toEqual({ seq: '\r', ctrlApplied: false, altApplied: false, shiftApplied: false })
   })
 
   it('applies ctrl to single characters via control codes', () => {
     expect(applyArmedModifiers('c', true, false))
-      .toEqual({ seq: '\x03', ctrlApplied: true, altApplied: false })
+      .toEqual({ seq: '\x03', ctrlApplied: true, altApplied: false, shiftApplied: false })
   })
 
   it('applies alt to single characters via ESC prefix', () => {
     expect(applyArmedModifiers('b', false, true))
-      .toEqual({ seq: '\x1bb', ctrlApplied: false, altApplied: true })
+      .toEqual({ seq: '\x1bb', ctrlApplied: false, altApplied: true, shiftApplied: false })
   })
 
   it('combines ctrl+alt on lowercase characters (ESC + control code)', () => {
     expect(applyArmedModifiers('c', true, true))
-      .toEqual({ seq: '\x1b\x03', ctrlApplied: true, altApplied: true })
+      .toEqual({ seq: '\x1b\x03', ctrlApplied: true, altApplied: true, shiftApplied: false })
   })
 
   it('folds alt into the CSI-u modifier for uppercase ctrl combos', () => {
@@ -248,7 +248,7 @@ describe('applyArmedModifiers', () => {
 
   it('leaves ctrl armed when the payload has no ctrl encoding', () => {
     expect(applyArmedModifiers('1', true, false))
-      .toEqual({ seq: '1', ctrlApplied: false, altApplied: false })
+      .toEqual({ seq: '1', ctrlApplied: false, altApplied: false, shiftApplied: false })
   })
 
   it('injects modifier params into CSI cursor-key sequences', () => {
@@ -265,7 +265,7 @@ describe('applyArmedModifiers', () => {
 
   it('encodes alt+enter as ESC CR', () => {
     expect(applyArmedModifiers('\r', false, true))
-      .toEqual({ seq: '\x1b\r', ctrlApplied: false, altApplied: true })
+      .toEqual({ seq: '\x1b\r', ctrlApplied: false, altApplied: true, shiftApplied: false })
   })
 
   it('encodes ctrl+enter / ctrl+tab / ctrl+esc as CSI-u (no legacy encoding exists)', () => {
@@ -278,5 +278,33 @@ describe('applyArmedModifiers', () => {
   it('ESC-prefixes alt for keys without special handling', () => {
     expect(applyArmedModifiers('\t', false, true).seq).toBe('\x1b\t')
     expect(applyArmedModifiers('\n', false, true).seq).toBe('\x1b\n')
+  })
+
+  it('composes armed shift with Tab and printable letters', () => {
+    expect(applyArmedModifiers('\t', false, false, true))
+      .toEqual({ seq: '\x1b[Z', ctrlApplied: false, altApplied: false, shiftApplied: true })
+    expect(applyArmedModifiers('a', false, false, true).seq).toBe('A')
+    expect(applyArmedModifiers('A', false, false, true).seq).toBe('A')
+  })
+
+  it('composes shift with supported terminal modifier encodings', () => {
+    expect(applyArmedModifiers('\x1b[A', false, false, true).seq).toBe('\x1b[1;2A')
+    expect(applyArmedModifiers('\x1b[D', true, true, true).seq).toBe('\x1b[1;8D')
+    expect(applyArmedModifiers('c', true, false, true).seq).toBe('\x1b[99;6u')
+    expect(applyArmedModifiers('c', true, true, true).seq).toBe('\x1b[99;8u')
+  })
+
+  it('consumes shift when ctrl fallback emits a non-letter control code', () => {
+    for (const [input, output] of [['@', '\x00'], ['[', '\x1b'], ['\x7f', '\x08']] as const) {
+      expect(applyArmedModifiers(input, true, false, true))
+        .toEqual({ seq: output, ctrlApplied: true, altApplied: false, shiftApplied: true })
+    }
+  })
+
+  it('does not guess layout-dependent shift mappings and consumes on composed text', () => {
+    expect(applyArmedModifiers('1', false, false, true))
+      .toEqual({ seq: '1', ctrlApplied: false, altApplied: false, shiftApplied: true })
+    expect(applyArmedModifiers('dictated text', false, false, true))
+      .toEqual({ seq: 'dictated text', ctrlApplied: false, altApplied: false, shiftApplied: true })
   })
 })

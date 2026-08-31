@@ -229,6 +229,9 @@ export function TerminalView({
   onCtrlConsumed,
   altArmed,
   onAltConsumed,
+  shiftArmed,
+  onShiftConsumed,
+  onModifiersCancelled,
   onInputReady,
   onFocusReady,
 }: {
@@ -240,6 +243,9 @@ export function TerminalView({
   onCtrlConsumed: () => void
   altArmed: boolean
   onAltConsumed: () => void
+  shiftArmed: boolean
+  onShiftConsumed: () => void
+  onModifiersCancelled: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
 }) {
@@ -258,6 +264,7 @@ export function TerminalView({
   const sessionRef = useRef(session)
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
+  const shiftArmedRef = useRef(shiftArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const scrollAnchorRef = useRef<ScrollAnchorAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
@@ -304,6 +311,7 @@ export function TerminalView({
   sessionRef.current = session
   ctrlArmedRef.current = ctrlArmed
   altArmedRef.current = altArmed
+  shiftArmedRef.current = shiftArmed
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -575,9 +583,10 @@ export function TerminalView({
     }
 
     const sendInput = (data: string) => {
-      const r = applyArmedModifiers(data, ctrlArmedRef.current, altArmedRef.current)
+      const r = applyArmedModifiers(data, ctrlArmedRef.current, altArmedRef.current, shiftArmedRef.current)
       if (r.ctrlApplied) { ctrlArmedRef.current = false; onCtrlConsumed() }
       if (r.altApplied) { altArmedRef.current = false; onAltConsumed() }
+      if (r.shiftApplied) { shiftArmedRef.current = false; onShiftConsumed() }
       sendRawInput(r.seq)
     }
 
@@ -625,7 +634,18 @@ export function TerminalView({
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput, keybinds, macCommandIsCtrl, getPasteDestination, pasteFeedback)
     const disposePasteHandler = attachPasteHandler(containerRef.current!, getPasteDestination, pasteFeedback)
-    const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
+    const sendMobileReplacement = (data: string) => {
+      // Replacement backspaces and text stay byte-for-byte raw so Ctrl/Alt or
+      // Shift cannot corrupt autocorrect/dictation. The replacement is still
+      // the next logical input, so cancel one-shot Shift unconditionally;
+      // this also closes the narrow arm/render race before the ref updates.
+      shiftArmedRef.current = false
+      onShiftConsumed()
+      sendRawInput(data)
+    }
+    const disposeMobileHandler = attachMobileInputHandler(
+      term, containerRef.current!, sendRawInput, sendMobileReplacement,
+    )
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write
     //   ESC ] 52 ; <selection> ; <base64-payload> BEL
@@ -885,7 +905,7 @@ export function TerminalView({
       termRef.current = null
       termIoRef.current = null
     }
-  }, [onCtrlConsumed, onInputReady, fontReady])
+  }, [onCtrlConsumed, onAltConsumed, onShiftConsumed, onModifiersCancelled, onInputReady, fontReady])
 
   // WebSocket connection (reconnects when session.id changes).
   useEffect(() => {
@@ -1110,6 +1130,7 @@ export function TerminalView({
         // forever while the live socket streams output behind it.
         const isCurrent = connectionRef.current === connection
         setWsState(prev => wsStateOnClose(prev, isCurrent))
+        if (isCurrent) onModifiersCancelled()
         if (!isCurrent) return
         if (claimFallbackTimer !== null) clearTimeout(claimFallbackTimer)
         claimFallbackTimer = null

@@ -278,6 +278,26 @@ describe('attachMobileInputHandler', () => {
     expect(sent).toBe('\x7f'.repeat(4) + 'world')
   })
 
+  it('separates raw erasure from the logical replacement payload', () => {
+    dispose()
+    const raw: string[] = []
+    const replacements: string[] = []
+    dispose = attachMobileInputHandler(
+      { textarea } as any,
+      container as any,
+      data => raw.push(data),
+      data => replacements.push(data),
+    )
+    textarea.value = 'wrld'
+    textarea.selectionStart = 0
+    textarea.selectionEnd = 4
+
+    simulateInput(textarea, container, 'insertReplacementText', 'world')
+
+    expect(raw).toEqual(['\x7f'.repeat(4)])
+    expect(replacements).toEqual(['world'])
+  })
+
   // ── dataTransfer fallback (Safari spell-check) ──
 
   it('reads replacement text from dataTransfer when data is null', () => {

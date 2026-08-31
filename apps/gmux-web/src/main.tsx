@@ -6,7 +6,6 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { copyText } from './clipboard'
-import { keyComboToSequence } from './config'
 import { familyAncestors, familyRoot, familySegments, hasFamily, promotionAction, promotionCopy } from './family'
 import { FamilyDrawer } from './family-drawer'
 import { familyDrawerRoot } from './family-drawer-state'
@@ -569,13 +568,6 @@ const IconDown  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconLeft  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M10 7H4m0 0 3-3M4 7l3 3"/></svg>
 const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M4 7h6m0 0-3-3m3 3-3 3"/></svg>
 
-// Shift-key glyph for the Shift+Tab key, which reads as "⇧tab": one drawn
-// modifier mark plus the same lowercase word style as esc/tab/ctrl/alt. It is
-// drawn rather than typed as U+21E7 because none of the bundled Source Sans 3
-// subsets covers that codepoint (they carry ↑/↓ but nothing in the shift/tab
-// range), so a literal ⇧ would fall back to an OS font with foreign weight
-// and metrics.
-const IconShift = () => <svg viewBox="0 0 12 14" width="11" height="12" aria-hidden="true" {...S}><path d="M6 2 1.6 6.6h2.3v4.2h4.2V6.6h2.3z"/></svg>
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
@@ -619,22 +611,28 @@ function MobileTerminalBar({
   canSend,
   ctrlArmed,
   altArmed,
+  shiftArmed,
   onMenu,
   onSend,
   onToggleCtrl,
   onToggleAlt,
+  onToggleShift,
   onCtrlConsumed,
   onAltConsumed,
+  onShiftConsumed,
 }: {
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
+  shiftArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
+  onToggleShift: () => void
   onCtrlConsumed: () => void
   onAltConsumed: () => void
+  onShiftConsumed: () => void
 }) {
   // Don't steal focus from the terminal: a control tap leaves the
   // keyboard exactly as it is (open or closed). Bytes reach the PTY via
@@ -643,14 +641,13 @@ function MobileTerminalBar({
   // is the whole point of arrows/esc being reachable while navigating.
   const keepFocus = (ev: Event) => ev.preventDefault()
 
-  // Modifier-aware send: the toolbar writes through the raw input
-  // channel (bypassing the arm logic in sendInput), so armed ctrl/alt
-  // are encoded here. Consumes whichever arms were actually applied.
-  // ctrl+esc / ctrl+↑ / alt+esc all encode correctly via CSI-u.
+  // Toolbar keys bypass TerminalView's arm logic, so compose and consume the
+  // same one-shot modifiers here before writing through the raw channel.
   const sendKey = (seq: string) => {
-    const r = applyArmedModifiers(seq, ctrlArmed, altArmed)
+    const r = applyArmedModifiers(seq, ctrlArmed, altArmed, shiftArmed)
     if (r.ctrlApplied && ctrlArmed) onCtrlConsumed()
     if (r.altApplied) onAltConsumed()
+    if (r.shiftApplied) onShiftConsumed()
     onSend(r.seq)
   }
 
@@ -658,9 +655,10 @@ function MobileTerminalBar({
   // regardless of armed state, fold in an armed alt (→ ctrl+alt+arrow),
   // and consume both arms so neither leaks to the next key.
   const sendWord = (arrow: string) => {
-    const r = applyArmedModifiers(arrow, true, altArmed)
+    const r = applyArmedModifiers(arrow, true, altArmed, shiftArmed)
     if (ctrlArmed) onCtrlConsumed()
     if (r.altApplied) onAltConsumed()
+    if (r.shiftApplied) onShiftConsumed()
     onSend(r.seq)
   }
 
@@ -679,7 +677,7 @@ function MobileTerminalBar({
     <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
       <MenuButton variant="bar" onMenu={onMenu} />
       <button class="mobile-bottom-action mk-esc" disabled={!canSend} aria-label="Escape" onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
-      <button class="mobile-bottom-action mk-shift-tab" disabled={!canSend} aria-label="Shift+Tab (BackTab)" onClick={() => sendKey(keyComboToSequence('shift+tab'))} title="Shift+Tab (BackTab)"><span class="mkey-face"><IconShift />tab</span></button>
+      <button class={`${armedClass(shiftArmed)} mk-shift-tab`} disabled={!canSend} aria-label="Shift modifier" aria-pressed={shiftArmed} onClick={onToggleShift} title={shiftArmed ? 'Shift armed for next key' : 'Arm Shift'}><span class="mkey-face">shift</span></button>
       <button class="mobile-bottom-action mk-tab" disabled={!canSend} aria-label="Tab" onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
       <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
       <button class={`${armedClass(altArmed)} mk-alt`} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}><span class="mkey-face">alt</span></button>
@@ -864,6 +862,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
+  const [shiftArmed, setShiftArmed] = useState(false)
 
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
@@ -904,6 +903,7 @@ function App() {
     setResumingId(null)
     setCtrlArmed(false)
     setAltArmed(false)
+    setShiftArmed(false)
     // Don't auto-open the keyboard on touch when switching sessions.
     if (!isTouchDevice()) requestAnimationFrame(() => terminalFocusRef.current?.())
   }, [selId])
@@ -930,7 +930,7 @@ function App() {
 
   // Clear modifiers when terminal isn't attachable.
   useEffect(() => {
-    if (!canAttach) { setCtrlArmed(false); setAltArmed(false) }
+    if (!canAttach) { setCtrlArmed(false); setAltArmed(false); setShiftArmed(false) }
   }, [canAttach])
 
   // ── Terminal callbacks ──
@@ -954,6 +954,16 @@ function App() {
     setAltArmed(armed => !armed)
   }, [canAttach])
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
+  const handleToggleShift = useCallback(() => {
+    if (!canAttach) return
+    setShiftArmed(armed => !armed)
+  }, [canAttach])
+  const handleShiftConsumed = useCallback(() => { setShiftArmed(false) }, [])
+  const handleModifiersCancelled = useCallback(() => {
+    setCtrlArmed(false)
+    setAltArmed(false)
+    setShiftArmed(false)
+  }, [])
 
   const openSidebar = useCallback(() => setSidebarOpen(true), [])
 
@@ -1029,6 +1039,9 @@ function App() {
             onCtrlConsumed={handleCtrlConsumed}
             altArmed={altArmed}
             onAltConsumed={handleAltConsumed}
+            shiftArmed={shiftArmed}
+            onShiftConsumed={handleShiftConsumed}
+            onModifiersCancelled={handleModifiersCancelled}
             onInputReady={handleTerminalInputReady}
             onFocusReady={handleTerminalFocusReady}
           />
@@ -1057,12 +1070,15 @@ function App() {
             canSend={canAttach || USE_MOCK}
             ctrlArmed={ctrlArmed}
             altArmed={altArmed}
+            shiftArmed={shiftArmed}
             onMenu={openSidebar}
             onSend={handleMobileInput}
             onToggleCtrl={handleToggleCtrl}
             onToggleAlt={handleToggleAlt}
+            onToggleShift={handleToggleShift}
             onCtrlConsumed={handleCtrlConsumed}
             onAltConsumed={handleAltConsumed}
+            onShiftConsumed={handleShiftConsumed}
           />
         )}
 

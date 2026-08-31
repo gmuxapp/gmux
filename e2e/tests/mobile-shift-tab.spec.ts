@@ -18,11 +18,9 @@ test.describe('mobile Shift+Tab keyboard', () => {
           input = [...new Uint8Array(data.buffer, data.byteOffset, data.byteLength)]
         }
         if (input) terminalInputs.push(input)
-        // Keep the shared harness shell pristine: observe the real browser
-        // input send call but do not inject BackTab into the fixture shell.
-        if (!(input?.length === 3 && input[0] === 0x1b && input[1] === 0x5b && input[2] === 0x5a)) {
-          originalSend.call(this, data)
-        }
+        // Keep the shared harness shell pristine: observe terminal input but
+        // forward only JSON resize/control frames.
+        if (!input) originalSend.call(this, data)
       }
       ;(window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs = terminalInputs
     })
@@ -30,41 +28,83 @@ test.describe('mobile Shift+Tab keyboard', () => {
     await gotoTestSession(page)
   })
 
-  test('clicks BackTab once with exact raw bytes and no side effects', async ({ page }) => {
-    const backTab = page.getByRole('button', { name: 'Shift+Tab (BackTab)' })
-    await expect(backTab).toBeVisible()
+  test('arms Shift without sending, then composes one-shot terminal input', async ({ page }) => {
+    const shift = page.getByRole('button', { name: 'Shift modifier' })
+    const tab = page.getByRole('button', { name: 'Tab' })
+    await expect(shift).toHaveText('shift')
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
 
-    await page.evaluate(() => {
-      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
-      textarea?.focus()
-      ;(window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs.length = 0
-    })
-    const before = await page.evaluate(() => ({
-      active: document.activeElement?.className ?? '',
-      ctrl: document.querySelector('.mk-ctrl')?.getAttribute('aria-pressed'),
-      alt: document.querySelector('.mk-alt')?.getAttribute('aria-pressed'),
-    }))
-
-    const box = await backTab.boundingBox()
+    const box = await shift.boundingBox()
     expect(box).not.toBeNull()
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
     await page.mouse.down()
-    await page.waitForTimeout(700) // longer than every toolbar repeat delay
+    await page.waitForTimeout(700)
     await page.mouse.up()
-    await page.waitForTimeout(100)
+    await expect(shift).toHaveAttribute('aria-pressed', 'true')
+    await page.screenshot({ path: '.memory/screenshots/mobile-composable-shift-portrait-armed.png', fullPage: true })
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs)).toEqual([])
 
-    const result = await page.evaluate(() => ({
-      terminalInputs: (window as unknown as { __mobileTerminalInputs: number[][] }).__mobileTerminalInputs,
-      active: document.activeElement?.className ?? '',
-      ctrl: document.querySelector('.mk-ctrl')?.getAttribute('aria-pressed'),
-      alt: document.querySelector('.mk-alt')?.getAttribute('aria-pressed'),
-      menuOpen: document.querySelector('.sidebar-overlay.visible') !== null,
-    }))
-    expect(result.terminalInputs).toEqual([[0x1b, 0x5b, 0x5a]])
-    expect(result.active).toBe(before.active)
-    expect(result.ctrl).toBe(before.ctrl)
-    expect(result.alt).toBe(before.alt)
-    expect(result.menuOpen).toBe(false)
+    await tab.click()
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs)).toEqual([[0x1b, 0x5b, 0x5a]])
+
+    await shift.click()
+    await page.evaluate(() => (document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement).focus())
+    await page.keyboard.press('a')
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.at(-1))).toEqual([0x41])
+
+    await shift.click()
+    await page.locator('.mk-au').click()
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.at(-1))).toEqual([0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x41])
+
+    const count = await page.evaluate(() => (window as any).__mobileTerminalInputs.length)
+    await shift.click()
+    await shift.click()
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.length)).toBe(count)
+
+    await shift.click()
+    await page.locator('.mk-ctrl').click()
+    await page.locator('.mk-alt').click()
+    await page.evaluate(() => (document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement).focus())
+    await page.keyboard.press('c')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.at(-1))).toEqual([0x1b, 0x5b, 0x39, 0x39, 0x3b, 0x38, 0x75])
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    await expect(page.locator('.mk-ctrl')).toHaveAttribute('aria-pressed', 'false')
+    await expect(page.locator('.mk-alt')).toHaveAttribute('aria-pressed', 'false')
+
+    await shift.click()
+    const beforeReplacement = await page.evaluate(() => (window as any).__mobileTerminalInputs.length)
+    await page.evaluate(() => {
+      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      textarea.value = 'wrld'
+      textarea.selectionStart = 0
+      textarea.selectionEnd = 4
+      textarea.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: 'world',
+      }))
+      textarea.value = 'world'
+      textarea.selectionStart = textarea.selectionEnd = 5
+      textarea.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: 'world',
+      }))
+    })
+    const replacementInputs = await page.evaluate(
+      start => (window as any).__mobileTerminalInputs.slice(start),
+      beforeReplacement,
+    )
+    expect(replacementInputs).toEqual([
+      [0x7f, 0x7f, 0x7f, 0x7f],
+      [0x77, 0x6f, 0x72, 0x6c, 0x64],
+    ])
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    await page.keyboard.press('b')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.at(-1))).toEqual([0x62])
   })
 
   test('keeps responsive ordering, visibility, safe areas, and badge clear', async ({ page }) => {
@@ -76,6 +116,9 @@ test.describe('mobile Shift+Tab keyboard', () => {
     ] as const) {
       await page.setViewportSize({ width, height })
       await page.waitForTimeout(100)
+      if (branch === 'portrait' || branch === 'wide') {
+        await page.screenshot({ path: `.memory/screenshots/mobile-composable-shift-${branch}.png`, fullPage: true })
+      }
       const layout = await page.evaluate(() => {
         // The live shell session is not unread by default; force the existing
         // status state so the badge-vs-Esc regression is exercised too.
@@ -163,8 +206,7 @@ test.describe('mobile Shift+Tab keyboard', () => {
     expect(safe.menu.x).toBeGreaterThanOrEqual(24)
     expect(safe.send.right).toBeLessThanOrEqual(safe.width - 28)
 
-    // Side insets shrink every cell, and ⇧tab is the widest label in the bar,
-    // so it is the first one that would spill: 3px of total headroom here.
+    // Side insets shrink every cell; the full word must remain contained.
     const inset = await page.evaluate(() => {
       const face = document.querySelector('.mk-shift-tab .mkey-face') as HTMLElement
       const range = document.createRange()
@@ -174,7 +216,7 @@ test.describe('mobile Shift+Tab keyboard', () => {
     expect(inset.content).toBeLessThan(inset.cell)
   })
 
-  test('keeps the ⇧tab label on one line, within its cell, in a bundled font', async ({ page }) => {
+  test('keeps the shift label on one line and within its cell', async ({ page }) => {
     for (const [width, height] of [
       [320, 568],
       [390, 844],
@@ -196,7 +238,6 @@ test.describe('mobile Shift+Tab keyboard', () => {
           content: { top: content.top, right: content.right, bottom: content.bottom, left: content.left, height: content.height },
           cell: { top: cell.top, right: cell.right, bottom: cell.bottom, left: cell.left },
           text: face.textContent ?? '',
-          glyphs: face.querySelectorAll('svg').length,
         }
       })
       // One line: a 13px line box is 18px tall, wrapping to two is ~32px.
@@ -207,11 +248,7 @@ test.describe('mobile Shift+Tab keyboard', () => {
       expect(label.content.right).toBeLessThanOrEqual(label.cell.right)
       expect(label.content.top).toBeGreaterThanOrEqual(label.cell.top)
       expect(label.content.bottom).toBeLessThanOrEqual(label.cell.bottom)
-      // The modifier mark must stay a drawn glyph: no bundled Source Sans 3
-      // subset covers U+21E7, so a literal ⇧/⇤ would silently fall back to an
-      // OS font with foreign weight and per-platform metrics.
-      expect(label.glyphs).toBe(1)
-      expect(label.text).toBe('tab')
+      expect(label.text).toBe('shift')
     }
   })
 })
