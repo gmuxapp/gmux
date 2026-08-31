@@ -21,6 +21,13 @@ type fakeConvAdapter struct {
 	delay    time.Duration // per-snapshot artificial scan duration
 	inFlight *atomic.Int32 // shared across adapters: concurrent snapshots
 	maxSeen  *atomic.Int32 // shared: high-water mark of inFlight
+
+	// describeStarted/describeGate, when set, make DescribeConversation
+	// announce entry and then block until the gate closes — a deterministic
+	// stand-in for a slow file read/parse, used to interleave watcher events
+	// with an in-flight scan.
+	describeStarted chan string
+	describeGate    chan struct{}
 }
 
 func (f *fakeConvAdapter) Name() string                        { return f.name }
@@ -50,6 +57,12 @@ func (f *fakeConvAdapter) WatchConversations(ctx context.Context, _ adapter.Conv
 	return ctx.Err()
 }
 func (f *fakeConvAdapter) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	if f.describeStarted != nil {
+		f.describeStarted <- ref
+	}
+	if f.describeGate != nil {
+		<-f.describeGate
+	}
 	parts := strings.SplitN(ref, "|", 3)
 	return &adapter.ConversationInfo{
 		ID:      parts[0],
@@ -240,6 +253,59 @@ func TestStartSnapshotConcurrentSourceEvents(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Reviewer F1 zombie schedule (PR #517): a watcher Remove landing between
+// Scan's unlocked DescribeConversation and its commit must win — otherwise
+// the scan resurrects a deleted conversation and no future event ever clears
+// it. Both variants: the ref was never indexed (startup scan) and the ref was
+// already indexed (rescan).
+func TestScanRemoveRaceDeletionWins(t *testing.T) {
+	const ref = "conv-1|Some Title|/tmp/x"
+
+	run := func(t *testing.T, preIndex bool) {
+		idx := New()
+		plain := &fakeConvAdapter{name: "probe"}
+		if preIndex {
+			if key := idx.Scan(plain, ref); key == "" {
+				t.Fatal("pre-index scan failed")
+			}
+		}
+
+		gated := &fakeConvAdapter{name: "probe", describeStarted: make(chan string, 1), describeGate: make(chan struct{})}
+		done := make(chan string)
+		go func() { done <- idx.Scan(gated, ref) }()
+		<-gated.describeStarted // scan is inside DescribeConversation, no lock held
+
+		// The watcher observes the deletion mid-scan (indexSink.Remove path).
+		removed := idx.RemoveByRef("probe", ref)
+		if preIndex && !removed {
+			t.Fatal("RemoveByRef did not find the pre-indexed entry")
+		}
+
+		close(gated.describeGate) // describe returns; scan tries to commit
+		if key := <-done; key != "" {
+			t.Fatalf("zombie: scan committed key %q after the ref was removed", key)
+		}
+		if n := idx.Count(); n != 0 {
+			t.Fatalf("zombie: %d conversation(s) indexed after removal", n)
+		}
+		if idx.LookupByConversationID("probe", "conv-1") != "" {
+			t.Fatal("zombie: conversation ID resolvable after removal")
+		}
+		if cmd := idx.LookupResumeCommand("probe", ref); len(cmd) != 0 {
+			t.Fatalf("zombie: resume command %v cached after removal", cmd)
+		}
+
+		// A fresh scan after the removal (file re-created) must index again:
+		// the generation guard only drops scans that predate the removal.
+		if key := idx.Scan(plain, ref); key == "" {
+			t.Fatal("post-removal rescan refused to index a re-created conversation")
+		}
+	}
+
+	t.Run("unindexed-ref", func(t *testing.T) { run(t, false) })
+	t.Run("pre-indexed-ref", func(t *testing.T) { run(t, true) })
 }
 
 // A context cancelled before scans run must leave the snapshot incomplete:

@@ -396,11 +396,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			if launchers == nil {
 				launchers = []peering.LauncherDef{}
 			}
-			convStatus := "indexing"
-			if convIndex.SnapshotComplete() {
-				convStatus = "ready"
-			}
-			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": map[string]any{"status": convStatus, "indexed": convIndex.Count()}}
+			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
 			if health.TailscaleURL != "" {
 				data["tailscale_url"] = health.TailscaleURL
 			}
@@ -633,24 +629,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": sessions})
 		})
-		mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", func(w http.ResponseWriter, r *http.Request) {
-			adapterName := r.PathValue("adapter")
-			slug := r.PathValue("slug")
-			info, ok := convIndex.Lookup(adapterName, slug)
-			if !ok {
-				if !convIndex.SnapshotComplete() {
-					// The startup scan hasn't covered this ref yet; "absent" is
-					// not knowable. Tell the client to retry instead of 404ing
-					// a conversation that exists on disk.
-					w.Header().Set("Retry-After", "2")
-					writeError(w, http.StatusServiceUnavailable, "indexing", "conversation index is still loading; retry shortly")
-					return
-				}
-				writeError(w, http.StatusNotFound, "not_found", "conversation not found")
-				return
-			}
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"slug": info.Slug, "adapter": info.Adapter, "title": info.Title, "cwd": info.Cwd, "resume_command": info.ResumeCommand, "created": info.Created}})
-		})
+		mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", handleConversationLookup(convIndex))
 		// Read-only, non-reserving preflight for client-minted IDs. Absence is
 		// advisory; POST /v1/register repeats the check under the coordinator's
 		// lifecycle fence to close the race.
