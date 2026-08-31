@@ -96,6 +96,67 @@ func TestWindowTrailingEdgeComposesWithMergedDirt(t *testing.T) {
 	expectNoBatch(t, sink.out, 50*time.Millisecond)
 }
 
+// awaitParkedInWindowWait proves the composer is inside sleepInterruptible:
+// the previously marked dirt has been TAKEN (both dirty flags clear under
+// c.mu), no wake is pending, exactly `reads` store reads have happened, and
+// nothing new was emitted — the only remaining place the loop can be is the
+// window wait.
+func awaitParkedInWindowWait(t *testing.T, c *Composer, reader *fakeReader, reads int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		clean := !c.dirtySessions && !c.dirtyProjects && len(c.wake) == 0
+		c.mu.Unlock()
+		if clean && len(reader.calls()) == reads {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("composer never parked inside the window wait")
+		}
+		time.Sleep(200 * time.Microsecond)
+	}
+}
+
+// TestWindowDirtMarkedDuringWaitMergesIntoTrailingPass: dirt of ANOTHER kind
+// marked while the composer is provably parked inside the window wait must
+// be merged into the trailing pass (one cross-kind read within one window),
+// not deferred to a separate pass a window later. Guards the post-wait
+// takeDirty merge in Run.
+func TestWindowDirtMarkedDuringWaitMergesIntoTrailingPass(t *testing.T) {
+	reader := &fakeReader{}
+	sink := &blockingSink{out: make(chan Batch, 8)}
+	window := 300 * time.Millisecond
+	c := New(reader, nil, sink, WithMinComposeInterval(window))
+	startComposer(t, c)
+
+	c.MarkDirty(true, false)
+	first := recvBatch(t, sink.out)
+	if first.Sessions == nil || first.Projects != nil {
+		t.Fatalf("first batch=%#v", first)
+	}
+
+	// Sessions dirt taken immediately after the pass parks the loop in the
+	// window wait; prove it before marking the other kind.
+	c.MarkDirty(true, false)
+	awaitParkedInWindowWait(t, c, reader, 1)
+	c.MarkDirty(false, true) // arrives strictly inside the wait
+
+	start := time.Now()
+	second := recvBatch(t, sink.out)
+	if second.Sessions == nil || second.Projects == nil {
+		t.Fatalf("during-wait dirt not merged into trailing pass: %#v", second)
+	}
+	if elapsed := time.Since(start); elapsed > 2*window {
+		t.Fatalf("trailing pass took %v, want within one window (%v)", elapsed, window)
+	}
+	calls := reader.calls()
+	if len(calls) != 2 || !calls[1].IncludeSessions || !calls[1].IncludeProjects {
+		t.Fatalf("reads=%#v, want exactly one trailing cross-kind read", calls)
+	}
+	expectNoBatch(t, sink.out, 50*time.Millisecond)
+}
+
 // TestWindowShutdownFlushesPendingDirt: Close during the coalescing wait
 // must compose-and-emit the pending dirt before Close returns.
 func TestWindowShutdownFlushesPendingDirt(t *testing.T) {
