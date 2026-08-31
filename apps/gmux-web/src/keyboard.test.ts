@@ -294,6 +294,13 @@ describe('applyArmedModifiers', () => {
     expect(applyArmedModifiers('c', true, true, true).seq).toBe('\x1b[99;8u')
   })
 
+  it('consumes shift when ctrl fallback emits a non-letter control code', () => {
+    for (const [input, output] of [['@', '\x00'], ['[', '\x1b'], ['\x7f', '\x08']] as const) {
+      expect(applyArmedModifiers(input, true, false, true))
+        .toEqual({ seq: output, ctrlApplied: true, altApplied: false, shiftApplied: true })
+    }
+  })
+
   it('does not guess layout-dependent shift mappings and consumes on composed text', () => {
     expect(applyArmedModifiers('1', false, false, true))
       .toEqual({ seq: '1', ctrlApplied: false, altApplied: false, shiftApplied: true })

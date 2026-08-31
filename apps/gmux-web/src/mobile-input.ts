@@ -75,8 +75,10 @@ interface TrackedDeletion {
  * Must be called after `term.open()` so `term.textarea` exists.
  * `container` should be the parent element of xterm's textarea (needed to
  * intercept input events in the capture phase before xterm sees them).
- * `send` should be the raw PTY send function (not sendInput, to avoid
- * ctrl/alt modifier interference; same convention as paste).
+ * `send` is the raw PTY function used for replacement backspaces.
+ * `sendReplacement` handles the replacement payload as one logical input;
+ * callers can use it to consume one-shot state without applying modifiers to
+ * the synthetic backspaces. It defaults to `send` for simple consumers.
  *
  * Returns a cleanup function.
  */
@@ -84,6 +86,7 @@ export function attachMobileInputHandler(
   term: Terminal,
   container: HTMLElement,
   send: SendFn,
+  sendReplacement: SendFn = send,
 ): () => void {
   const textarea = term.textarea
   if (!textarea) return () => {/* nothing to tear down */}
@@ -176,7 +179,7 @@ export function attachMobileInputHandler(
     // Prevent xterm's _inputEvent from also sending ev.data.
     ev.stopImmediatePropagation()
 
-    send(newText + suffix)
+    sendReplacement(newText + suffix)
 
     // Android: reset textarea to the pre-autocorrect value. xterm's
     // CompositionHelper._handleAnyTextareaChanges (triggered by keydown 229)

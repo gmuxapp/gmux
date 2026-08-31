@@ -73,6 +73,38 @@ test.describe('mobile Shift+Tab keyboard', () => {
     await expect(shift).toHaveAttribute('aria-pressed', 'false')
     await expect(page.locator('.mk-ctrl')).toHaveAttribute('aria-pressed', 'false')
     await expect(page.locator('.mk-alt')).toHaveAttribute('aria-pressed', 'false')
+
+    await shift.click()
+    const beforeReplacement = await page.evaluate(() => (window as any).__mobileTerminalInputs.length)
+    await page.evaluate(() => {
+      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      textarea.value = 'wrld'
+      textarea.selectionStart = 0
+      textarea.selectionEnd = 4
+      textarea.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: 'world',
+      }))
+      textarea.value = 'world'
+      textarea.selectionStart = textarea.selectionEnd = 5
+      textarea.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: 'world',
+      }))
+    })
+    const replacementInputs = await page.evaluate(
+      start => (window as any).__mobileTerminalInputs.slice(start),
+      beforeReplacement,
+    )
+    expect(replacementInputs).toEqual([
+      [0x7f, 0x7f, 0x7f, 0x7f],
+      [0x77, 0x6f, 0x72, 0x6c, 0x64],
+    ])
+    await expect(shift).toHaveAttribute('aria-pressed', 'false')
+    await page.keyboard.press('b')
+    expect(await page.evaluate(() => (window as any).__mobileTerminalInputs.at(-1))).toEqual([0x62])
   })
 
   test('keeps responsive ordering, visibility, safe areas, and badge clear', async ({ page }) => {

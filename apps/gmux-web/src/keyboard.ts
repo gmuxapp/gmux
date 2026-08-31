@@ -357,7 +357,7 @@ export function applyArmedModifiers(
 
   if (data.length === 1 && ctrl) {
     const code = ctrlSequenceFor(data)
-    if (code) return { seq: alt ? `\x1b${code}` : code, ctrlApplied: true, altApplied: alt, shiftApplied: false }
+    if (code) return { seq: alt ? `\x1b${code}` : code, ctrlApplied: true, altApplied: alt, shiftApplied: shift }
   }
 
   // Text from an IME, dictation, or a keyboard that already produced its

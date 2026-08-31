@@ -634,7 +634,18 @@ export function TerminalView({
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput, keybinds, macCommandIsCtrl, getPasteDestination, pasteFeedback)
     const disposePasteHandler = attachPasteHandler(containerRef.current!, getPasteDestination, pasteFeedback)
-    const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
+    const sendMobileReplacement = (data: string) => {
+      // Replacement backspaces and text stay byte-for-byte raw so Ctrl/Alt or
+      // Shift cannot corrupt autocorrect/dictation. The replacement is still
+      // the next logical input, so cancel one-shot Shift unconditionally;
+      // this also closes the narrow arm/render race before the ref updates.
+      shiftArmedRef.current = false
+      onShiftConsumed()
+      sendRawInput(data)
+    }
+    const disposeMobileHandler = attachMobileInputHandler(
+      term, containerRef.current!, sendRawInput, sendMobileReplacement,
+    )
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write
     //   ESC ] 52 ; <selection> ; <base64-payload> BEL
