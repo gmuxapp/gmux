@@ -454,6 +454,54 @@ func stopScreenDrain(e *vt.Emulator, drainDone chan struct{}) {
 	_ = e.Close()
 }
 
+// restoreOrphanZeroColumns returns line with every zero cell that is neither
+// a wide-cell placeholder nor part of the row's trailing zero run replaced by
+// a blank cell (uv.EmptyCell).
+//
+// The emulator can strand such "orphan" zeros mid-row: ultraviolet's Line.Set
+// zero-fills the placeholder of a newly written wide cell, but when that
+// placeholder position was itself the head of another wide cell, the displaced
+// cell's own placeholder one column further right is left as a stranded zero
+// (wide-over-wide overwrite at a one-column offset). Line.Render skips zero
+// cells, so without this repair the checkpoint drops the orphan's blank column
+// and everything after it shifts one column left on replay.
+//
+// The trailing zero run is deliberately preserved: those are the synthetic
+// zeros marking columns skipped when a wide grapheme wrapped early, and
+// writeRow's padding restore depends on stripping exactly those. Written
+// spaces are never zero cells (they are blank cells with content " "), so no
+// user-written content is altered.
+func restoreOrphanZeroColumns(line uv.Line) uv.Line {
+	last := len(line) - 1
+	for last >= 0 && line[last].IsZero() {
+		last--
+	}
+	var fixed uv.Line // copy-on-write: scrollback lines are shared state
+	placeholders := 0 // zero cells owed to the preceding wide cell
+	for x := 0; x <= last; x++ {
+		if placeholders > 0 {
+			placeholders--
+			continue
+		}
+		c := line[x]
+		if c.Width > 1 {
+			placeholders = c.Width - 1
+			continue
+		}
+		if c.IsZero() {
+			if fixed == nil {
+				fixed = make(uv.Line, len(line))
+				copy(fixed, line)
+			}
+			fixed[x] = uv.EmptyCell
+		}
+	}
+	if fixed != nil {
+		return fixed
+	}
+	return line
+}
+
 // renderScreen produces the ANSI snapshot: scrollback lines followed by
 // the visible screen. The scrollback gives reconnecting clients context
 // (previous output they can scroll up to). The visible screen is rendered
@@ -473,6 +521,7 @@ func renderScreenMode(e *vt.Emulator, includeScrollback bool) string {
 		if !first && !previousWrapped {
 			sb.WriteString("\r\n")
 		}
+		line = restoreOrphanZeroColumns(line)
 		rendered := line.Render()
 		sb.WriteString(rendered)
 		if wrapped {
