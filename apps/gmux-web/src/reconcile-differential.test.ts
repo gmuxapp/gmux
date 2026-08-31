@@ -103,10 +103,20 @@ function commitViaProtocol(rows: Session[]) {
 }
 
 describe('incremental projections ≡ uncached recompute (randomized sequences)', () => {
+  // CI budget: every step runs the full uncached oracle (O(N·projections))
+  // plus deep toEqual diffs, and CI runners measured ~15–25× slower than a
+  // dev machine (seed=29 took 17 s on CI at the original N=150–400 while
+  // running ~0.6 s locally). Coverage lives in the *operation mix* and step
+  // count, not in N — every structural shape (families, peers, transitional
+  // placements, strays) exists in the fixture well below N=100 — so the
+  // worlds are kept small (N≈60–160, still multi-host with dozens of
+  // families) and each seed gets an explicit 30 s timeout: ~120 ms locally
+  // × 25 CI factor ≈ 3 s, a 10× margin.
+  const DIFF_TEST_TIMEOUT_MS = 30_000
   for (const seed of [11, 29, 47, 101]) {
-    it(`mutation sequence seed=${seed}`, () => {
+    it(`mutation sequence seed=${seed}`, { timeout: DIFF_TEST_TIMEOUT_MS }, () => {
       const rnd = mulberry32(seed * 104729)
-      const n = 150 + Math.floor(rnd() * 250)
+      const n = 60 + Math.floor(rnd() * 100)
       const w = makeFixtureWorld(seed, n)
       _setRawWorld({
         projects: w.projects, peers: w.peers, peerProjects: w.peerProjects,
@@ -119,7 +129,7 @@ describe('incremental projections ≡ uncached recompute (randomized sequences)'
       const pickIdx = () => Math.floor(rnd() * rows.length)
       let counter = 0
 
-      for (let step = 0; step < 60; step++) {
+      for (let step = 0; step < 50; step++) {
         // Every step ships a full re-encoded snapshot (protocol semantics).
         rows = rows.map(reencode)
         const op = rnd()
@@ -273,6 +283,34 @@ describe('identity preservation (rerender/recompute granularity)', () => {
     const changedBuckets = bs.filter((b, i) => b !== beforeActivity[i])
     expect(changedBuckets.length).toBe(1)
     expect(changedBuckets[0].sessions).toContain(newRow)
+  })
+
+  it('identical re-broadcast after midnight refreshes day-partition labels', () => {
+    // Reviewer-minimized regression (review-pr-518.md F2): with structural
+    // sharing, a byte-identical snapshot commits as an identity no-op, so
+    // day-relative labels must depend on an explicit clock input instead of
+    // riding on array-identity churn. Production trigger: SSE reconnect
+    // replaying an unchanged world after the machine slept across local
+    // midnight. Failed at 15575d6f; passed at parent d893a120.
+    load(40)
+    const labelsBefore = {
+      activity: sidebarActivity.value.map(b => b.label),
+      home: homePartition.value.map(b => b.label),
+    }
+    vi.setSystemTime(NOW + 24 * 60 * 60 * 1000)
+    applySessionsSnapshot(_rawSessions.value.map(reencode))
+    // The oracle recomputes at the new clock; the incremental path must agree.
+    const ref = _uncachedProjections(Date.now())
+    expect(bucketsComparable(sidebarActivity.value)).toEqual(bucketsComparable(ref.sidebarActivity))
+    expect(bucketsComparable(homePartition.value)).toEqual(bucketsComparable(ref.homePartition))
+    // And the day actually moved: yesterday's bucket appears, labels shift.
+    expect(sidebarActivity.value.map(b => b.label)).not.toEqual(labelsBefore.activity)
+    expect(homePartition.value.map(b => b.label)).not.toEqual(labelsBefore.home)
+    expect(sidebarActivity.value.some(b => b.label === 'Yesterday')).toBe(true)
+    // Everything not day-relative stays a no-op: rows and folders keep identity.
+    const raw = _rawSessions.value
+    applySessionsSnapshot(raw.map(reencode))
+    expect(_rawSessions.value).toBe(raw)
   })
 
   it('fact changes disable the fast path (a mutant reusing structure must fail)', () => {

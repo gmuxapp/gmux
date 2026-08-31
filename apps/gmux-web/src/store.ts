@@ -801,6 +801,27 @@ function makePartitionMemo(): (input: readonly Session[], now: number) => DayBuc
 const sidebarActivityMemo = makePartitionMemo()
 const homePartitionMemo = makePartitionMemo()
 
+/**
+ * Local-midnight timestamp the day-partition projections depend on.
+ *
+ * Pre-reconciliation, `partitionByDay`'s day-relative labels ("Today",
+ * "Yesterday", "Last <weekday>") were re-evaluated on every snapshot commit
+ * because the array identity always changed. With structural sharing, an
+ * identical re-encoded snapshot (e.g. an SSE reconnect replaying an
+ * unchanged world after laptop wake) commits as a signal no-op — so the
+ * partitions must carry their clock input as an explicit dependency instead
+ * of riding on array-identity churn. `refreshDayBoundary()` runs at the
+ * snapshot commit seam and writes only when the local day actually moved,
+ * so identical snapshots stay O(reconcile) with zero recomputation except
+ * the (necessary) partition re-evaluation across midnight.
+ */
+const dayBoundary = signal(localMidnight(Date.now()))
+
+function refreshDayBoundary(): void {
+  const mid = localMidnight(Date.now())
+  if (mid !== dayBoundary.value) dayBoundary.value = mid
+}
+
 /** The single source of truth for which sessions are eligible for the
  *  sidebar. Projects places this list into configured folders; Activity
  *  rearranges that placed set, so unstamped/unreferenced sessions that
@@ -890,9 +911,11 @@ export const familySelectedId = computed(() => familyRootId(selectedId.value, se
  *
  *  Day-groups the full set (alive + dead/resumable, any age), so the
  *  Activity view lists exactly what Projects does. */
-export const sidebarActivity = computed(() =>
-  sidebarActivityMemo(folders.value.flatMap(folder => folder.sessions), Date.now()),
-)
+export const sidebarActivity = computed(() => {
+  // Clock dependency: recompute when the local day moves (see dayBoundary).
+  void dayBoundary.value
+  return sidebarActivityMemo(folders.value.flatMap(folder => folder.sessions), Date.now())
+})
 
 // ── Sidebar view mode ───────────────────────────────────────────────────────
 //
@@ -1368,6 +1391,8 @@ export function partitionByDay(all: readonly Session[], now: number): DayBucket[
 }
 
 export const homePartition = computed(() => {
+  // Clock dependency: recompute when the local day moves (see dayBoundary).
+  void dayBoundary.value
   // Home is its own curated surface: scoped to the tab's `?filter=` but
   // independent of the sidebar's list rules (alive-only, selected-pin).
   // Alive only — dead/resumable corpses live in the sidebar's Activity
@@ -1631,6 +1656,9 @@ export function applySessionsSnapshot(list: Session[]): void {
   // deep-equal to `list`); this only lets projections use identity as a
   // provably-unchanged test and patch O(changed) instead of rebuilding O(N).
   list = reconcileSessions(_rawSessions.peek(), list)
+  // Even a fully-reused (identity no-op) snapshot must refresh day-relative
+  // partitions when local midnight has passed since the last commit.
+  refreshDayBoundary()
   // Detect newly-arrived IDs vs the previous snapshot so a pending launch
   // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
   // soon as the daemon publishes it. Computed before we commit the new
