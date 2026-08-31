@@ -209,8 +209,9 @@ func domainInvariantFindings(ctx context.Context, tx *sql.Tx, q *db.Queries) ([]
 	if err != nil {
 		return nil, fmt.Errorf("centralstore: placement read: %w", err)
 	}
+	idx := indexPlacements(all)
 	for _, r := range all {
-		if want := desiredScope(all, r); r.scope != want {
+		if want := desiredScope(idx, r); r.scope != want {
 			add("scope_mismatch", "placement %s stores sibling scope %q but recomputes to %q", recKey(r), r.scope, want)
 		}
 	}
