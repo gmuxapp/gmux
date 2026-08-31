@@ -324,11 +324,18 @@ describe('projection performance regression (fixture seed=1234)', () => {
     expect(sidebarSessions.value).toBe(a)
     expect(folders.value).toBe(b)
     expect(unreadCount.value).toBe(c)
-    // A one-session mutation swaps the array: exactly one new index.
+    // An array swap with identical row objects is patched incrementally
+    // (reconcile.ts): the previous index is re-keyed onto the new array
+    // rather than rebuilt — still exactly one live index.
     _rawSessions.value = _rawSessions.value.slice()
     const after = familyIndex(sessions.value)
-    expect(after).not.toBe(before)
+    expect(after).toBe(before)
     void [sidebarSessions.value, folders.value, unreadCount.value]
     expect(familyIndex(sessions.value)).toBe(after)
+    // A genuine row replacement (new object, changed family fact) rebuilds.
+    const next = _rawSessions.value.slice()
+    next[0] = { ...next[0], parent_session_id: next[0].parent_session_id ? undefined : next[1]?.id }
+    _rawSessions.value = next
+    expect(familyIndex(sessions.value)).not.toBe(after)
   })
 })

@@ -17,13 +17,16 @@ import type { Session as ProtocolSession } from '@gmux/protocol'
 import { batch, computed, effect, signal, untracked } from '@preact/signals'
 import { buildTerminalOptions, fetchFrontendConfig, type ResolvedKeybind, resolveKeybinds } from './config'
 import {
-  familyAncestors, familyIndex, familyRootId, familyStateOf, isFamilyChild, isProcessSession, promotionAction,
-  type FamilyActivity,
+  createFamilyIndex, 
+  type FamilyActivity, type FamilyIndex,familyAncestors, familyIndex, familyRootId, familyStateOf, isProcessSession, promotionAction,
 } from './family'
-import { isWaitingPresentation, sessionPresentationState, type SessionPresentationState } from './presentation'
-
 import { MOCK_SESSIONS, mockWorld } from './mock-data/index'
+import { isWaitingPresentation, type SessionPresentationState, sessionPresentationState } from './presentation'
 import { buildProjectFolders, discoverProjects, type TemporaryPresentationPlacement } from './projects'
+import {
+  ACTIVITY_FACT_KEYS, diffReplacedRows, factsUnchanged, PLACEMENT_FACT_KEYS,
+  reconcileSessions, SIDEBAR_FACT_KEYS, substituteRows,
+} from './reconcile'
 import { referencePresence, removeHostReferenceItems, removeReferenceItems, type UnresolvedHost, unresolvedReferences } from './references'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
@@ -653,11 +656,7 @@ export const unresolvedHosts = computed<UnresolvedHost[]>(
  *  visible `folders` (filtered by URL params) and the unfiltered folder
  *  set behind `unreadCount` (a global signal that must ignore the
  *  ?project=/?cwd= view filter). */
-function foldersFrom(ss: Session[]): Folder[] {
-  // One family index per session-list identity (WeakMap-cached), shared with
-  // every other projection of the same snapshot: root/membership lookups are
-  // O(1) here instead of a linear scan per session.
-  const index = familyIndex(sessions.value)
+function foldersWith(ss: readonly Session[], index: FamilyIndex): Folder[] {
   const forceVisible = new Set<string>()
   const temporaryPlacements = new Map<string, TemporaryPresentationPlacement>()
   const selectedRoot = familyRootId(selectedId.value, index)
@@ -686,7 +685,7 @@ function foldersFrom(ss: Session[]): Folder[] {
     // navigable in the family drawer but have no independent project row.
     // Resolve edges against the complete snapshot, not this tab-filtered
     // subset. A filtered-out parent must not turn its child into a fake root.
-    ss.filter(s => !index.childIds.has(s.id)),
+    ss.filter(s => !index.childIds.has(s.id)) as Session[],
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
     referencePresence(peers.value),
@@ -694,6 +693,113 @@ function foldersFrom(ss: Session[]): Folder[] {
     temporaryPlacements,
   )
 }
+
+// ── Incremental projection memos (structural sharing; see reconcile.ts) ─────
+//
+// After snapshot reconciliation, the protocol-3 steady state reaching these
+// projections is "same rows, a few object identities replaced". Each heavy
+// projection keeps its last (input, deps, output); when the new input is a
+// replaced-rows-only successor whose replaced rows kept that projection's
+// structure facts, the previous output is patched by object substitution —
+// O(changed + affected slices) — instead of rebuilt. Any structural change
+// (insert/remove/reorder, a fact change, a dep change) falls through to the
+// full rebuild, so output values are always identical to the uncached path
+// (pinned by reconcile-differential.test.ts).
+
+function sameDeps(a: readonly unknown[], b: readonly unknown[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+function substituteFolders(prev: Folder[], replaced: ReadonlyMap<Session, Session>): Folder[] {
+  if (replaced.size === 0) return prev
+  let changed = false
+  const next = prev.map(f => {
+    const swapped = substituteRows(f.sessions, replaced)
+    if (swapped === f.sessions) return f
+    changed = true
+    return { ...f, sessions: swapped as Session[] }
+  })
+  return changed ? next : prev
+}
+
+/** Everything `foldersWith` reads besides the session rows themselves. Any
+ * identity change here disables the fast path for one recompute. */
+function foldersDeps(): readonly unknown[] {
+  return [
+    projects.value, peers.value, _rawWorld.value.peerProjects,
+    localPeerNames.value, projectKeys.value, selectedId.value,
+  ]
+}
+
+function makeFoldersMemo(): (ss: readonly Session[]) => Folder[] {
+  let last: {
+    input: readonly Session[]; all: readonly Session[]
+    deps: readonly unknown[]; out: Folder[]
+  } | null = null
+  return (ss: readonly Session[]): Folder[] => {
+    const all = sessions.value
+    const deps = foldersDeps()
+    if (last && sameDeps(last.deps, deps)) {
+      // Folder structure reads the *whole* snapshot (family edges, roots of
+      // filtered-out children), so the facts must hold for every replaced
+      // row in `sessions`, not just those in `ss`. The `ss` diff proves
+      // membership/order of the input list is unchanged; substitution then
+      // carries the replaced row objects into the previous folder slices.
+      const dAll = diffReplacedRows(last.all, all)
+      if (dAll && factsUnchanged(dAll, PLACEMENT_FACT_KEYS) && diffReplacedRows(last.input, ss)) {
+        const out = substituteFolders(last.out, dAll)
+        last = { input: ss, all, deps, out }
+        return out
+      }
+    }
+    const out = foldersWith(ss, familyIndex(all))
+    last = { input: ss, all, deps, out }
+    return out
+  }
+}
+
+// One memo per call site: `folders` (sidebar-scoped input) and `unreadCount`
+// (filter-scoped input) see different lists and must not evict each other.
+const sidebarFoldersMemo = makeFoldersMemo()
+const unreadFoldersMemo = makeFoldersMemo()
+
+function substituteBuckets(prev: DayBucket[], replaced: ReadonlyMap<Session, Session>): DayBucket[] {
+  if (replaced.size === 0) return prev
+  let changed = false
+  const next = prev.map(b => {
+    const swapped = substituteRows(b.sessions, replaced)
+    if (swapped === b.sessions) return b
+    changed = true
+    return { ...b, sessions: swapped as Session[] }
+  })
+  return changed ? next : prev
+}
+
+/** Memoized `partitionByDay`: bucket keys and in-bucket order derive only
+ * from the activity timestamps, so replaced rows that kept them slot into
+ * the previous buckets by substitution. Day-scoped: crossing local midnight
+ * invalidates (labels and bucket keys move). */
+function makePartitionMemo(): (input: readonly Session[], now: number) => DayBucket[] {
+  let last: { input: readonly Session[]; todayMid: number; out: DayBucket[] } | null = null
+  return (input: readonly Session[], now: number): DayBucket[] => {
+    const todayMid = localMidnight(now)
+    if (last && last.todayMid === todayMid) {
+      const d = diffReplacedRows(last.input, input)
+      if (d && factsUnchanged(d, ACTIVITY_FACT_KEYS)) {
+        const out = substituteBuckets(last.out, d)
+        last = { input, todayMid, out }
+        return out
+      }
+    }
+    const out = partitionByDay(input, now)
+    last = { input, todayMid, out }
+    return out
+  }
+}
+
+const sidebarActivityMemo = makePartitionMemo()
+const homePartitionMemo = makePartitionMemo()
 
 /** The single source of truth for which sessions are eligible for the
  *  sidebar. Projects places this list into configured folders; Activity
@@ -711,10 +817,9 @@ function foldersFrom(ss: Session[]): Folder[] {
  *  Distinct from routing: `view` / `selectedId` resolve against the full
  *  `sessions` (filter-blind), so a filter never evicts the open
  *  terminal; rule 4 only ever *adds* the selected session back here. */
-export const sidebarSessions = computed(() => {
+function sidebarSessionsWith(index: FamilyIndex): Session[] {
   const sel = selectedId.value
   const onlyAlive = aliveOnly.value
-  const index = familyIndex(sessions.value)
   const base = filteredSessions.value.filter(s =>
     s.id === sel || (onlyAlive ? s.alive : s.alive || s.resumable),
   )
@@ -740,9 +845,37 @@ export const sidebarSessions = computed(() => {
     if (rootId) push(index.byId.get(rootId))
   }
   return out
+}
+
+let lastSidebarMemo: {
+  filtered: readonly Session[]; all: readonly Session[]
+  sel: string | null; onlyAlive: boolean; out: Session[]
+} | null = null
+
+export const sidebarSessions = computed(() => {
+  const sel = selectedId.value
+  const onlyAlive = aliveOnly.value
+  const all = sessions.value
+  const filtered = filteredSessions.value
+  const m = lastSidebarMemo
+  if (m && m.sel === sel && m.onlyAlive === onlyAlive) {
+    // Fast path: same rows with some identities replaced, membership facts
+    // (liveness, resumability, family edges) intact, filter membership
+    // unchanged (the `filtered` diff proves it). Output is the previous
+    // list with the replaced objects substituted.
+    const dAll = diffReplacedRows(m.all, all)
+    if (dAll && factsUnchanged(dAll, SIDEBAR_FACT_KEYS) && diffReplacedRows(m.filtered, filtered)) {
+      const out = substituteRows(m.out, dAll) as Session[]
+      lastSidebarMemo = { filtered, all, sel, onlyAlive, out }
+      return out
+    }
+  }
+  const out = sidebarSessionsWith(familyIndex(all))
+  lastSidebarMemo = { filtered, all, sel, onlyAlive, out }
+  return out
 })
 
-export const folders = computed(() => foldersFrom(sidebarSessions.value))
+export const folders = computed(() => sidebarFoldersMemo(sidebarSessions.value))
 
 /** Sidebar selection follows a nested session to its presentation root row. */
 export const familySelectedId = computed(() => familyRootId(selectedId.value, sessions.value))
@@ -758,7 +891,7 @@ export const familySelectedId = computed(() => familyRootId(selectedId.value, se
  *  Day-groups the full set (alive + dead/resumable, any age), so the
  *  Activity view lists exactly what Projects does. */
 export const sidebarActivity = computed(() =>
-  partitionByDay(folders.value.flatMap(folder => folder.sessions), Date.now()),
+  sidebarActivityMemo(folders.value.flatMap(folder => folder.sessions), Date.now()),
 )
 
 // ── Sidebar view mode ───────────────────────────────────────────────────────
@@ -944,9 +1077,8 @@ export const backgroundActivity = computed((): DotState => {
  * or host shouldn't blink for sessions outside its scope (another tab
  * or a notification covers those). Within the scope it's built from
  * folder-bucketed sessions so unstamped strays can't ping. */
-export const unreadCount = computed(() => {
+function unreadCountWith(index: FamilyIndex, folderList: Folder[]): number {
   const sel = selectedId.value
-  const index = familyIndex(sessions.value)
   const childUnread = new Map<string, number>()
   for (const s of sessions.value) {
     // Process output remains unread for explicit consumption, but command
@@ -956,7 +1088,7 @@ export const unreadCount = computed(() => {
     if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
   }
   let n = 0
-  for (const f of foldersFrom(filteredSessions.value)) {
+  for (const f of folderList) {
     for (const s of f.sessions) {
       // A standalone process owns its own visible row, so its unread output
       // still badges normally. Only agent-owned process children disappear
@@ -966,7 +1098,10 @@ export const unreadCount = computed(() => {
     }
   }
   return n
-})
+}
+
+export const unreadCount = computed(() =>
+  unreadCountWith(familyIndex(sessions.value), unreadFoldersMemo(filteredSessions.value)))
 
 /** Aggregate precedence intentionally differs from a session's own semantic
  * derivation only for waiting-error attention: it outranks an active sibling
@@ -1133,14 +1268,24 @@ function localMidnight(t: number): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
+// Per-row memo: Date.parse dominated the partition sorts (O(N log N) parses
+// per recompute). Structural sharing keeps row identities stable across
+// snapshots, so the WeakMap hits for every unchanged row — and a replaced
+// row is a new object, so a moved timestamp can never read a stale entry.
+const outputTimeCache = new WeakMap<Session, number>()
+
 function outputTimeMs(s: Session): number {
+  const hit = outputTimeCache.get(s)
+  if (hit !== undefined) return hit
   // last_output_at is canonical when present (daemon-stamped when the
   // session last produced unseen output). For sessions that never went
   // unread, fall back to created_at so they sort relative to peers
   // rather than landing at the epoch.
   const stamp = s.last_output_at ?? s.created_at
   const t = Date.parse(stamp)
-  return Number.isFinite(t) ? t : 0
+  const v = Number.isFinite(t) ? t : 0
+  outputTimeCache.set(s, v)
+  return v
 }
 
 function byActivityDesc(a: Session, b: Session): number {
@@ -1222,14 +1367,18 @@ export function partitionByDay(all: readonly Session[], now: number): DayBucket[
   return out
 }
 
-export const homePartition = computed(() =>
+export const homePartition = computed(() => {
   // Home is its own curated surface: scoped to the tab's `?filter=` but
   // independent of the sidebar's list rules (alive-only, selected-pin).
   // Alive only — dead/resumable corpses live in the sidebar's Activity
   // view, not the dashboard. Home renders only the non-`dated` buckets
   // (see home.tsx), keeping it a recent-activity view.
-  partitionByDay(filteredSessions.value.filter(s => s.alive && !isFamilyChild(s, sessions.value)), Date.now()),
-)
+  const index = familyIndex(sessions.value)
+  return homePartitionMemo(
+    filteredSessions.value.filter(s => s.alive && !index.childIds.has(s.id)),
+    Date.now(),
+  )
+})
 
 // ── Mutators ────────────────────────────────────────────────────────────────
 
@@ -1436,6 +1585,34 @@ export function readySessionsBootstrap(epoch: number): boolean {
   return true
 }
 
+/**
+ * Non-incremental reference projections for the differential tests: the same
+ * pure building blocks the computeds use, but with a freshly built family
+ * index and no memo fast paths. Output values (not identities) from the
+ * production computeds must always deep-equal these.
+ */
+export function _uncachedProjections(now = Date.now()): {
+  sidebarSessions: Session[]
+  folders: Folder[]
+  unreadCount: number
+  sidebarActivity: DayBucket[]
+  homePartition: DayBucket[]
+} {
+  const index = createFamilyIndex(sessions.value)
+  const sidebar = sidebarSessionsWith(index)
+  const folderList = foldersWith(sidebar, index)
+  return {
+    sidebarSessions: sidebar,
+    folders: folderList,
+    unreadCount: unreadCountWith(index, foldersWith(filteredSessions.value, index)),
+    sidebarActivity: partitionByDay(folderList.flatMap(f => f.sessions), now),
+    homePartition: partitionByDay(
+      filteredSessions.value.filter(s => s.alive && !index.childIds.has(s.id)),
+      now,
+    ),
+  }
+}
+
 export function discardSessionsBootstrap(): void {
   sessionsBootstrap = null
 }
@@ -1447,6 +1624,13 @@ export function resetSessionsTransport(): void {
 }
 
 export function applySessionsSnapshot(list: Session[]): void {
+  // Structural sharing (reconcile.ts): rows are re-encoded server-side every
+  // snapshot, so reuse the previous row *objects* wherever the incoming row
+  // is deep-equal — and the previous array identity when nothing changed at
+  // all. Semantics are still wholesale replacement (the reconciled array is
+  // deep-equal to `list`); this only lets projections use identity as a
+  // provably-unchanged test and patch O(changed) instead of rebuilding O(N).
+  list = reconcileSessions(_rawSessions.peek(), list)
   // Detect newly-arrived IDs vs the previous snapshot so a pending launch
   // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
   // soon as the daemon publishes it. Computed before we commit the new

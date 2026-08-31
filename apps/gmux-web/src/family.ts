@@ -1,7 +1,8 @@
+import { sessionPresentationState } from './presentation'
 import { sidebarProjectForSession } from './projects'
+import { diffReplacedRows, FAMILY_FACT_KEYS, factsUnchanged } from './reconcile'
 // Type-only: erased at emit, so `family.ts` stays runtime-free of the store.
 import type { DotState } from './store'
-import { sessionPresentationState } from './presentation'
 import type { ProjectItem, Session } from './types'
 
 /** Resolve one potential task-family edge without trusting the rest of the
@@ -80,13 +81,58 @@ export function createFamilyIndex(sessions: readonly Session[]): FamilyIndex {
   return { byId, childIds, childrenByParent, rootById }
 }
 
+/** The most recently indexed snapshot, kept for incremental patching: the
+ * protocol-3 steady state is a full-list replacement whose rows are mostly
+ * the *same objects* after snapshot reconciliation (see reconcile.ts), so the
+ * previous index can usually be patched in O(changed + N identity checks)
+ * instead of re-walking every ancestry. */
+let lastIndexed: { sessions: readonly Session[]; index: FamilyIndex } | null = null
+
+/** Patch `index` (built for `prev`) in place so it describes `next`, or
+ * return null when `next` is not a replaced-rows-only successor of `prev`
+ * with all family facts (parentage, agent-ness, recency ordering keys)
+ * preserved. Mutation is safe because the caller re-keys the cache: the
+ * entry for `prev` is deleted, so a later `familyIndex(prev)` rebuilds
+ * rather than seeing the patched maps. */
+function patchFamilyIndex(
+  prev: readonly Session[],
+  index: FamilyIndex,
+  next: readonly Session[],
+): FamilyIndex | null {
+  const replaced = diffReplacedRows(prev, next)
+  if (!replaced || !factsUnchanged(replaced, FAMILY_FACT_KEYS)) return null
+  if (replaced.size === 0) return index
+  const byId = index.byId as Map<string, Session>
+  for (const n of replaced.values()) byId.set(n.id, n)
+  // Root pointers and child lists hold row objects; swap replaced ones.
+  // Topology and sort order are unchanged (family facts held).
+  const rootById = index.rootById as Map<string, Session>
+  for (const [id, root] of rootById) {
+    const n = replaced.get(root)
+    if (n) rootById.set(id, n)
+  }
+  for (const children of (index.childrenByParent as Map<string, Session[]>).values()) {
+    for (let i = 0; i < children.length; i++) {
+      const n = replaced.get(children[i])
+      if (n) children[i] = n
+    }
+  }
+  return index
+}
+
 /** Return the projection index cached for this exact session-list snapshot. */
 export function familyIndex(sessions: readonly Session[]): FamilyIndex {
   const cached = familyIndexCache.get(sessions)
   if (cached) return cached
-  const created = createFamilyIndex(sessions)
-  familyIndexCache.set(sessions, created)
-  return created
+  let index: FamilyIndex | null = null
+  if (lastIndexed && lastIndexed.sessions !== sessions) {
+    index = patchFamilyIndex(lastIndexed.sessions, lastIndexed.index, sessions)
+    if (index) familyIndexCache.delete(lastIndexed.sessions)
+  }
+  index ??= createFamilyIndex(sessions)
+  familyIndexCache.set(sessions, index)
+  lastIndexed = { sessions, index }
+  return index
 }
 
 type FamilySource = readonly Session[] | FamilyIndex
