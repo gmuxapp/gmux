@@ -44,6 +44,68 @@ export const TERM_THEME = DEFAULT_THEME_COLORS
 
 // ── Utilities ──
 
+/** Frames of immediate re-measurement after a null first-claim measurement. */
+const CLAIM_RETRY_FRAME_BUDGET = 20
+/** Hard deadline after which a stuck claim falls back to checkpoint geometry. */
+const CLAIM_RETRY_FALLBACK_MS = 4000
+
+/**
+ * Waits for a viewport-claim measurement to become available after the first
+ * attempt returned null (e.g. xterm's renderer dimensions transiently
+ * undefined). Bounded, no busy loop: a short requestAnimationFrame chain
+ * covers transient renderer states, each ResizeObserver notification on the
+ * shell earns one more attempt, and a hard deadline fires onGiveUp so the
+ * attach can never remain in 'claiming' forever. The returned cancel function
+ * must be called on socket replacement, session switch, or unmount.
+ */
+function watchForClaimMeasurement(opts: {
+  shell: HTMLElement | null
+  measure: () => TerminalSize | null
+  onMeasured: (size: TerminalSize) => void
+  onGiveUp: () => void
+}): () => void {
+  let done = false
+  let raf: number | null = null
+  let framesLeft = CLAIM_RETRY_FRAME_BUDGET
+  let observer: ResizeObserver | null = null
+  const cleanup = () => {
+    done = true
+    observer?.disconnect()
+    observer = null
+    clearTimeout(deadline)
+    if (raf !== null) cancelAnimationFrame(raf)
+    raf = null
+  }
+  const deadline = setTimeout(() => {
+    if (done) return
+    cleanup()
+    opts.onGiveUp()
+  }, CLAIM_RETRY_FALLBACK_MS)
+  const attempt = () => {
+    raf = null
+    if (done) return
+    const size = opts.measure()
+    if (size) {
+      cleanup()
+      opts.onMeasured(size)
+      return
+    }
+    if (framesLeft > 0) {
+      framesLeft--
+      raf = requestAnimationFrame(attempt)
+    }
+  }
+  if (typeof ResizeObserver !== 'undefined' && opts.shell) {
+    observer = new ResizeObserver(() => {
+      // A real layout change earns one fresh measurement attempt.
+      if (!done && raf === null) raf = requestAnimationFrame(attempt)
+    })
+    observer.observe(opts.shell)
+  }
+  raf = requestAnimationFrame(attempt)
+  return cleanup
+}
+
 /**
  * Calculate terminal cols/rows that fit within a given element.
  *
@@ -918,6 +980,9 @@ export function TerminalView({
     let isFirstConnect = true
     let attempt = 0
     let intentionalClose = false
+    // Pending retry for a first claim whose measurement returned null.
+    // Cancelled on socket replacement, reconnect, session switch, unmount.
+    let cancelClaimRetry: (() => void) | null = null
     const epoch = termEpochRef.current + 1
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
@@ -947,6 +1012,9 @@ export function TerminalView({
       // A dropped socket can strand an unmatched BSU. Preserve the user's
       // mode, but clear parser/transient fences before each replay attempt.
       scrollAnchorRef.current?.reset()
+
+      cancelClaimRetry?.()
+      cancelClaimRetry = null
 
       if (connectionRef.current) {
         connectionRef.current.ws.close()
@@ -993,28 +1061,68 @@ export function TerminalView({
           }
 
           isFirstConnect = false
-          const claimSize = announceViewportClaim()
-          if (!claimSize) return
-          barrierClaimResizeRef.current = claimSize
-          const onClaimResized = () => {
-            if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
-            attachPhase = 'claimed'
-            inputClaimedRef.current = true
-            claimFallbackTimer = setTimeout(() => {
+          const proceedWithClaim = (claimSize: TerminalSize) => {
+            barrierClaimResizeRef.current = claimSize
+            const onClaimResized = () => {
               if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
-              claimFallbackTimer = null
-              setTermLoading(false)
-            }, 500)
-            // Include bytes that arrived while the resize barrier was waiting
-            // on the addon's busy fence.
-            const heldWrites = postClaimWrites.splice(0)
-            for (let i = 0; i < heldWrites.length; i++) {
-              queueData(heldWrites[i], i === heldWrites.length - 1 ? finishPostClaimWrite : undefined)
+              attachPhase = 'claimed'
+              inputClaimedRef.current = true
+              claimFallbackTimer = setTimeout(() => {
+                if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+                claimFallbackTimer = null
+                setTermLoading(false)
+              }, 500)
+              // Include bytes that arrived while the resize barrier was waiting
+              // on the addon's busy fence.
+              const heldWrites = postClaimWrites.splice(0)
+              for (let i = 0; i < heldWrites.length; i++) {
+                queueData(heldWrites[i], i === heldWrites.length - 1 ? finishPostClaimWrite : undefined)
+              }
             }
+            // Claim geometry is a second FIFO barrier. Held live bytes cannot
+            // parse at checkpoint geometry, and input opens only when it applies.
+            termIoRef.current?.enqueueResizeThenMany(claimSize, [], epoch, undefined, onClaimResized)
           }
-          // Claim geometry is a second FIFO barrier. Held live bytes cannot
-          // parse at checkpoint geometry, and input opens only when it applies.
-          termIoRef.current?.enqueueResizeThenMany(claimSize, [], epoch, undefined, onClaimResized)
+          const claimSize = announceViewportClaim()
+          if (claimSize) {
+            proceedWithClaim(claimSize)
+            return
+          }
+          // Measurement unavailable (renderer dimensions transiently
+          // undefined). Never park the attach in 'claiming' forever: retry on
+          // real layout/renderer lifecycle, and after a hard deadline fall
+          // back to flowing at checkpoint geometry — the reconnect path
+          // already proves that is safe — without ever sending a made-up
+          // size to the runner.
+          cancelClaimRetry?.()
+          cancelClaimRetry = watchForClaimMeasurement({
+            shell: shellRef.current,
+            measure: announceViewportClaim,
+            onMeasured: (size) => {
+              cancelClaimRetry = null
+              if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+              proceedWithClaim(size)
+            },
+            onGiveUp: () => {
+              cancelClaimRetry = null
+              if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+              // Deterministic fallback: enter 'claimed' at the checkpoint
+              // geometry already applied by the replay barrier and release
+              // held output and input. No resize is sent: the runner keeps
+              // its size until a real measurement exists (the pill lets the
+              // user reclaim, and any later resize path re-measures).
+              attachPhase = 'claimed'
+              inputClaimedRef.current = true
+              const heldWrites = postClaimWrites.splice(0)
+              if (heldWrites.length === 0) {
+                setTermLoading(false)
+                return
+              }
+              for (let i = 0; i < heldWrites.length; i++) {
+                queueData(heldWrites[i], i === heldWrites.length - 1 ? finishPostClaimWrite : undefined)
+              }
+            },
+          })
         }
         if (checkpointSize) {
           // Every replay gets an ordered local geometry barrier. Reconnects
@@ -1134,6 +1242,8 @@ export function TerminalView({
         if (!isCurrent) return
         if (claimFallbackTimer !== null) clearTimeout(claimFallbackTimer)
         claimFallbackTimer = null
+        cancelClaimRetry?.()
+        cancelClaimRetry = null
         resetResizeEchoGate()
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
@@ -1152,6 +1262,8 @@ export function TerminalView({
 
     return () => {
       intentionalClose = true
+      cancelClaimRetry?.()
+      cancelClaimRetry = null
       inputClaimedRef.current = false
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
