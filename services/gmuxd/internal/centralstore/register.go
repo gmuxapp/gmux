@@ -421,13 +421,13 @@ func allocateSessionSlug(ctx context.Context, q *db.Queries, current *Session, p
 	if proposed == previousBase && current.Slug != "" {
 		return nil
 	}
-	rows, err := q.ListSessions(ctx)
+	rows, err := q.ListAdapterSlugs(ctx, current.Adapter)
 	if err != nil {
 		return err
 	}
 	occupied := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
-		if row.ID != string(current.ID) && row.Adapter == current.Adapter && row.Slug.Valid && row.Slug.String != "" {
+		if row.ID != string(current.ID) {
 			occupied[row.Slug.String] = struct{}{}
 		}
 	}

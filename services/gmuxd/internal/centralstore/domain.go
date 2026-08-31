@@ -1160,7 +1160,20 @@ func recKey(r *placementRec) string {
 	}
 	return "p:" + escape(r.peer) + ":" + escape(r.session)
 }
-func desiredScope(all []*placementRec, r *placementRec) string {
+// placementKeyIndex answers "is recKey k placed in project p" in O(1). Built
+// once per pass so desiredScope stays O(1) per record instead of scanning
+// every placement (O(P²) per rewrite once children exist).
+type placementKeyIndex map[scopeKey]struct{}
+
+func indexPlacements(all []*placementRec) placementKeyIndex {
+	idx := make(placementKeyIndex, len(all))
+	for _, p := range all {
+		idx[scopeKey{p.project, recKey(p)}] = struct{}{}
+	}
+	return idx
+}
+
+func desiredScope(idx placementKeyIndex, r *placementRec) string {
 	parentKey := ""
 	if r.local != "" && r.parent != "" {
 		parentKey = "l:" + r.parent
@@ -1170,10 +1183,8 @@ func desiredScope(all []*placementRec, r *placementRec) string {
 	if parentKey == "" {
 		return "r"
 	}
-	for _, p := range all {
-		if p.project == r.project && recKey(p) == parentKey {
-			return "c:" + parentKey
-		}
+	if _, ok := idx[scopeKey{r.project, parentKey}]; ok {
+		return "c:" + parentKey
 	}
 	return "r"
 }
@@ -1194,8 +1205,9 @@ func normalizePlacements(ctx context.Context, q *db.Queries, fault func() error)
 func rewritePlacements(ctx context.Context, q *db.Queries, all []*placementRec, explicit map[scopeKey][]*placementRec, fault func() error) (bool, error) {
 	final := map[scopeKey][]*placementRec{}
 	affected := map[scopeKey]bool{}
+	idx := indexPlacements(all)
 	for _, r := range all {
-		newScope := desiredScope(all, r)
+		newScope := desiredScope(idx, r)
 		old := scopeKey{r.oldProject, r.oldScope}
 		next := scopeKey{r.project, newScope}
 		if r.isNew || old != next {
@@ -1455,7 +1467,7 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 			return MutationResult{}, err
 		}
 	}
-	scope := desiredScope(all, target)
+	scope := desiredScope(indexPlacements(all), target)
 	if !target.isNew && oldProject == target.project && oldParent == target.parent && target.oldScope == scope {
 		if err = tx.Commit(); err != nil {
 			return MutationResult{}, err
@@ -1512,19 +1524,14 @@ func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReor
 		if err != nil {
 			return MutationResult{}, err
 		}
+		idx := indexPlacements(all)
 		scope := "r"
 		if parent.Subject != nil {
 			if err = validateSubject(*parent.Subject); err != nil {
 				return MutationResult{}, err
 			}
 			parentKey := subjectKey(*parent.Subject)
-			found := false
-			for _, r := range all {
-				if r.project == int64(project) && recKey(r) == parentKey {
-					found = true
-					break
-				}
-			}
+			_, found := idx[scopeKey{int64(project), parentKey}]
 			if !found {
 				return MutationResult{}, errors.New("centralstore: reorder parent is not placed in project")
 			}
@@ -1534,7 +1541,7 @@ func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReor
 		by := map[string]*placementRec{}
 		var current []*placementRec
 		for _, r := range all {
-			if r.project == k.project && desiredScope(all, r) == scope {
+			if r.project == k.project && desiredScope(idx, r) == scope {
 				by[recKey(r)] = r
 				current = append(current, r)
 			}

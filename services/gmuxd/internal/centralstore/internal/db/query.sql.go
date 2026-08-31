@@ -559,6 +559,42 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 	return i, err
 }
 
+const listAdapterSlugs = `-- name: ListAdapterSlugs :many
+SELECT id, slug FROM local_sessions
+WHERE adapter = ? AND slug IS NOT NULL AND slug <> ''
+`
+
+type ListAdapterSlugsRow struct {
+	ID   string
+	Slug sql.NullString
+}
+
+// Slug-occupancy probe for allocation. The predicate matches the partial
+// unique index local_sessions_adapter_slug_unique_idx, so this is an index
+// range scan instead of a full-table hydration.
+func (q *Queries) ListAdapterSlugs(ctx context.Context, adapter string) ([]ListAdapterSlugsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAdapterSlugs, adapter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAdapterSlugsRow
+	for rows.Next() {
+		var i ListAdapterSlugsRow
+		if err := rows.Scan(&i.ID, &i.Slug); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listManualPeers = `-- name: ListManualPeers :many
 SELECT id, row_version, name, url, token, node_id, created_at_ms, updated_at_ms FROM manual_peers ORDER BY id
 `

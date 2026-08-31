@@ -688,6 +688,40 @@ func TestSessionSlugAllocationAndReplayIdempotence(t *testing.T) {
 	}
 }
 
+// Slug uniqueness is scoped per adapter (partial unique index on
+// (adapter, slug)); the occupancy probe must not treat another adapter's
+// slug as taken, and must still see every occupied slug on its own adapter.
+func TestSessionSlugAllocationAdapterScoped(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	base := "same-name"
+
+	a := registration("a", "pi", "/work", true, 10)
+	a.Facts.Slug = &base
+	gotA, _, err := s.RegisterRunner(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := registration("b", "claude", "/work", true, 20)
+	b.Facts.Slug = &base
+	gotB, _, err := s.RegisterRunner(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotA.Slug != base || gotB.Slug != base {
+		t.Fatalf("cross-adapter slugs must not collide: a=%q b=%q", gotA.Slug, gotB.Slug)
+	}
+	c := registration("c", "pi", "/work", true, 30)
+	c.Facts.Slug = &base
+	gotC, _, err := s.RegisterRunner(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotC.Slug != base+"-2" {
+		t.Fatalf("same-adapter collision must suffix: got %q", gotC.Slug)
+	}
+}
+
 func TestConcurrentSessionSlugAllocation(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
