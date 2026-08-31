@@ -39,7 +39,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
@@ -902,39 +901,42 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			initial, ch, cancel := fanout.Subscribe()
 			defer cancel()
 			isLocalPeer := func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }
-			var sessionEpoch uint64
-			sendSessions := func(payload *wire.SessionsPayload) error {
-				if payload == nil {
+			// Encoding is shared across subscribers: every broadcast carries one
+			// memo, and the first subscriber to reach it encodes for its filter
+			// class × protocol; the rest reuse the bytes. Epochs are allocated
+			// by the fanout under its mutex, so they are strictly increasing in
+			// each connection's delivery order.
+			sendSessions := func(memo *sessionEncodeMemo) error {
+				if memo == nil {
 					return nil
 				}
-				if asPeer {
-					filtered := payload.FilterOwned(isLocalPeer)
-					payload = &filtered
-				}
 				if !semanticSessions {
-					return sendSSEFrame(rc, w, "snapshot.sessions", payload)
+					data, encodeErr := memo.Proto2(asPeer, isLocalPeer)
+					if encodeErr != nil {
+						return encodeErr
+					}
+					return sendSSEBytesFrame(rc, w, "snapshot.sessions", data)
 				}
-				sessionEpoch++
-				events, encodeErr := sessionstream.Encode(sessionEpoch, payload.Sessions, func(s wire.Session) string { return s.ID })
+				events, encodeErr := memo.Proto3(asPeer, isLocalPeer)
 				if encodeErr != nil {
 					return encodeErr
 				}
 				return sendSSETransaction(r.Context(), rc, w, events)
 			}
-			if err := sendSessions(initial.Sessions); err != nil {
+			if err := sendSessions(initial.SessionsEncode); err != nil {
 				return
 			}
-			if !asPeer && initial.World != nil {
+			if !asPeer && initial.Frames.World != nil {
 				// Same staleness as /v1/health: the cached world frame's
 				// health counts predate any liveness-only batches. Legacy
 				// composed the initial snapshot at subscribe time; refresh
 				// the counts (on the fanout's private copy) to match.
-				if counts, ok := freshHealthCounts(initial); ok && initial.World.Health != nil {
-					h := *initial.World.Health
+				if counts, ok := freshHealthCounts(initial.Frames); ok && initial.Frames.World.Health != nil {
+					h := *initial.Frames.World.Health
 					h.Sessions = counts
-					initial.World.Health = &h
+					initial.Frames.World.Health = &h
 				}
-				if err := sendSSEFrame(rc, w, "snapshot.world", initial.World); err != nil {
+				if err := sendSSEFrame(rc, w, "snapshot.world", initial.Frames.World); err != nil {
 					return
 				}
 			}
@@ -961,7 +963,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						}
 						continue
 					}
-					if err := sendSessions(msg.Frames.Sessions); err != nil {
+					if err := sendSessions(msg.SessionsEncode); err != nil {
 						return
 					}
 					if asPeer {
