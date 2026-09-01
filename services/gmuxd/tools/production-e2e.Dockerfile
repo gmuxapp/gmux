@@ -1,4 +1,5 @@
-FROM golang:1.26-bookworm
+ARG GO_VERSION
+FROM golang:${GO_VERSION}-bookworm
 WORKDIR /src
 COPY go.work go.work.sum ./
 COPY packages ./packages
