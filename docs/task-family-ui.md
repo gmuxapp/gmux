@@ -161,22 +161,26 @@ task history/type view, not an attention queue.
 
 ## Attention and consumption
 
-Unread is independent of durable error outcome: every completed agent turn or
-process command records unread until a consumer reads or acts on that session.
+Unread is independent of durable error outcome. Every completed agent turn
+records unread until a consumer reads or acts on that session. Process commands
+normally do the same, with one supervision exception: a successful process-child
+exit is durably auto-acknowledged when its current direct parent has a live local
+runner. The completion commit records the child as read, so suppression is not
+merely a notification-delivery decision; family roll-ups and later readers also
+observe no unread result.
+
+The exception is deliberately strict and one hop. Semantic agent children,
+failed or interrupted processes, and children whose current direct parent is
+dead, missing, or remote retain unread. A promoted child has no parent and also
+retains unread. The coordinator decides from the durable parent edge and local
+runner registry at completion; concurrent reparenting forces it to re-read and
+retry. This is an instantaneous, one-shot supervision policy: a parent that
+dies just after the child exits does not restore unread, and a parent that
+becomes live later does not retroactively clear it.
+
 Reading clears unread only. An acknowledged inactive error has no presentation
 state; an active error remains a hollow red current-status ring and is not
 family attention.
-
-Notification delivery is suppressed only when the session's current direct
-parent is active when the completion outcome is published. The publisher
-re-reads the session after the completion commit, so a reparent that commits in
-that narrow window can be the parent it observes. A parent-edge change is
-observed and the latch reconsidered on the session's next outcome; promotion
-removes the suppressor once such an outcome arrives. A missing parent fails safe
-as inactive, so the notification is delivered. Agent activity is semantic turn
-activity; terminal activity currently comes from the runner's OSC 133 prompt
-cycle (active command to idle prompt). Suppression is best-effort, one hop, and
-one shot—later parent activity never retro-delivers a suppressed notification.
 
 `gmux wait` (on success), `gmux tail`, `gmux agent logs`, prompts, steering,
 raw sends, and web interaction consume unread. The family panel's bulk
