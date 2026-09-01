@@ -222,11 +222,10 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		defer bounded.Stop()
 	}
 
-	// Conversation discovery reads and parses the complete on-disk history.
-	// Do it only after ownership is settled: autostart contenders that find a
-	// healthy incumbent must yield without paying this multi-second cost.
-	convIndex.Snapshot()
-	log.Printf("conversations: indexed %d conversations", convIndex.Count())
+	// Conversation discovery (convIndex.StartSnapshot below, after the source
+	// watchers start) is deferred until listeners are about to bind: it reads
+	// and parses the complete on-disk history — tens of seconds on large
+	// corpora — and must block neither takeover ordering nor first requests.
 
 	var peerManager *peering.Manager
 	var tsListener *tsauth.Listener
@@ -397,7 +396,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			if launchers == nil {
 				launchers = []peering.LauncherDef{}
 			}
-			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers}
+			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
 			if health.TailscaleURL != "" {
 				data["tailscale_url"] = health.TailscaleURL
 			}
@@ -630,16 +629,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": sessions})
 		})
-		mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", func(w http.ResponseWriter, r *http.Request) {
-			adapterName := r.PathValue("adapter")
-			slug := r.PathValue("slug")
-			info, ok := convIndex.Lookup(adapterName, slug)
-			if !ok {
-				writeError(w, http.StatusNotFound, "not_found", "conversation not found")
-				return
-			}
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"slug": info.Slug, "adapter": info.Adapter, "title": info.Title, "cwd": info.Cwd, "resume_command": info.ResumeCommand, "created": info.Created}})
-		})
+		mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", handleConversationLookup(convIndex))
 		// Read-only, non-reserving preflight for client-minted IDs. Absence is
 		// advisory; POST /v1/register repeats the check under the coordinator's
 		// lifecycle fence to close the race.
@@ -993,6 +983,26 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	})
 
 	boot.StartOwnedTriggers(TriggerConfig{Tick: productionEndpointSchedule(daemonCtx, 30*time.Second), ConversationDeleted: productionConversationDeletionSource(daemonCtx, convIndex), PeerSessionsChanged: nil, PeerWorldChanged: nil, Activity: func(o sessioncoord.Outcome) { fanout.BroadcastActivity(string(o.ID)) }})
+
+	// Conversation discovery runs in the background so the listeners below
+	// bind promptly; on a large corpus the synchronous scan blocked startup
+	// for tens of seconds. Ordering invariants: (a) ownership is settled far
+	// above (bootstrapOwnership), so autostart contenders that yield to a
+	// healthy incumbent never pay this cost (#460/#461 unchanged); (b) the
+	// source watchers are already running (StartOwnedTriggers above), so a
+	// conversation created or changed during the scan is observed rather than
+	// lost — strictly narrower than the old snapshot-then-watch gap. Sessions
+	// serve immediately from centralstore (titles stay runner-reported
+	// last-known-good, #508 — this index never writes the store) and gain
+	// resume commands progressively: each adapter completion re-marks the
+	// composer dirty so subscribers see the enrichment without reconnecting.
+	convIndexStarted := time.Now()
+	convIndex.StartSnapshot(daemonCtx, conversations.DefaultSnapshotWorkers, func(string) {
+		boot.Composer.MarkDirty(true, false)
+	}, func() {
+		log.Printf("conversations: indexed %d conversations in %s", convIndex.Count(), time.Since(convIndexStarted).Round(time.Millisecond))
+		boot.Composer.MarkDirty(true, false)
+	})
 
 	authedHandler := netauth.Middleware(authToken, commonMux)
 	sock := paths.SocketPath()

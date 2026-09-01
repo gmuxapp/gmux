@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -48,6 +49,17 @@ type Index struct {
 	// conversation source is indexing the ref. Rendering the session list is
 	// a hot read path and must not re-read every dead conversation transcript.
 	resumeByRef map[string][]string
+	// removeGen counts Remove/RemoveByRef events per (adapter, ref). Scan
+	// snapshots it before its unlocked DescribeConversation and commits only
+	// if it is unchanged, so a watcher-observed deletion always beats an
+	// in-flight scan of the same ref — otherwise the scan's late Upsert would
+	// resurrect the deleted conversation until restart (zombie). The map only
+	// grows on removal events (manual rm, rotation), which are rare.
+	removeGen map[string]uint64
+	// snapshotDone flips to true once the initial full snapshot of every
+	// adapter ConversationSource has finished (Snapshot or StartSnapshot).
+	// Until then, a lookup miss means "not indexed yet", not "absent".
+	snapshotDone atomic.Bool
 }
 
 // New creates an empty index.
@@ -56,6 +68,7 @@ func New() *Index {
 		byKey:            make(map[string]Info),
 		byConversationID: make(map[string]string),
 		resumeByRef:      make(map[string][]string),
+		removeGen:        make(map[string]uint64),
 	}
 }
 
@@ -72,19 +85,14 @@ func refKey(adapterName, ref string) string {
 }
 
 // LookupResumeCommand returns the command derived when the conversation ref
-// was last observed by its source. Snapshot populates this cache synchronously
-// before the daemon starts serving, and source upserts keep it current. The
-// returned slice is a copy so callers cannot mutate index state.
+// was last observed by its source. The startup snapshot populates this cache
+// progressively (it may still be running while the daemon serves — see
+// SnapshotComplete), and source upserts keep it current. The returned slice
+// is a copy so callers cannot mutate index state.
 func (idx *Index) LookupResumeCommand(adapterName, ref string) []string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return append([]string(nil), idx.resumeByRef[refKey(adapterName, ref)]...)
-}
-
-func (idx *Index) setResumeCommand(adapterName, ref string, command []string) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	idx.resumeByRef[refKey(adapterName, ref)] = append([]string(nil), command...)
 }
 
 // Lookup returns the conversation info for an (adapter, key) pair.
@@ -119,7 +127,11 @@ func (idx *Index) LookupByConversationID(adapterName, conversationID string) str
 func (idx *Index) Upsert(info Info) string {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	return idx.upsertLocked(info)
+}
 
+// upsertLocked is Upsert's body; must be called with idx.mu held.
+func (idx *Index) upsertLocked(info Info) string {
 	// Callers that construct Info directly historically supplied only Slug.
 	// Keep that shorthand for titled conversations.
 	if info.Key == "" {
@@ -191,6 +203,18 @@ func (idx *Index) uniqueSlugLocked(adapterName, slug, conversationID string) str
 	}
 }
 
+// SnapshotComplete reports whether the initial full snapshot across all
+// adapter ConversationSources has finished. While false, a lookup miss is
+// ambiguous: the conversation may simply not have been scanned yet, so
+// callers should surface "index still loading" instead of a hard not-found.
+func (idx *Index) SnapshotComplete() bool {
+	return idx.snapshotDone.Load()
+}
+
+func (idx *Index) markSnapshotComplete() {
+	idx.snapshotDone.Store(true)
+}
+
 // Count returns the number of indexed conversations.
 func (idx *Index) Count() int {
 	idx.mu.RLock()
@@ -218,6 +242,11 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		return ""
 	}
 
+	// Snapshot the ref's removal generation before the unlocked describe:
+	// a Remove event that lands while the file is being read/parsed must
+	// win over this scan's results (commitScanLocked re-checks it).
+	gen := idx.refGeneration(a.Name(), ref)
+
 	convInfo, err := desc.DescribeConversation(ref)
 	if err != nil {
 		// Keep stale-good state on transient descriptor failures, matching the
@@ -230,13 +259,12 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 	if resumer, ok := a.(adapter.Resumer); ok {
 		cmd = resumer.ResumeCommand(convInfo)
 	}
-	// Cache before the metadata/index eligibility checks below. The wire
-	// command contract depends only on ConversationDescriber + Resumer, while
-	// the URL index additionally requires cwd/title metadata.
-	idx.setResumeCommand(a.Name(), ref, cmd)
 
-	if convInfo.Cwd == "" {
-		return ""
+	addToIndex := convInfo.Cwd != ""
+	if _, ok := a.(adapter.Resumer); ok && len(cmd) == 0 {
+		// An empty command means the adapter considers this conversation
+		// non-resumable (empty/corrupted), so it stays out of the index.
+		addToIndex = false
 	}
 
 	displaySlug := convInfo.Slug
@@ -245,12 +273,6 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		// Untitled conversations still need an internal unique lookup key
 		// for UUID deep links, but that fallback must not surface as a URL slug.
 		key = adapter.Slugify(convInfo.ID)
-	}
-
-	if _, ok := a.(adapter.Resumer); ok && len(cmd) == 0 {
-		// An empty command means the adapter considers this conversation
-		// non-resumable (empty/corrupted), so it stays out of the index.
-		return ""
 	}
 
 	info := Info{
@@ -265,7 +287,32 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		Created:        convInfo.Created,
 		LastActivity:   convInfo.LastActivity,
 	}
-	return idx.Upsert(info)
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.removeGen[refKey(a.Name(), ref)] != gen {
+		// The ref was removed while this scan was describing it; the removal
+		// is authoritative. Committing anyway would resurrect a deleted
+		// conversation with no future event to clear it.
+		return ""
+	}
+	// Cache the resume command before the index eligibility checks above
+	// decided addToIndex. The wire command contract depends only on
+	// ConversationDescriber + Resumer, while the URL index additionally
+	// requires cwd/title metadata. Both writes happen under one lock hold so
+	// a Remove can never land between them.
+	idx.resumeByRef[refKey(a.Name(), ref)] = append([]string(nil), cmd...)
+	if !addToIndex {
+		return ""
+	}
+	return idx.upsertLocked(info)
+}
+
+// refGeneration returns the current removal generation for (adapter, ref).
+func (idx *Index) refGeneration(adapterName, ref string) uint64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.removeGen[refKey(adapterName, ref)]
 }
 
 // Remove deletes a conversation from the index by conversation ID.
@@ -281,6 +328,7 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 	delete(idx.byConversationID, tk)
 	if info, exists := idx.byKey[indexKey(adapterName, key)]; exists {
 		delete(idx.resumeByRef, refKey(adapterName, info.Ref))
+		idx.removeGen[refKey(adapterName, info.Ref)]++
 	}
 	delete(idx.byKey, indexKey(adapterName, key))
 	return true
@@ -302,6 +350,10 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	// Bump the removal generation even when nothing is indexed yet: the
+	// entry may be mid-scan (describe in flight), and that scan's commit
+	// must observe this removal and drop its result.
+	idx.removeGen[refKey(adapterName, ref)]++
 	delete(idx.resumeByRef, refKey(adapterName, ref))
 	for key, info := range idx.byKey {
 		if info.Adapter != adapterName || info.Ref != ref {
