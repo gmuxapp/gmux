@@ -260,6 +260,10 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			tsFQDN = tsListener.FQDN()
 		}
 		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager)}
+		if boot != nil {
+			r := boot.Coordinator.RecoveryState()
+			h.SessionRecovery = &central.SessionRecovery{Status: r.Status, Expected: r.Expected, Recovered: r.Recovered}
+		}
 		if tsListener != nil {
 			d := tsListener.Diag()
 			h.Tailscale = &d
@@ -327,16 +331,27 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	}
 	peerManager.Start()
 	defer peerManager.Stop()
+	daemonCtx, daemonCancel := context.WithCancel(context.Background())
+	defer daemonCancel()
 
-	endpoints, err := boot.Converge(context.Background())
-	if err != nil {
+	// Recover surviving runners concurrently with route construction. The Unix
+	// listener binds below before this result is awaited, so local health/CLI
+	// consumers can observe partial recovery instead of mistaking it for an
+	// authoritative empty world. The existing convergence deadline remains the
+	// lifecycle boundary; this changes no registration or sweep semantics.
+	type convergenceResult struct {
+		endpoints []string
+		err       error
+	}
+	if err := boot.Coordinator.BeginConvergence(daemonCtx); err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
 	}
-	if err := boot.StartPostConvergence(context.Background(), endpoints); err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-		return 1
-	}
+	convergence := make(chan convergenceResult, 1)
+	go func() {
+		endpoints, err := boot.convergeOpen(daemonCtx)
+		convergence <- convergenceResult{endpoints: endpoints, err: err}
+	}()
 
 	seed, events, cancelNotify, err := boot.SubscribeOutcomes(context.Background())
 	if err != nil {
@@ -345,8 +360,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	}
 	defer cancelNotify()
 	notifier = newCentralNotifyRouter(presenceTable, defaultNotifyConfig())
-	daemonCtx, daemonCancel := context.WithCancel(context.Background())
-	defer daemonCancel()
 	if cfg.Notifications.Ntfy.Enabled {
 		hostname, _ := os.Hostname()
 		ntfyCfg := cfg.Notifications.Ntfy
@@ -397,6 +410,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				launchers = []peering.LauncherDef{}
 			}
 			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
+			if health.SessionRecovery != nil {
+				data["session_recovery"] = health.SessionRecovery
+			}
 			if health.TailscaleURL != "" {
 				data["tailscale_url"] = health.TailscaleURL
 			}
@@ -982,6 +998,36 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		go daemonCancel()
 	})
 
+	// Bind the local control plane while bounded runner convergence is still in
+	// progress. Store-direct GETs are safe here; lifecycle mutations already
+	// honor ErrConvergencePending for rows whose liveness is not yet known.
+	sock := paths.SocketPath()
+	sockLn, err := unixipc.Listen(sock)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		daemonCancel()
+		return 1
+	}
+	defer sockLn.Close()
+	sockSrv := &http.Server{Handler: unixMux}
+	go func() {
+		if err := sockSrv.Serve(sockLn); err != nil && err != http.ErrServerClosed {
+			log.Printf("unix socket listener: %v", err)
+		}
+	}()
+
+	converged := <-convergence
+	if converged.err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", converged.err)
+		daemonCancel()
+		return 1
+	}
+	if err := boot.StartPostConvergence(daemonCtx, converged.endpoints); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		daemonCancel()
+		return 1
+	}
+
 	boot.StartOwnedTriggers(TriggerConfig{Tick: productionEndpointSchedule(daemonCtx, 30*time.Second), ConversationDeleted: productionConversationDeletionSource(daemonCtx, convIndex), PeerSessionsChanged: nil, PeerWorldChanged: nil, Activity: func(o sessioncoord.Outcome) { fanout.BroadcastActivity(string(o.ID)) }})
 
 	// Conversation discovery runs in the background so the listeners below
@@ -1005,20 +1051,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	})
 
 	authedHandler := netauth.Middleware(authToken, commonMux)
-	sock := paths.SocketPath()
-	sockLn, err := unixipc.Listen(sock)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-		daemonCancel()
-		return 1
-	}
-	defer sockLn.Close()
-	sockSrv := &http.Server{Handler: unixMux}
-	go func() {
-		if err := sockSrv.Serve(sockLn); err != nil && err != http.ErrServerClosed {
-			log.Printf("unix socket listener: %v", err)
-		}
-	}()
 	tcpLn, err := net.Listen("tcp", tcpAddr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: tcp listener on %s: %v\n", tcpAddr, err)

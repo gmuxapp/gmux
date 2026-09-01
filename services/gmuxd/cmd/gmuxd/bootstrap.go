@@ -317,6 +317,14 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 	if err := b.Coordinator.BeginConvergence(ctx); err != nil {
 		return nil, err
 	}
+	return b.convergeOpen(ctx)
+}
+
+// convergeOpen completes a window already opened by BeginConvergence. The
+// production server uses this seam to guarantee the expected durable count is
+// known before binding local health, then performs runner I/O concurrently
+// with route construction.
+func (b *Bootstrap) convergeOpen(ctx context.Context) ([]string, error) {
 	endpoints, err := b.cfg.Endpoints.Endpoints(ctx)
 	if err != nil {
 		return nil, err
