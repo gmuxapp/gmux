@@ -2,6 +2,8 @@ module github.com/gmuxapp/gmux/cli/gmux
 
 go 1.26
 
+toolchain go1.26.1
+
 require (
 	github.com/creack/pty v1.1.24
 	golang.org/x/term v0.41.0

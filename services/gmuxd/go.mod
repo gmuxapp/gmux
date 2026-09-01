@@ -2,6 +2,8 @@ module github.com/gmuxapp/gmux/services/gmuxd
 
 go 1.26.1
 
+toolchain go1.26.1
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0

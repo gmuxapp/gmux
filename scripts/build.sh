@@ -7,6 +7,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/bin"
 WEB_EMBED="$ROOT/services/gmuxd/cmd/gmuxd/web"
 
+# A toolchain directive is a preferred minimum under GOTOOLCHAIN=auto; a newer
+# ambient Go can still win. Builds must use the repository's exact toolchain.
+GO_TOOLCHAIN="$("$ROOT/scripts/go-toolchain.sh")"
+export GOTOOLCHAIN="$GO_TOOLCHAIN"
+if ! GO_VERSION="$(go version 2>&1)"; then
+  echo "error: required Go toolchain $GO_TOOLCHAIN is unavailable." >&2
+  echo "The go command could not find or download it:" >&2
+  echo "$GO_VERSION" >&2
+  exit 1
+fi
+echo "→ Using $GO_VERSION"
+
 skip_frontend=false
 for arg in "$@"; do
   case "$arg" in
