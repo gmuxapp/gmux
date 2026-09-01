@@ -38,6 +38,127 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.0 - 2026-09-01
+
+### Highlights
+
+**Task families**
+Sessions now form families: agents, subagents, and process children share a redesigned sidebar and family panel with state filters and bulk mark-read/stop/interrupt actions. `gmux promote` makes a child a structural root, `gmux reparent` moves it, and per-root depth budgets bound recursive swarms ([#453](https://github.com/gmuxapp/gmux/pull/453), [#464](https://github.com/gmuxapp/gmux/pull/464), [#485](https://github.com/gmuxapp/gmux/pull/485), [#492](https://github.com/gmuxapp/gmux/pull/492), [#505](https://github.com/gmuxapp/gmux/pull/505)).
+
+**Attention that behaves**
+Unread attention is separate from durable error outcomes, child completions follow their direct parent, and successful supervised process exits mark themselves read. Less notification archaeology ([#472](https://github.com/gmuxapp/gmux/pull/472), [#499](https://github.com/gmuxapp/gmux/pull/499), [#511](https://github.com/gmuxapp/gmux/pull/511)).
+
+**Terminal fidelity**
+Session switches and reconnects preserve colors, normal/alternate buffers, cursor position, scroll margins, and soft-wrap provenance. Scroll anchoring holds your place during streaming output, and mobile Shift composes with Tab ([#484](https://github.com/gmuxapp/gmux/pull/484), [#500](https://github.com/gmuxapp/gmux/pull/500), [#503](https://github.com/gmuxapp/gmux/pull/503), [#510](https://github.com/gmuxapp/gmux/pull/510)).
+
+**Performance at scale**
+Conversation indexing moves behind daemon availability: in the merged 3,000-conversation benchmark, first health improved from 4.15s to 0.06s. Broadcast bursts are coalesced, and indexed, incremental projections cut a re-encoded one-row update at 10,000 sessions from about 100ms to 24ms ([#512](https://github.com/gmuxapp/gmux/pull/512), [#517](https://github.com/gmuxapp/gmux/pull/517), [#518](https://github.com/gmuxapp/gmux/pull/518), [#519](https://github.com/gmuxapp/gmux/pull/519)).
+
+**Multi-host**
+Peer bootstrap is bounded and atomic; shared cross-tailnet Tailscale hosts connect directly, and omitted remote rows are visible instead of silently disappearing. `/v1/health` now reports `conversation_index` and `session_recovery` progress ([#477](https://github.com/gmuxapp/gmux/pull/477), [#494](https://github.com/gmuxapp/gmux/pull/494), [#513](https://github.com/gmuxapp/gmux/pull/513), [#521](https://github.com/gmuxapp/gmux/pull/521)).
+
+**ntfy notifications (Experimental)**
+The owning daemon can send best-effort ntfy pushes after gmux's notification grace and presence checks, without including prompts, output, commands, paths, or session titles ([#483](https://github.com/gmuxapp/gmux/pull/483)).
+
+### Upgrade notes
+
+- Pending data on launcher stdin (for example, `foo | gmux -- cmd`) now causes a hard usage-error exit before session creation. Managed commands do not inherit launcher stdin; use `</dev/null` when no input is intended or `gmux send` to provide input.
+- First 2.1 startup applies state-store migrations 00002–00005 and keeps an automatic owner-only pre-migration backup. Downgrading after 00005 is lossy because 2.0 cannot restore promoted-family structure; use that backup to roll back.
+- The unversioned protocol-2 session snapshot stream is deprecated and available for 2.1 only. Custom consumers must request `session_stream=3` before protocol 2 is removed in the next release.
+
+### Behavior changes
+
+- Successful supervised process exits are automatically marked read when the direct parent has a live local runner; failures, interruptions, and unsupervised exits remain unread ([#511](https://github.com/gmuxapp/gmux/pull/511)).
+- Family relationships use `gmux promote` and `gmux reparent`; promotion is structural. The Experimental `agent.max_subagents_by_depth` setting defaults to `[-1, 8]`.
+- ntfy notifications require the ntfy app or a push-capable browser. With [`[notifications.ntfy]`](/reference/host-toml/#notificationsntfy), treat topics on public servers as secrets and keep `host.toml` owner-only (`0600` or stricter).
+
+### Improvements
+
+- Source and contributor builds use the exact Go 1.26.1 toolchain ([#520](https://github.com/gmuxapp/gmux/pull/520)).
+
+### Features
+- **(website)** new landing page ([#440](https://github.com/gmuxapp/gmux/pull/440))
+- **(adapter)** render Codex rollout exchanges for agent logs ([#450](https://github.com/gmuxapp/gmux/pull/450))
+- add root-led agent families ([#453](https://github.com/gmuxapp/gmux/pull/453))
+- **(gmuxd)** cache resume commands for session lists ([#458](https://github.com/gmuxapp/gmux/pull/458))
+- **(gmuxd)** skip indexing in autostart contenders ([#461](https://github.com/gmuxapp/gmux/pull/461))
+- **(web)** index family projections once ([#462](https://github.com/gmuxapp/gmux/pull/462))
+- **(family)** processes join the family tree ([#464](https://github.com/gmuxapp/gmux/pull/464))
+- **(web)** family drawer noise reduction and status roll-up ([#467](https://github.com/gmuxapp/gmux/pull/467))
+- add session drive-mode axis and ADR 0033 capability refusals ([#468](https://github.com/gmuxapp/gmux/pull/468))
+- **(web)** family header breadcrumbs and floating panel redesign ([#474](https://github.com/gmuxapp/gmux/pull/474))
+- session promote, demote, and reparent ([#475](https://github.com/gmuxapp/gmux/pull/475))
+- child session attention semantics ([#472](https://github.com/gmuxapp/gmux/pull/472))
+- **(peering)** stream bounded atomic session bootstrap ([#477](https://github.com/gmuxapp/gmux/pull/477))
+- **(web)** surface live family activity under the sidebar root row ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** keep the family member you last viewed under its root row ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** give the member row a fixed glyph column with a branch fallback ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** span the accent bar across the group when the root is selected ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** mark the activity line as a family row with the branch glyph ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** show the whole family in the panel, from anywhere inside it ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(web)** add mobile Shift+Tab terminal key ([#480](https://github.com/gmuxapp/gmux/pull/480))
+- **(daemon)** cap active semantic subagents per behavioral root ([#481](https://github.com/gmuxapp/gmux/pull/481))
+- **(gmuxd)** add best-effort ntfy notifications ([#483](https://github.com/gmuxapp/gmux/pull/483))
+- **(web)** filter the family panel by state, act on it in bulk, and quote one set of family numbers everywhere ([#485](https://github.com/gmuxapp/gmux/pull/485))
+- **(web)** promote a family child to its own root row, and return it, from the session menu ([#486](https://github.com/gmuxapp/gmux/pull/486))
+- **(web)** open the family panel from its sidebar indicator ([#488](https://github.com/gmuxapp/gmux/pull/488))
+- **(web)** iterate on the sidebar family button and the session menu ([#489](https://github.com/gmuxapp/gmux/pull/489))
+- **(gmuxd)** budget subagents by root depth ([#492](https://github.com/gmuxapp/gmux/pull/492))
+- **(web)** clarify family process activity and selection ([#495](https://github.com/gmuxapp/gmux/pull/495))
+- **(web)** scroll-anchor addon — follow/anchored viewport modes for streaming output ([#500](https://github.com/gmuxapp/gmux/pull/500))
+- **(terminal)** preserve soft-wrap provenance in checkpoints and tail ([#503](https://github.com/gmuxapp/gmux/pull/503))
+- **(web)** show process lifecycle on the $, and settle the family rows ([#504](https://github.com/gmuxapp/gmux/pull/504))
+- single-axis task families, with promote and reparent as top-level verbs ([#505](https://github.com/gmuxapp/gmux/pull/505))
+- **(web)** make mobile Shift composable ([#510](https://github.com/gmuxapp/gmux/pull/510))
+- **(web)** index sidebar projections so large session lists stay responsive ([#512](https://github.com/gmuxapp/gmux/pull/512))
+- **(gmuxd)** index registration slug allocation and placement scope resolution ([#515](https://github.com/gmuxapp/gmux/pull/515))
+- **(gmuxd)** encode each SSE sessions broadcast once, shared across subscribers ([#516](https://github.com/gmuxapp/gmux/pull/516))
+- **(gmuxd)** minimum coalescing window for SSE sessions broadcasts ([#519](https://github.com/gmuxapp/gmux/pull/519))
+- **(gmuxd)** run startup conversation indexing in the background ([#517](https://github.com/gmuxapp/gmux/pull/517))
+- **(web)** incremental reconciliation of protocol-3 session snapshots ([#518](https://github.com/gmuxapp/gmux/pull/518))
+- **(daemon)** auto-read supervised successful process exits ([#511](https://github.com/gmuxapp/gmux/pull/511))
+- **(daemon)** expose runner recovery progress after restart ([#521](https://github.com/gmuxapp/gmux/pull/521))
+
+### Fixes
+- **(website)** refine landing copy and mobile wrapping ([#442](https://github.com/gmuxapp/gmux/pull/442))
+- **(web)** centralize routing state; keep sidebar mode stable on Back ([#436](https://github.com/gmuxapp/gmux/pull/436))
+- **(test)** read scrollback through daemon broker ([#445](https://github.com/gmuxapp/gmux/pull/445))
+- **(website)** landing polish pass (fonts, wrapping, OS detection, copy) ([#444](https://github.com/gmuxapp/gmux/pull/444))
+- **(adapter)** render Claude observational logs safely ([#448](https://github.com/gmuxapp/gmux/pull/448))
+- **(adapter)** align Claude and Codex conversation rendering ([#454](https://github.com/gmuxapp/gmux/pull/454))
+- **(snapshot)** redact git remote userinfo on session wire ([#456](https://github.com/gmuxapp/gmux/pull/456))
+- **(adapter)** re-watch removed-then-recreated directories ([#457](https://github.com/gmuxapp/gmux/pull/457))
+- **(peering)** harden reconciliation and surface adapter errors ([#459](https://github.com/gmuxapp/gmux/pull/459))
+- **(daemon)** prevent slow incumbents from triggering takeover ([#460](https://github.com/gmuxapp/gmux/pull/460))
+- **(web)** ignore collapsed terminal resize measurements ([#463](https://github.com/gmuxapp/gmux/pull/463))
+- wave-2 sweep — exit metadata, index slug retention, mock timestamps ([#470](https://github.com/gmuxapp/gmux/pull/470))
+- **(web)** prevent terminal pane collapse instead of guarding measurement ([#466](https://github.com/gmuxapp/gmux/pull/466))
+- **(web)** close header popovers on an outside pointerdown, not mousedown ([#478](https://github.com/gmuxapp/gmux/pull/478))
+- **(cli)** use neutral language for command wait reports ([#479](https://github.com/gmuxapp/gmux/pull/479))
+- preserve terminal state across reconnect ([#484](https://github.com/gmuxapp/gmux/pull/484))
+- **(web)** label the mobile Shift+Tab key as ⇧tab ([#493](https://github.com/gmuxapp/gmux/pull/493))
+- **(peering)** add shared cross-tailnet Tailscale hosts ([#494](https://github.com/gmuxapp/gmux/pull/494))
+- **(web)** bind image paste to session connection ([#498](https://github.com/gmuxapp/gmux/pull/498))
+- separate session error outcome from unread attention ([#499](https://github.com/gmuxapp/gmux/pull/499))
+- **(cli)** refuse pending stdin before launching a session ([#501](https://github.com/gmuxapp/gmux/pull/501))
+- **(web)** replay initial checkpoint before viewport claim ([#502](https://github.com/gmuxapp/gmux/pull/502))
+- **(terminal)** checkpoint replay fidelity — reflow history, declared geometry, claim announce ([#509](https://github.com/gmuxapp/gmux/pull/509))
+- **(gmuxd)** retain conversation titles across restarts ([#508](https://github.com/gmuxapp/gmux/pull/508))
+- **(peering)** surface spoke session-stream omissions in the hub world projection ([#513](https://github.com/gmuxapp/gmux/pull/513))
+- terminal residuals — checkpoint replay orphan-zero drift and first-claim stall ([#514](https://github.com/gmuxapp/gmux/pull/514))
+- **(build)** pin exact Go toolchain ([#520](https://github.com/gmuxapp/gmux/pull/520))
+
+### Docs
+- correct post-2.0 behavior and migration guidance ([#437](https://github.com/gmuxapp/gmux/pull/437))
+- post-2.0 docs pass — review fixes, README overview, UI tour ([#446](https://github.com/gmuxapp/gmux/pull/446))
+- **(adr)** ADR 0033 drive modes & capability boundaries + ADR 0034 model resolution ([#449](https://github.com/gmuxapp/gmux/pull/449))
+- add ACP host program document consolidating plan and decisions ([#455](https://github.com/gmuxapp/gmux/pull/455))
+- record settled ACP program decisions ([#465](https://github.com/gmuxapp/gmux/pull/465))
+- **(skills)** unify command and agent orchestration guidance ([#476](https://github.com/gmuxapp/gmux/pull/476))
+- record active-subagent budget merge evidence ([#482](https://github.com/gmuxapp/gmux/pull/482))
+- pin 2.1 interface stability boundaries from the release audit ([#507](https://github.com/gmuxapp/gmux/pull/507))
+
+---
 ## v2.0.0 - 2026-07-31
 
 The biggest release yet, and the first with breaking changes. 2.0 makes agent status authoritative, hardens multi-machine access, moves the CLI to a stable verb-first grammar, and ships a rebuilt web app. A few things moved, so read the **[Migrating to 2.0 guide](https://gmux.app/migrating-to-2/)** before updating a fleet. Your agent can help migrate your projects and sidebar items if you'd prefer not to start with a clean slate.
