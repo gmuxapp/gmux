@@ -412,3 +412,53 @@ describe('childTrailTitle', () => {
     expect(childTrailTitle(root, [root], mid)).toBe('root › mid')
   })
 })
+
+describe('familyIndex incremental patching (structural sharing)', () => {
+  it('re-keys the cache on patch: the old array must rebuild, never alias the patched index', () => {
+    // The in-place patch mutates the previous snapshot's index maps to
+    // describe the *new* array. The WeakMap entry for the old array is
+    // deleted at that moment; if a mutant drops that delete, asking for the
+    // old array's index again would hand back the patched (aliased) maps,
+    // whose rows belong to the new snapshot (stale reads). Unreachable from today's
+    // production call sites (they always pass the live sessions.value), but
+    // pinned here so a future call-site refactor can't silently regress.
+    const root = agent('root')
+    const child = agent('child', 'root', { unread: false })
+    const prev = [root, child]
+    const prevIndex = familyIndex(prev)
+    expect(prevIndex.byId.get('child')).toBe(child)
+
+    // Replaced-rows-only successor with family facts intact → patched, and
+    // the same index object is re-keyed onto the new array.
+    const childFlipped = { ...child, unread: true, unread_token: 'tok' }
+    const next = [root, childFlipped]
+    const nextIndex = familyIndex(next)
+    expect(nextIndex).toBe(prevIndex)
+    expect(nextIndex.byId.get('child')).toBe(childFlipped)
+
+    // Asking for the old array again must yield an index that describes
+    // exactly its own rows. (Mechanically it may be the same object patched
+    // back — the ping-pong re-patch — which is fine; what the deleted cache
+    // entry guarantees is that it can never be served *stale*, still holding
+    // the new snapshot's rows. A mutant dropping the delete returns the
+    // aliased index with `childFlipped` here and fails.)
+    const rebuilt = familyIndex(prev)
+    expect(rebuilt.byId.get('child')).toBe(child)
+    expect(rebuilt.rootById.get('child')).toBe(root)
+
+    // And the ping-pong stays coherent: querying the new array again after
+    // the old one was re-indexed still yields an index of the new rows.
+    expect(familyIndex(next).byId.get('child')).toBe(childFlipped)
+  })
+
+  it('family-fact changes rebuild instead of patching', () => {
+    const root = agent('root')
+    const child = agent('child', 'root')
+    const prev = [root, child]
+    const prevIndex = familyIndex(prev)
+    const next = [root, { ...child, parent_session_id: undefined }]
+    const nextIndex = familyIndex(next)
+    expect(nextIndex).not.toBe(prevIndex)
+    expect(nextIndex.childIds.has('child')).toBe(false)
+  })
+})
