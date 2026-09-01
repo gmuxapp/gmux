@@ -193,7 +193,7 @@ func newReapHarness(t *testing.T, session centralstore.SessionID) (*reapHarness,
 
 	installed := startProtocolRunner(t, dir, "1r6zxosb.sock", session, false)
 	h := &reapHarness{dir: dir}
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Runners: productionRunnerClient{}, Control: productionRunnerControl{},
 		Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) {

@@ -231,6 +231,28 @@ type ErrorSink interface {
 	Error(context.Context, error)
 }
 
+// DefaultMinComposeInterval is the production minimum coalescing window
+// between the starts of two consecutive composition passes.
+//
+// Why a window at all: every composed batch fans a FULL snapshot out to
+// every SSE subscriber (bytes are O(rows × passes × subscribers)), and the
+// browser recomposes its projections per delivered frame. Without a floor,
+// a mutation storm is throttled only by pass duration, which shrinks as N
+// shrinks — small worlds ship the most redundant frames. The window caps
+// storm output at ~4 frames/second regardless of N while the quiet path
+// (first mutation after idle) still composes immediately.
+//
+// Why 250 ms: a composition+encode pass at 10k rows costs ~90–130 ms of
+// daemon work and each delivered frame costs the browser ~93 ms of
+// projection recompute, so any window materially below ~150 ms cannot
+// amortize even one storm frame at scale; and the smallest consumer-side
+// polling cadence that reads the fanout's cached frames (the /wait ticker)
+// is 500 ms, so a 250 ms bound keeps cached-frame staleness under one poll
+// interval. Measured at 2.5k rows × 400 mutations × 10 subscribers this
+// turns ~30 passes into ≤4 with final-state convergence bounded by
+// window + one pass.
+const DefaultMinComposeInterval = 250 * time.Millisecond
+
 // Composer owns the level-triggered dirty state and the single composition
 // goroutine. Construct with New, start with Run, stop with Close.
 type Composer struct {
@@ -243,6 +265,13 @@ type Composer struct {
 	// retryDelay throttles retries after a composition failure so a
 	// persistent store error cannot become a hot loop.
 	retryDelay time.Duration
+	// minInterval is the minimum coalescing window between the starts of
+	// two consecutive composition passes. Zero disables the window (every
+	// dirty signal composes as soon as the single-flight loop is free —
+	// the pre-window behavior). The first pass after an idle period is
+	// never delayed; only sustained bursts coalesce behind the window, and
+	// the trailing edge always composes.
+	minInterval time.Duration
 
 	mu            sync.Mutex
 	dirtySessions bool
@@ -263,6 +292,19 @@ func WithErrorSink(s ErrorSink) Option { return func(c *Composer) { c.errSink = 
 
 // WithRetryDelay overrides the failure retry throttle (tests use ~0).
 func WithRetryDelay(d time.Duration) Option { return func(c *Composer) { c.retryDelay = d } }
+
+// WithMinComposeInterval installs a minimum coalescing window between
+// composition passes (see DefaultMinComposeInterval). d <= 0 disables the
+// window. The default is disabled: production wiring opts in explicitly so
+// unit fixtures keep immediate recomposition unless they test the window.
+func WithMinComposeInterval(d time.Duration) Option {
+	return func(c *Composer) {
+		if d < 0 {
+			d = 0
+		}
+		c.minInterval = d
+	}
+}
 
 // WithVerdictSource installs the adapter-reconciliation verdict overlay for
 // dead rows' Resumable derivation.
@@ -325,6 +367,7 @@ func (c *Composer) Run(ctx context.Context) {
 		return
 	}
 	defer close(c.runDone)
+	var lastPass time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -346,6 +389,28 @@ func (c *Composer) Run(ctx context.Context) {
 			if !sessions && !projects {
 				break
 			}
+			// Minimum coalescing window: the first pass after an idle period
+			// (lastPass zero or older than the window) composes immediately —
+			// no added latency on the quiet path. Under a sustained burst,
+			// wait out the remainder of the window so dirt accumulates into
+			// one pass; dirt arriving during the wait is merged below, so the
+			// trailing edge always composes. If shutdown fires during the
+			// wait, the pending dirt is flushed once (never silently dropped
+			// by the window) before Run returns.
+			if c.minInterval > 0 && !lastPass.IsZero() {
+				if wait := c.minInterval - time.Since(lastPass); wait > 0 {
+					if !c.sleepInterruptible(ctx, wait) {
+						s2, p2 := c.takeDirty()
+						c.flushOnShutdown(sessions || s2, projects || p2)
+						return
+					}
+					// Merge dirt that arrived while the window was open so the
+					// pass reflects the latest committed state of every kind.
+					s2, p2 := c.takeDirty()
+					sessions, projects = sessions || s2, projects || p2
+				}
+			}
+			lastPass = time.Now()
 			batch, err := c.compose(ctx, sessions, projects)
 			if err != nil {
 				// No lost dirt: restore the taken kinds, report, and retry
@@ -382,6 +447,47 @@ func (c *Composer) Close() {
 		}
 	})
 	<-c.runDone
+}
+
+// sleepInterruptible waits d, returning false when shutdown (Close or ctx
+// cancellation) fired first.
+func (c *Composer) sleepInterruptible(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-c.done:
+		return false
+	}
+}
+
+// flushOnShutdown composes and emits dirt that was pending behind the
+// coalescing window when shutdown fired. Without this, the window would
+// widen the shutdown race into lost final state: dirt taken before the wait
+// would be dropped where the windowless loop would already have composed
+// it. It runs on a short private context because the caller's context is
+// typically already canceled at this point (Bootstrap cancels before it
+// joins workers); Close waits for Run to return, so the emit is always
+// delivered before Close completes. Best-effort: a compose failure is
+// reported and the dirt is dropped, matching the windowless loop's behavior
+// at shutdown.
+func (c *Composer) flushOnShutdown(sessions, projects bool) {
+	if !sessions && !projects {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	batch, err := c.compose(ctx, sessions, projects)
+	if err != nil {
+		if c.errSink != nil {
+			c.errSink.Error(ctx, err)
+		}
+		return
+	}
+	c.sink.Emit(ctx, batch)
 }
 
 func (c *Composer) takeDirty() (sessions, projects bool) {

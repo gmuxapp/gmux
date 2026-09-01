@@ -103,7 +103,7 @@ func TestBootstrapReconstructsActiveSubagentBudgetAfterConvergence(t *testing.T)
 	}
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{ID: child, Adapter: "pi", Alive: true, CreatedAt: 2, ObservedAt: 3, ParentSessionID: &root}, Incarnation: "restart-child"}
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{"child.sock": meta}, blocked: map[string]bool{}}
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Runners: runners, Converter: &wire.Converter{},
 		Endpoints:           EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"child.sock"}, nil }),
 		MaxSubagentsByDepth: []int{1}, SemanticAgent: func(adapter string) bool { return adapter == "pi" },
@@ -142,7 +142,7 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	resolver := &bootstrapCountingResolver{}
 	durable := &bootstrapCountingDurable{Durable: store}
 	var reported atomic.Int64
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Durable: durable, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
 		Resolver: resolver, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{endpoint}, nil }),
@@ -256,7 +256,7 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{
 		"good": {Registration: centralstore.RunnerRegistration{ID: "1g8schlb", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}},
 	}, blocked: map[string]bool{"slow": true}}
-	b, err := newBootstrap(BootstrapConfig{Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"good", "slow"}, nil }), Clock: func() centralstore.UnixMillis { return now }, RunnerBudget: 100 * time.Millisecond, ConvergeDeadline: 2 * time.Second, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
+	b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"good", "slow"}, nil }), Clock: func() centralstore.UnixMillis { return now }, RunnerBudget: 100 * time.Millisecond, ConvergeDeadline: 2 * time.Second, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

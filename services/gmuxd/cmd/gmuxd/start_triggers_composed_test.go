@@ -126,7 +126,7 @@ func TestStartTriggersFullComposedGraphAndJoinedCancellation(t *testing.T) {
 	frames := make(chan frameKinds, 32)
 	control := &barrierControl{calls: make(chan string, 4)}
 	var callbacks atomic.Int32
-	b, err := newBootstrap(BootstrapConfig{Store: st, Runners: fleet, Control: control, Reconciler: reconciler, Converter: &wire.Converter{}, Endpoints: endpoints, Frames: func(_ context.Context, f wire.Frames) {
+	b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: st, Runners: fleet, Control: control, Reconciler: reconciler, Converter: &wire.Converter{}, Endpoints: endpoints, Frames: func(_ context.Context, f wire.Frames) {
 		callbacks.Add(1)
 		frames <- frameKinds{f.Sessions != nil, f.World != nil}
 	}, Clock: func() centralstore.UnixMillis { return 100 }, RunnerBudget: time.Second, ConvergeDeadline: time.Second})

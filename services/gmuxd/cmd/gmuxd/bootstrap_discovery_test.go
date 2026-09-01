@@ -189,7 +189,7 @@ func newDiscoveryHarness(t *testing.T) *discoveryHarness {
 	}
 	t.Cleanup(func() { store.Close() })
 	h := &discoveryHarness{store: store, errs: &recorder{}, notices: &recorder{}, dir: dir}
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Runners: productionRunnerClient{}, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
 		Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: productionEndpointSource{},
@@ -508,7 +508,7 @@ func TestScanKeepsProbingUnidentifiableEndpointsButReportsOnce(t *testing.T) {
 	}}
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{ep: meta}, blocked: map[string]bool{}}
 	errs := &recorder{}
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
 		Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{ep}, nil }),
@@ -548,7 +548,7 @@ func TestScanReportsRepeatedRegistrationFailureOnceOnly(t *testing.T) {
 	const ep = "broken-endpoint" // the fake transport has no meta for it
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}
 	errs := &recorder{}
-	boot, err := newBootstrap(BootstrapConfig{
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
 		Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
 		Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{ep}, nil }),
