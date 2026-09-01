@@ -90,7 +90,10 @@ func (c *Coordinator) FinishConvergence(ctx context.Context, at centralstore.Uni
 		return centralstore.MutationResult{}, err
 	}
 	c.convergeClosed = true
-	c.convergeCandidates = nil
+	// Keep the candidate set as immutable startup provenance. Lifecycle code
+	// keys window openness on convergeClosed, while health can continue to
+	// derive how many of the runners expected at daemon replacement are
+	// currently installed without maintaining a second counter.
 	close(c.converged)
 	seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 	c.mu.Unlock()
@@ -100,6 +103,36 @@ func (c *Coordinator) FinishConvergence(ctx context.Context, at centralstore.Uni
 		c.emitOutcomes(ctx, seq, sweep...)
 	}
 	return result, nil
+}
+
+// RecoveryState is the restart recovery projection derived from the durable
+// rows that were alive at bind time and the runners currently installed in the
+// runtime registry. The existing convergence close is the bounded terminal
+// transition: FinishConvergence marks every unclaimed row dead before Status
+// becomes ready.
+type RecoveryState struct {
+	Status    string `json:"status"`
+	Expected  int    `json:"expected"`
+	Recovered int    `json:"recovered"`
+}
+
+func (c *Coordinator) RecoveryState() RecoveryState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	status := "ready"
+	// With no previously-alive local rows there is nothing to recover. Runner
+	// endpoint discovery may still be in flight (for brand-new runners), but it
+	// must not make an empty daemon advertise a recovery phase or flap readiness.
+	if !c.convergeClosed && len(c.convergeCandidates) > 0 {
+		status = "recovering"
+	}
+	recovered := 0
+	for id := range c.convergeCandidates {
+		if _, live := c.registry.current(id); live {
+			recovered++
+		}
+	}
+	return RecoveryState{Status: status, Expected: len(c.convergeCandidates), Recovered: recovered}
 }
 
 // Converged is the startup convergence barrier-completion signal. The

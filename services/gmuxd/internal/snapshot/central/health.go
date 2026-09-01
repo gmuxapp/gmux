@@ -35,10 +35,20 @@ type HealthInfo struct {
 	UpdateAvailable string             `json:"update_available,omitempty"`
 	Peers           []peering.PeerInfo `json:"peers,omitempty"`
 	Sessions        SessionCounts      `json:"sessions"`
+	// SessionRecovery makes a daemon replacement's bounded runner convergence
+	// visible. Optional preserves the additive health covenant for producers
+	// that do not have a local lifecycle coordinator (fixtures and peers).
+	SessionRecovery *SessionRecovery `json:"session_recovery,omitempty"`
 	// RunnerHash is the sha256 of the gmux runner binary on disk.
 	RunnerHash      string                `json:"runner_hash,omitempty"`
 	DefaultLauncher string                `json:"default_launcher"`
 	Launchers       []peering.LauncherDef `json:"launchers"`
+}
+
+type SessionRecovery struct {
+	Status    string `json:"status"`
+	Expected  int    `json:"expected"`
+	Recovered int    `json:"recovered"`
 }
 
 // SessionCounts is the health session summary. Per FD-6 it is derived from

@@ -143,6 +143,91 @@ func TestConvergenceSweepsRunnerWhoseStreamDroppedDuringWindow(t *testing.T) {
 	}
 }
 
+func TestRecoveryStateFreshDaemonReadyImmediatelyWithoutFlap(t *testing.T) {
+	ctx := context.Background()
+	durable := newFakeDurable(0)
+	c := New(nil, newFakeClient(RunnerMeta{}), durable, nil, nil)
+
+	if err := c.BeginConvergence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := RecoveryState{Status: "ready", Expected: 0, Recovered: 0}
+	for i := 0; i < 3; i++ {
+		if got := c.RecoveryState(); got != want {
+			t.Fatalf("open empty recovery state[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if _, err := c.FinishConvergence(ctx, 500); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RecoveryState(); got != want {
+		t.Fatalf("empty recovery flapped at terminal close: got %+v, want %+v", got, want)
+	}
+}
+
+func TestRecoveryStateOnlyRemoteAndDeadSessionsReadyImmediately(t *testing.T) {
+	ctx := context.Background()
+	durable := newFakeDurable(0)
+	durable.listSessions = func() ([]centralstore.Session, error) {
+		// Durable.ListSessions is local-only: remote sessions live in the peer
+		// world projection and therefore contribute no recovery candidates.
+		// The local rows present here are already terminal.
+		return []centralstore.Session{exitedSession("1fpaqea0", 1), exitedSession("1ve25bnc", 2)}, nil
+	}
+	c := New(nil, newFakeClient(RunnerMeta{}), durable, nil, nil)
+
+	if err := c.BeginConvergence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := RecoveryState{Status: "ready", Expected: 0, Recovered: 0}
+	if got := c.RecoveryState(); got != want {
+		t.Fatalf("remote/dead-only recovery state = %+v, want %+v", got, want)
+	}
+	if _, err := c.FinishConvergence(ctx, 500); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RecoveryState(); got != want {
+		t.Fatalf("remote/dead-only recovery flapped at terminal close: got %+v, want %+v", got, want)
+	}
+}
+
+func TestRecoveryStateDerivesProgressAndTerminalTransition(t *testing.T) {
+	ctx := context.Background()
+	liveID := sid(6)
+	missingID := centralstore.SessionID("1ve25bnc")
+	durable := newFakeDurable(1)
+	durable.listSessions = func() ([]centralstore.Session, error) {
+		return []centralstore.Session{exitedNilSession(liveID, 1), exitedNilSession(missingID, 2), exitedSession("1fpaqea0", 3)}, nil
+	}
+	durable.registerResult = func(centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error) {
+		return exitedNilSession(liveID, 1), centralstore.MutationResult{SessionVersion: 1}, nil
+	}
+	client := newFakeClient(RunnerMeta{Registration: centralstore.RunnerRegistration{ID: liveID, Adapter: "shell", Alive: true}})
+	c := New(nil, client, durable, nil, nil)
+
+	if err := c.BeginConvergence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RecoveryState(); got != (RecoveryState{Status: "recovering", Expected: 2, Recovered: 0}) {
+		t.Fatalf("initial recovery state = %+v", got)
+	}
+	if _, err := c.Register(ctx, RegisterRequest{Endpoint: "sock"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RecoveryState(); got != (RecoveryState{Status: "recovering", Expected: 2, Recovered: 1}) {
+		t.Fatalf("partial recovery state = %+v", got)
+	}
+	if _, err := c.FinishConvergence(ctx, 500); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RecoveryState(); got != (RecoveryState{Status: "ready", Expected: 2, Recovered: 1}) {
+		t.Fatalf("terminal recovery state = %+v", got)
+	}
+	if len(durable.swept) != 1 || len(durable.swept[0]) != 1 || durable.swept[0][0] != missingID {
+		t.Fatalf("terminal transition did not sweep missing runner: %#v", durable.swept)
+	}
+}
+
 func TestConvergenceWindowLifecycleContract(t *testing.T) {
 	ctx := context.Background()
 	durable := newFakeDurable(0)

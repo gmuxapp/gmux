@@ -114,7 +114,7 @@ func readFirstSSEEvent(t *testing.T, sc *bufio.Scanner) (string, []byte) {
 	return "", nil
 }
 
-func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *testing.T) {
+func TestServeCentralExposesRecoveryBeforeConvergenceAndServesSQLiteState(t *testing.T) {
 	base, err := os.MkdirTemp("", "s5-switch-")
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +142,21 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		t.Fatal(err)
 	}
 
+	// Seed the row exactly as the previous daemon leaves an alive runner: no
+	// exited timestamp. The replacement knows this expected population as soon
+	// as BeginConvergence reads SQLite.
+	seed, err := centralstore.Open(context.Background(), paths.StateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = seed.InsertSession(context.Background(), centralstore.NewSession{ID: "1dehpbm1", Adapter: "shell", Command: []string{"/bin/sh"}, Remotes: map[string]string{}, CreatedAt: 1}); err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	metaGate := make(chan struct{})
 	runnerSock := filepath.Join(paths.SessionSocketDir(), "runner-switch.sock")
 	runner := startFakeRunnerServer(t, runnerSock, metaGate, map[string]any{
@@ -163,8 +178,27 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	go func() { done <- serveCentral(io.Discard, true) }()
 
 	sock := paths.SocketPath()
-	if unixipc.Healthy(sock) {
-		t.Fatal("daemon became healthy before convergence was released")
+	waitUntil(t, 10*time.Second, func() bool { return unixipc.Healthy(sock) }, "daemon did not expose local health during convergence")
+	client := unixipc.Client(sock)
+	healthResp, err := client.Get("http://localhost/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Data struct {
+			SessionRecovery struct {
+				Status              string `json:"status"`
+				Expected, Recovered int
+			} `json:"session_recovery"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(healthResp.Body).Decode(&health); err != nil {
+		healthResp.Body.Close()
+		t.Fatal(err)
+	}
+	healthResp.Body.Close()
+	if got := health.Data.SessionRecovery; got.Status != "recovering" || got.Expected != 1 || got.Recovered != 0 {
+		t.Fatalf("recovery health before runner release = %+v", got)
 	}
 	if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond); err == nil {
 		_ = conn.Close()
@@ -172,9 +206,23 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	}
 
 	close(metaGate)
-	waitUntil(t, 10*time.Second, func() bool { return unixipc.Healthy(sock) }, "daemon never became healthy after convergence")
+	waitUntil(t, 10*time.Second, func() bool {
+		resp, err := client.Get("http://localhost/v1/health")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var h struct {
+			Data struct {
+				SessionRecovery struct {
+					Status              string `json:"status"`
+					Expected, Recovered int
+				} `json:"session_recovery"`
+			} `json:"data"`
+		}
+		return json.NewDecoder(resp.Body).Decode(&h) == nil && h.Data.SessionRecovery.Status == "ready" && h.Data.SessionRecovery.Expected == 1 && h.Data.SessionRecovery.Recovered == 1
+	}, "daemon recovery never reached ready")
 
-	client := unixipc.Client(sock)
 	resp, err := client.Get("http://localhost/v1/sessions")
 	if err != nil {
 		t.Fatal(err)
