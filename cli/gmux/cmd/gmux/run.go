@@ -732,11 +732,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // and waits resolve as "died" (ADR 0023). An explicitly interrupted
 // semantic turn is the exception: exit preserves its existing unread bit.
 //
-// The ordering is load-bearing: the turn-close status and unread
-// events must be emitted before the exit event, so a subscriber (the
-// daemon's wait machinery) that resolves on the first terminal signal
-// it sees observes the closed turn, and the store's exit handling
-// persists the final Status rather than a stale mid-turn one.
+// For a lifetime turn, status, exit, and unread generation are one event so
+// waiters and the daemon cannot observe an attention-bearing intermediate
+// state. OSC prompt-cycle status edges remain separate and unchanged.
 func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode int) {
 	status := state.StatusSnapshot()
 	if status != nil && status.Interrupted {
@@ -744,10 +742,7 @@ func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode 
 		return
 	}
 	if lifetimeTurnOpen {
-		// Fuse the token with the idle edge that can resolve a waiter and decide
-		// direct-parent suppression, then publish the plain exit.
-		state.SetStatusUnreadResult(&adapter.Status{Active: false, Error: exitCode != 0})
-		state.SetExited(exitCode)
+		state.SetLifetimeExitedUnreadResult(&adapter.Status{Active: false, Error: exitCode != 0}, exitCode)
 		return
 	}
 	// Hook/OSC sessions may die while still active. Fuse unread with exit so

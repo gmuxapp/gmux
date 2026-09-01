@@ -50,18 +50,20 @@ type notifySessionSnapshot struct {
 }
 
 type pendingCentralNotif struct {
-	sessionID string
-	notifType string
-	title     string
-	body      string
-	adapter   string
-	timer     *time.Timer
-	notifID   string
+	sessionID   string
+	notifType   string
+	title       string
+	body        string
+	adapter     string
+	timer       *time.Timer
+	notifID     string
+	resultToken string
 }
 
 type activeCentralNotif struct {
-	sessionID string
-	clientID  string
+	sessionID   string
+	clientID    string
+	resultToken string
 }
 
 type externalNotifier interface {
@@ -179,6 +181,13 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	// parent edge re-decides the latch.
 	suppress := !cur.Active && r.suppressedInactive[id]
 	r.mu.Unlock()
+	if o.AttentionSuppressed {
+		// This bit is the coordinator's committed lifecycle-serialized decision.
+		// Cancel its exact result plus empty-token attention, which is unscoped.
+		// A mismatched non-empty token identifies an older result and survives.
+		r.cancelForSessionResult(id, cur.UnreadToken)
+		return
+	}
 	if !existed {
 		return
 	}
@@ -197,10 +206,10 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	// An intentional stop is not a completion (ADR 0027): no "finished"
 	// notification for a turn the user themselves ended.
 	if transitionedInactive && cur.Alive && !cur.Interrupted {
-		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start), cur.Adapter)
+		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start), cur.Adapter, cur.UnreadToken)
 	}
 	if cur.Unread && (releasedBySuppression || !prev.Unread || prev.UnreadToken != cur.UnreadToken) {
-		r.scheduleNotification(id, "unread", cur.Title, "New output", cur.Adapter)
+		r.scheduleNotification(id, "unread", cur.Title, "New output", cur.Adapter, cur.UnreadToken)
 	}
 }
 
@@ -232,7 +241,11 @@ func (r *centralNotifyRouter) genID() string {
 	return fmt.Sprintf("notif-%d", r.nextID)
 }
 
-func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, body, adapter string) {
+func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, body, adapter string, resultTokens ...string) {
+	resultToken := ""
+	if len(resultTokens) > 0 {
+		resultToken = resultTokens[0]
+	}
 	if r.presence.AnyViewing(sessionID) {
 		return
 	}
@@ -248,7 +261,7 @@ func (r *centralNotifyRouter) scheduleNotification(sessionID, notifType, title, 
 		return
 	}
 	notifID := r.genID()
-	p := &pendingCentralNotif{sessionID: sessionID, notifType: notifType, title: title, body: body, adapter: adapter, notifID: notifID}
+	p := &pendingCentralNotif{sessionID: sessionID, notifType: notifType, title: title, body: body, adapter: adapter, notifID: notifID, resultToken: resultToken}
 	p.timer = time.AfterFunc(r.config.GracePeriod, func() { r.firePending(sessionID) })
 	r.pending[sessionID] = p
 }
@@ -296,7 +309,7 @@ func (r *centralNotifyRouter) firePending(sessionID string) {
 	}
 	msg := NotifyMessage{Type: "notify", ID: p.notifID, SessionID: sessionID, Title: p.title, Body: p.body, Tag: sessionID}
 	r.mu.Lock()
-	r.active[p.notifID] = activeCentralNotif{sessionID: sessionID, clientID: target.ID}
+	r.active[p.notifID] = activeCentralNotif{sessionID: sessionID, clientID: target.ID, resultToken: p.resultToken}
 	r.mu.Unlock()
 	sendNotifyJSON(target.Conn, msg)
 	time.AfterFunc(5*time.Minute, func() {
@@ -332,20 +345,31 @@ func (r *centralNotifyRouter) CancelAllPending() {
 	}
 }
 
+func (r *centralNotifyRouter) cancelForSessionResult(sessionID, resultToken string) {
+	if resultToken == "" {
+		return
+	}
+	r.cancelForSession(sessionID, resultToken)
+}
+
 func (r *centralNotifyRouter) CancelForSession(sessionID string) {
+	r.cancelForSession(sessionID, "")
+}
+
+func (r *centralNotifyRouter) cancelForSession(sessionID, resultToken string) {
 	if r.beforeCancelLock != nil {
 		r.beforeCancelLock()
 	}
 	r.deliveryMu.Lock()
 	defer r.deliveryMu.Unlock()
 	r.mu.Lock()
-	if p, ok := r.pending[sessionID]; ok {
+	if p, ok := r.pending[sessionID]; ok && (resultToken == "" || p.resultToken == "" || p.resultToken == resultToken) {
 		p.timer.Stop()
 		delete(r.pending, sessionID)
 	}
 	var cancelIDs []string
 	for id, active := range r.active {
-		if active.sessionID == sessionID {
+		if active.sessionID == sessionID && (resultToken == "" || active.resultToken == "" || active.resultToken == resultToken) {
 			cancelIDs = append(cancelIDs, id)
 			delete(r.active, id)
 		}

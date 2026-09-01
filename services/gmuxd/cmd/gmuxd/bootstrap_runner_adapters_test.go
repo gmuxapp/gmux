@@ -88,6 +88,19 @@ func TestProductionRunnerMetaPreservesLaunchParent(t *testing.T) {
 	}
 }
 
+func TestRunnerEventProjectionKeepsLifetimeStatusAndExitAtomic(t *testing.T) {
+	ev, ok := runnerEventProjection("exit", []byte(`{"exit_code":0,"exited_at":"2026-01-02T03:04:05Z","active":false,"error":false,"interrupted":false,"unread":true,"unread_token":"result-1"}`))
+	if !ok {
+		t.Fatal("fused lifetime exit was rejected")
+	}
+	if ev.Alive == nil || *ev.Alive || ev.Facts.Active == nil || *ev.Facts.Active ||
+		ev.Facts.Error == nil || *ev.Facts.Error || ev.Facts.Interrupted == nil || *ev.Facts.Interrupted ||
+		ev.Facts.Unread == nil || !*ev.Facts.Unread || ev.Facts.UnreadToken == nil || *ev.Facts.UnreadToken != "result-1" ||
+		ev.Facts.ExitCode.Set == nil || *ev.Facts.ExitCode.Set != 0 || ev.Facts.ExitedAt.Set == nil {
+		t.Fatalf("fused lifetime exit facts lost: %+v", ev)
+	}
+}
+
 func TestProductionRunnerDeadMetadataSurvivesMetaAndReplay(t *testing.T) {
 	const exitedAt = "2026-01-02T03:04:05Z"
 	mux := http.NewServeMux()

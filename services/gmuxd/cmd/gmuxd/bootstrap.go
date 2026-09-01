@@ -208,6 +208,11 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	registry := sessioncoord.NewRegistry()
 	bridge := &composerDirtyBridge{}
 	opts := []sessioncoord.Option{sessioncoord.WithClock(cfg.Clock), sessioncoord.WithRunnerControl(cfg.Control), sessioncoord.WithRunnerSpawner(cfg.Spawner), sessioncoord.WithConversationTakeover(cfg.Resolver), sessioncoord.WithAdapterReconciler(cfg.Reconciler)}
+	if cfg.SemanticAgent != nil {
+		opts = append(opts, sessioncoord.WithProcessChildAutoRead(func(row centralstore.Session) bool {
+			return cfg.SemanticAgent(row.Adapter)
+		}))
+	}
 	if len(cfg.MaxSubagentsByDepth) > 0 || cfg.SubagentBudgetDisabled {
 		rows, err := cfg.Store.ListSessions(context.Background())
 		if err != nil {
