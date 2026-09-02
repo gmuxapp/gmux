@@ -24,9 +24,9 @@ import {
   dismissSession, familyActivityById, health, 
   initStore, isPromotionAnnouncementDelivered,keybinds, 
   keyboardOpen, macCommandIsCtrl,navigate, navigateToSession,peers, projects,promoteSession, promotionAnnouncements,
-  promotionPending, reparentSession,restartSession, resumeSession, selected, selectedId, sessionDotState, 
+  promotionPending, reparentSession,restartSession, resumeSession, retrySSE, selected, selectedId, sessionDotState, 
   sessionStaleness, 
-  sessions, setNavigate, settlePromotion, tabHref,terminalFindOpen, 
+  sessions, setNavigate, settlePromotion, sseRetryAvailable, tabHref,terminalFindOpen, 
   terminalOptions, terminalScrolledUp, terminalScrollToBottom,urlHash,
   urlPath, urlSearch, view, 
 } from './store'
@@ -976,17 +976,19 @@ function App() {
 
   // App-level reconnecting cue for the SSE control-plane. Distinct from
   // the per-terminal WS pill: it covers the sidebar / home / project
-  // views where no terminal WS is active. When a terminal *is* attached
-  // its own "Connection lost, reconnecting…" pill already owns the
-  // offline cue for that view, so we suppress this one to avoid a
-  // doubled-up message on the same screen.
-  const showReconnecting = connVal === 'reconnecting' && !(selectedVal && canAttach)
+  // views where no terminal WS is active. An exhausted SSE retry remains
+  // visible even beside a terminal so the manual retry is never hidden.
+  const showReconnecting = connVal === 'reconnecting' && (!(selectedVal && canAttach) || sseRetryAvailable.value)
 
   return (
     <div class="app-layout">
       {showReconnecting && (
         <div class="reconnecting-pill app-reconnecting-pill" role="status">
-          Connection lost, reconnecting…
+          {sseRetryAvailable.value ? (
+            <>
+              Connection lost. <button type="button" onClick={() => retrySSE()}>Retry</button>
+            </>
+          ) : 'Connection lost, reconnecting…'}
         </div>
       )}
       <Sidebar
@@ -1025,7 +1027,7 @@ function App() {
             <div class="state-icon" style={{ color: 'var(--status-error)' }}>⚠</div>
             <div class="state-title">Connection failed</div>
             <div class="state-subtitle">Could not reach gmuxd. Is it running?</div>
-            <button class="btn btn-primary" style={{ marginTop: 12 }} onClick={() => location.reload()}>
+            <button class="btn btn-primary" style={{ marginTop: 12 }} onClick={() => retrySSE()}>
               Retry
             </button>
           </div>

@@ -2969,6 +2969,19 @@ body {
   max-width: min(calc(100vw - 24px), 460px);
 }
 
+/* The normal pill is deliberately click-through; an exhausted supervisor
+   adds the one actionable control that must remain clickable. */
+.app-reconnecting-pill button {
+  pointer-events: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 /* ── Find-in-terminal bar ────────────────────────────────────────────────────────
    Floats over the top-right of the terminal (sticky, like the resize
    anchor, so it stays put when the shell scrolls in passive mode). Shares

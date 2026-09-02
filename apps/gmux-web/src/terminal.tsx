@@ -980,6 +980,7 @@ export function TerminalView({
     let isFirstConnect = true
     let attempt = 0
     let intentionalClose = false
+    let lastWsActivityAt: number | null = null
     // Pending retry for a first claim whose measurement returned null.
     // Cancelled on socket replacement, reconnect, session switch, unmount.
     let cancelClaimRetry: (() => void) | null = null
@@ -1060,11 +1061,11 @@ export function TerminalView({
             return
           }
 
-          isFirstConnect = false
           const proceedWithClaim = (claimSize: TerminalSize) => {
             barrierClaimResizeRef.current = claimSize
             const onClaimResized = () => {
               if (connectionRef.current !== connection || termEpochRef.current !== epoch) return
+              isFirstConnect = false
               attachPhase = 'claimed'
               inputClaimedRef.current = true
               claimFallbackTimer = setTimeout(() => {
@@ -1111,6 +1112,7 @@ export function TerminalView({
               // held output and input. No resize is sent: the runner keeps
               // its size until a real measurement exists (the pill lets the
               // user reclaim, and any later resize path re-measures).
+              isFirstConnect = false
               attachPhase = 'claimed'
               inputClaimedRef.current = true
               const heldWrites = postClaimWrites.splice(0)
@@ -1142,6 +1144,7 @@ export function TerminalView({
       ws.onopen = () => {
         if (connectionRef.current !== connection) return
         attempt = 0
+        lastWsActivityAt = Date.now()
         setWsState('open')
 
         if (isFirstConnect) return
@@ -1166,6 +1169,7 @@ export function TerminalView({
         if (connectionRef.current !== connection) return
         // Safety net: live output proves the connection works. Never show the
         // disconnected pill while data is flowing on the current socket.
+        lastWsActivityAt = Date.now()
         setWsState(wsStateOnOutput)
         if (typeof ev.data === 'string') {
           try {
@@ -1240,6 +1244,7 @@ export function TerminalView({
         setWsState(prev => wsStateOnClose(prev, isCurrent))
         if (isCurrent) onModifiersCancelled()
         if (!isCurrent) return
+        lastWsActivityAt = null
         if (claimFallbackTimer !== null) clearTimeout(claimFallbackTimer)
         claimFallbackTimer = null
         cancelClaimRetry?.()
@@ -1258,6 +1263,36 @@ export function TerminalView({
       }
     }
 
+    const revalidateConnection = () => {
+      if (disposed.current || document.visibilityState !== 'visible') return
+      const current = connectionRef.current
+      if (current?.ws.readyState === WebSocket.OPEN && lastWsActivityAt !== null
+          && Date.now() - lastWsActivityAt < 60_000) return
+      if (!current || current.ws.readyState === WebSocket.CLOSED) {
+        if (reconnectTimer.current === null) connect()
+        return
+      }
+      // An OPEN WebSocket can be a suspended, dead TCP after a mobile
+      // background/resume cycle. Closing it hands recovery to the existing
+      // bounded-delay reconnect path rather than trusting readyState.
+      current.ws.close()
+    }
+    let lifecycleTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleLifecycleRevalidation = () => {
+      if (document.visibilityState !== 'visible' || lifecycleTimer !== null) return
+      lifecycleTimer = setTimeout(() => {
+        lifecycleTimer = null
+        revalidateConnection()
+      }, 1000)
+    }
+    const onVisibilityChange = () => scheduleLifecycleRevalidation()
+    const onResume = () => scheduleLifecycleRevalidation()
+    const onOnline = () => scheduleLifecycleRevalidation()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    document.addEventListener('resume', onResume)
+    window.addEventListener('pageshow', onResume)
+    window.addEventListener('online', onOnline)
+
     connect()
 
     return () => {
@@ -1268,6 +1303,12 @@ export function TerminalView({
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       scrollAnchorRef.current?.reset()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('resume', onResume)
+      window.removeEventListener('pageshow', onResume)
+      window.removeEventListener('online', onOnline)
+      if (lifecycleTimer !== null) clearTimeout(lifecycleTimer)
+      lifecycleTimer = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       resetResizeEchoGate()
