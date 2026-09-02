@@ -143,6 +143,34 @@ describe('SSE store lifecycle wiring', () => {
     cleanup()
   })
 
+  it('treats delivered frames as liveness, so a long-lived tab pays no bootstrap', () => {
+    const { sources, cleanup, wake } = install()
+    sources[0].bootstrap(1)
+
+    // The daemon sends a session-activity frame (and a heartbeat) on a live
+    // stream. A tab open for hours is the normal case: if only the open
+    // counted as liveness, every wake past the threshold would re-send the
+    // full sessions transaction and world frame.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(50_000)
+      sources[0].emit('session-activity', { id: 'sess-1' })
+      wake()
+      vi.advanceTimersByTime(1_000)
+      vi.runOnlyPendingTimers()
+    }
+    expect(sources).toHaveLength(1)
+    expect(sources[0].closed).toBe(false)
+    expect(connState.value).toBe('connected')
+
+    // Frames stop for longer than the threshold: the next wake revalidates.
+    vi.advanceTimersByTime(61_000)
+    wake()
+    vi.advanceTimersByTime(1_000)
+    vi.runOnlyPendingTimers()
+    expect(sources).toHaveLength(2)
+    cleanup()
+  })
+
   it('replaces a stale stream on a wake and stages the new epoch atomically', () => {
     const { sources, cleanup, wake } = install()
     sources[0].bootstrap(1)

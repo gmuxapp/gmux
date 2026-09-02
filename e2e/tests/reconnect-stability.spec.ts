@@ -24,8 +24,14 @@ async function restartDaemon(state: E2EState): Promise<void> {
   }
   const daemon = spawn(path.resolve('bin/gmuxd'), ['run'], { env, stdio: 'ignore', detached: true })
   if (!daemon.pid) throw new Error('gmuxd did not start')
-  state.pids.push(daemon.pid)
   state.daemonPids = [...(state.daemonPids ?? [state.pids[0]]), daemon.pid]
+  state.pids.push(daemon.pid)
+  // `pids[0]` is the shared "this is the daemon" slot for every other spec
+  // (z-terminal-disconnect signals it to take the backend down). Leaving the
+  // dead original there makes those specs fail with ESRCH, so hand the slot
+  // over to the replacement. Appending as well keeps global teardown killing
+  // every daemon this run started.
+  state.pids[0] = daemon.pid
   await fs.promises.writeFile(statePath, JSON.stringify(state))
 
   const start = Date.now()

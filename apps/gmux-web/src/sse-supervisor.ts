@@ -47,7 +47,8 @@ export interface SSESupervisor {
  *  - `revalidate()` (a wake) and `retry()` (a tap) are new information and
  *    always open a fresh window, including after exhaustion — a phone that
  *    returns after ten minutes must recover without a tap. They never stack
- *    sources: a pending retry or an in-flight attempt absorbs the wake.
+ *    sources: a pending retry or an in-flight attempt absorbs the wake. A
+ *    wake refreshes the deadline only; a tap also restores the backoff floor.
  *
  * Lifecycle revalidation replaces only an unhealthy or stale source: after
  * mobile or a frozen tab resumes, an OPEN readyState is not proof that the
@@ -189,9 +190,12 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
       // is expensive on a phone.
       if (source?.readyState === 1 && lastActivityAt !== null
           && now() - lastActivityAt < staleDurationMs) return
-      // A wake or a user intent is new information: it always earns a fresh
-      // bounded window, including after the previous one was exhausted.
-      attempts = 0
+      // A wake is new information: it always earns a fresh bounded window,
+      // including after the previous one was exhausted. It does *not* reset
+      // `attempts`: a tab receiving wakes at the debounce ceiling would then
+      // reconnect at the 500 ms floor forever. The backoff keeps growing
+      // (capped at `maxDelayMs`) and only a user's `retry()` restores the
+      // floor, so self-healing stays immediate while the load stays honest.
       retryStartedAt = null
       // But it must not pile up sources. A pending retry or an attempt still
       // in flight already covers this wake; it now carries the new budget.

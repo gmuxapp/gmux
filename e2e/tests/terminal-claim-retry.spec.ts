@@ -232,9 +232,11 @@ test('socket bounce during pending retry cancels it and reconnect flows claimed'
   await page.waitForFunction(() => (window as any).__testWs !== (window as any).__testWsOld, undefined, { timeout: 15_000 })
   await page.evaluate(() => (window as any).__releaseWs())
 
-  // Reconnect enters 'claimed' (no reclaim); output flows even though the
-  // measurement is still null. The cancelled retry must not fire later —
-  // watch through the old deadline window for anomalies.
+  // The bounce happened before the claim completed, so the reconnect is
+  // still a first connect: it replays and re-enters the claim path, which
+  // (measurement still null) falls back within the deadline and flows. The
+  // cancelled retry must not fire later — watch through the old deadline
+  // window for anomalies.
   await pollUntil(async () => {
     const text = await bufferText(page)
     return maxTick(text, 'B') >= 8 ? text : null
@@ -244,6 +246,50 @@ test('socket bounce during pending retry cancels it and reconnect flows claimed'
   const t1 = maxTick(await bufferText(page), 'B')
   await page.waitForTimeout(1_000)
   expect(maxTick(await bufferText(page), 'B')).toBeGreaterThan(t1)
+})
+
+test('a bounce inside the claim window still claims the viewport on reconnect', async ({ page }) => {
+  await installWsGate(page)
+  await openApp(page)
+  const id = await launchSession(page, tickerCommand('V'))
+  // A fresh session has no terminal_cols until a client claims it, so the
+  // runner adopting this browser's geometry is only possible via the claim.
+  const colsBefore = await terminalCols(id)
+  await navigate(page, id)
+  await forceNullMeasurement(page)
+  await page.waitForTimeout(800)
+  await expect(page.locator('.terminal-loading')).toHaveCount(1)
+
+  // Bounce the socket *inside* the claim window (this is what a lifecycle
+  // revalidation on a resumed phone does). `isFirstConnect` must still be
+  // true here: it belongs to the claim, not to the replay that precedes it.
+  await page.evaluate(() => {
+    ;(window as any).__testWsOld = (window as any).__testWs
+    ;(window as any).__testWs.close()
+  })
+  await page.waitForFunction(() => (window as any).__testWs !== (window as any).__testWsOld, undefined, { timeout: 15_000 })
+
+  // Restore measurability *silently*: no viewport change, so no
+  // ResizeObserver refit can send a size. The reconnect's own claim is then
+  // the only path that can size the runner.
+  await restoreMeasurement(page)
+  await page.evaluate(() => (window as any).__releaseWs())
+
+  await pollUntil(async () => {
+    const text = await bufferText(page)
+    return maxTick(text, 'V') >= 8 ? text : null
+  }, { timeoutMs: 15_000, description: 'live output flows after the bounce' })
+  await expect(page.locator('.terminal-loading')).toHaveCount(0)
+
+  // The reconnect claimed the browser viewport. Skipping the claim here is
+  // the #514 stall class: the runner would keep checkpoint geometry and the
+  // user would be stuck behind "Sized for another device".
+  const xtermCols = await page.evaluate(() => (window as any).__gmuxTerm.cols as number)
+  expect(xtermCols).toBeGreaterThan(0)
+  expect(xtermCols).not.toBe(colsBefore)
+  await pollUntil(async () => (await terminalCols(id)) === xtermCols || undefined,
+    { timeoutMs: 8_000, description: 'runner adopted the browser viewport after the bounce' })
+  expect(await page.locator('.terminal-resize-overlay').isVisible().catch(() => false)).toBe(false)
 })
 
 test('session switch during pending retry cancels it; stale claim never lands', async ({ page }) => {

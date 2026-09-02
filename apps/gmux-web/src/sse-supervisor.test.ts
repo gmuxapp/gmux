@@ -15,7 +15,7 @@ class FakeSource implements SSESource {
     this.readyState = 2
   }
 
-  emit(type: 'open' | 'error') {
+  emit(type: 'open' | 'error' | 'message') {
     if (type === 'open') this.readyState = 1
     for (const listener of this.listeners.get(type) ?? []) listener(new MessageEvent(type))
   }
@@ -31,6 +31,7 @@ describe('SSE supervisor', () => {
         const source = new FakeSource()
         source.addEventListener('open', callbacks.opened)
         source.addEventListener('error', callbacks.failed)
+        source.addEventListener('message', callbacks.activity)
         sources.push(source)
         return source
       },
@@ -191,6 +192,60 @@ describe('SSE supervisor', () => {
     vi.advanceTimersByTime(0)
     expect(sources).toHaveLength(3)
     expect(sources[2].closed).toBe(false)
+  })
+
+  it('counts delivered frames as liveness, not just the open', () => {
+    vi.useFakeTimers()
+    const { supervisor, sources } = setup({ staleDurationMs: 1000 })
+    supervisor.start()
+    sources[0].emit('open')
+
+    // A stream that is still delivering frames is alive however long ago it
+    // opened. Without this, every tab open longer than the threshold — the
+    // normal case — would pay a full bootstrap on every wake.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(900)
+      sources[0].emit('message')
+      supervisor.revalidate()
+      vi.advanceTimersByTime(0)
+    }
+    expect(sources).toHaveLength(1)
+    expect(sources[0].closed).toBe(false)
+
+    // Frames stop: the next wake past the threshold replaces the source.
+    vi.advanceTimersByTime(1001)
+    supervisor.revalidate()
+    vi.advanceTimersByTime(0)
+    expect(sources).toHaveLength(2)
+  })
+
+  it('lets a wake refresh the deadline without collapsing the backoff', () => {
+    vi.useFakeTimers()
+    const { supervisor, sources } = setup({ maxRetryDurationMs: 60_000 })
+    supervisor.start()
+    sources[0].emit('error')
+    vi.advanceTimersByTime(500)
+    sources[1].emit('error')
+    vi.advanceTimersByTime(1000)
+    sources[2].emit('error')
+    vi.advanceTimersByTime(2000)
+    expect(sources).toHaveLength(4)
+
+    // Wakes arriving at the store's debounce ceiling must not drag the retry
+    // rate back to the 500 ms floor.
+    supervisor.revalidate()
+    sources[3].emit('error')
+    vi.advanceTimersByTime(3999)
+    expect(sources).toHaveLength(4)
+    vi.advanceTimersByTime(1)
+    expect(sources).toHaveLength(5)
+
+    // A user's tap is different: it restores the floor.
+    supervisor.retry()
+    vi.advanceTimersByTime(0)
+    sources[5].emit('error')
+    vi.advanceTimersByTime(500)
+    expect(sources).toHaveLength(7)
   })
 
   it('does not replace a recently active source, but revalidates a stale one', () => {
