@@ -31,6 +31,7 @@ import { referencePresence, removeHostReferenceItems, removeReferenceItems, type
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import type { ResolvedTerminalOptions } from './settings-schema'
+import { createSSESupervisor, type SSESource } from './sse-supervisor'
 import { formatFilterParam, parseFilterParam, type Selector, sessionMatchesFilter } from './tab-filter'
 import { pushError } from './toasts'
 import type { DiscoveredProject, Folder, LauncherDef, PeerInfo, PeerProject, ProjectItem, Session } from './types'
@@ -298,11 +299,13 @@ export const sessionsLoaded = signal(false)
 export const worldLoaded = signal(false)
 // 'connecting'   — initial connect, never yet established (full-screen)
 // 'connected'    — live snapshot flowing
-// 'reconnecting' — an *established* stream dropped; EventSource is
-//                  auto-reconnecting. Subtle pill, not full-screen: the
-//                  last snapshot stays on screen (sessionsLoaded holds).
+// 'reconnecting' — an *established* stream dropped; the SSE supervisor is
+//                  retrying. Subtle pill, not full-screen: the last snapshot
+//                  stays on screen (sessionsLoaded holds).
 // 'error'        — initial connect failed (full-screen + Retry)
 export const connState = signal<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting')
+/** True when automatic SSE retries are exhausted and the user can retry. */
+export const sseRetryAvailable = signal(false)
 
 // Discovered is host-authoritative (ADR 0002/0025): each host runs its
 // own match rules over its own sessions and decides which are
@@ -2336,6 +2339,14 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
  * Start the store: connect SSE, fetch initial data, start timers.
  * Call once from the app root.
  */
+let activeSSESupervisor: ReturnType<typeof createSSESupervisor> | null = null
+
+/** Retry the control-plane stream without reloading the application. */
+export function retrySSE(): void {
+  sseRetryAvailable.value = false
+  activeSSESupervisor?.retry()
+}
+
 export function initStore(): () => void {
   const cleanups: (() => void)[] = []
 
@@ -2377,6 +2388,7 @@ export function initStore(): () => void {
       sessionsLoaded.value = true
       worldLoaded.value = true
       connState.value = 'connected'
+      sseRetryAvailable.value = false
       terminalOptions.value = buildTerminalOptions(null, null)
       keybinds.value = resolveKeybinds(null, false)
     })
@@ -2405,31 +2417,56 @@ export function initStore(): () => void {
   // both kinds (sessions, world) immediately on subscribe, so we
   // don't need a bulk-GET prefetch on first load or on reconnect.
   // Missed deltas don't matter: each snapshot is a full replacement.
+  // Reset the negotiated stream state before creating a new supervisor.
   resetSessionsTransport()
   sessionStreamWarnings.value = []
   sessionStreamOmittedTotal.value = 0
-  const source = new EventSource('/v1/events?session_stream=3')
-  source.addEventListener('error', () => {
+  sseRetryAvailable.value = false
+  const sourceBindings: Array<[string, (event: MessageEvent) => void]> = []
+  const addSourceListener = (type: string, listener: (event: MessageEvent) => void) => {
+    sourceBindings.push([type, listener])
+  }
+  const onTransportFailure = () => {
     // A transport reconnect starts a new epoch. Never retain unpublished
     // rows from the interrupted response.
     resetSessionsTransport()
-    // Browser EventSource auto-reconnects; flag the UI as degraded
-    // until the next snapshot arrives. `sessionsLoaded` stays true
-    // once it has flipped, so reconnect doesn't blank the sidebar.
-    //
-    // A drop on the *initial* connect is a hard failure (full-screen +
-    // Retry). A drop on an *established* stream is transient: show a
-    // subtle reconnecting pill and keep the last snapshot on screen
-    // while EventSource retries. The next snapshot flips it back to
-    // 'connected'.
+    sseRetryAvailable.value = false
     if (connState.value === 'connecting') connState.value = 'error'
     else if (connState.value === 'connected') connState.value = 'reconnecting'
+  }
+  const supervisor = createSSESupervisor({
+    connect: callbacks => {
+      const next = new EventSource('/v1/events?session_stream=3') as unknown as SSESource
+      next.addEventListener('open', callbacks.opened)
+      next.addEventListener('error', () => {
+        onTransportFailure()
+        callbacks.failed()
+      })
+      for (const [type, listener] of sourceBindings) next.addEventListener(type, listener)
+      return next
+    },
+    onRetryScheduled: () => {
+      // Revalidation can interrupt a partially delivered transaction without
+      // an EventSource error event, so clear staging for that new transport
+      // just as we do for an observed error.
+      resetSessionsTransport()
+      sseRetryAvailable.value = false
+      if (connState.value === 'connected' || connState.value === 'reconnecting') {
+        connState.value = 'reconnecting'
+      }
+    },
+    onExhausted: () => {
+      // Keep an established snapshot visible, but stop claiming that an
+      // automatic retry is actively pending. The UI exposes a manual retry.
+      sseRetryAvailable.value = true
+      if (!sessionsLoaded.value) connState.value = 'error'
+    },
   })
-
+  activeSSESupervisor = supervisor
   // Protocol 3 streams complete semantic rows into private staging. No row
   // becomes visible until the matching ready marker atomically replaces the
   // projection. A later epoch is an ordinary full replacement too.
-  source.addEventListener('snapshot.sessions.begin', (e) => {
+  addSourceListener('snapshot.sessions.begin', (e) => {
     try {
       const { version, epoch } = JSON.parse(e.data) as { version: number, epoch: number }
       beginSessionsBootstrap(version, epoch)
@@ -2439,7 +2476,7 @@ export function initStore(): () => void {
     }
   })
 
-  source.addEventListener('snapshot.sessions.batch', (e) => {
+  addSourceListener('snapshot.sessions.batch', (e) => {
     try {
       const { epoch, sessions: rows } = JSON.parse(e.data) as { epoch: number, sessions: ProtocolSession[] }
       if (!Array.isArray(rows)) throw new Error('sessions must be an array')
@@ -2450,7 +2487,7 @@ export function initStore(): () => void {
     }
   })
 
-  source.addEventListener('snapshot.sessions.ready', (e) => {
+  addSourceListener('snapshot.sessions.ready', (e) => {
     try {
       const { epoch } = JSON.parse(e.data) as { epoch: number }
       if (!readySessionsBootstrap(epoch)) console.warn('snapshot.sessions.ready: no matching bootstrap')
@@ -2460,7 +2497,7 @@ export function initStore(): () => void {
     }
   })
 
-  source.addEventListener('snapshot.sessions.error', (e) => {
+  addSourceListener('snapshot.sessions.error', (e) => {
     // A diagnostic quarantines one row but does not invalidate the epoch.
     // It becomes a persistent sidebar warning when ready commits this epoch.
     try {
@@ -2475,7 +2512,7 @@ export function initStore(): () => void {
   // Transitional fallback for a proxy or one-release-old daemon which ignores
   // the explicit protocol marker. Old tabs request no marker and receive this
   // event from a new daemon as well.
-  source.addEventListener('snapshot.sessions', (e) => {
+  addSourceListener('snapshot.sessions', (e) => {
     try {
       if (sessionStreamMode === 'v3') return
       const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
@@ -2489,7 +2526,7 @@ export function initStore(): () => void {
     }
   })
 
-  source.addEventListener('snapshot.world', (e) => {
+  addSourceListener('snapshot.world', (e) => {
     try {
       const env = JSON.parse(e.data) as {
         projects?: ProjectItem[]
@@ -2517,14 +2554,39 @@ export function initStore(): () => void {
     }
   })
 
-  source.addEventListener('session-activity', (e) => {
+  addSourceListener('session-activity', (e) => {
     try {
       const { id } = JSON.parse(e.data)
       if (id) handleActivity(id)
     } catch { /* ignore */ }
   })
 
-  cleanups.push(() => source.close())
+  const onVisibilityChange = () => {
+    if (document.visibilityState === 'visible') supervisor.revalidate()
+  }
+  const onResume = () => supervisor.revalidate()
+  const onOnline = () => supervisor.revalidate()
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    document.addEventListener('resume', onResume)
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', onOnline)
+    window.addEventListener('pageshow', onResume)
+  }
+  supervisor.start()
+  cleanups.push(() => {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('resume', onResume)
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('pageshow', onResume)
+    }
+    supervisor.stop()
+    if (activeSSESupervisor === supervisor) activeSSESupervisor = null
+  })
 
   // URL normalization effect: rewrites the URL when the resolved view
   // differs from the current path (e.g., `/:project` resolves to a

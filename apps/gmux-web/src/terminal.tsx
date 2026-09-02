@@ -1258,6 +1258,26 @@ export function TerminalView({
       }
     }
 
+    const revalidateConnection = () => {
+      if (disposed.current || document.visibilityState !== 'visible') return
+      const current = connectionRef.current
+      if (!current || current.ws.readyState === WebSocket.CLOSED) {
+        if (reconnectTimer.current === null) connect()
+        return
+      }
+      // An OPEN WebSocket can be a suspended, dead TCP after a mobile
+      // background/resume cycle. Closing it hands recovery to the existing
+      // bounded-delay reconnect path rather than trusting readyState.
+      current.ws.close()
+    }
+    const onVisibilityChange = () => revalidateConnection()
+    const onResume = () => revalidateConnection()
+    const onOnline = () => revalidateConnection()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    document.addEventListener('resume', onResume)
+    window.addEventListener('pageshow', onResume)
+    window.addEventListener('online', onOnline)
+
     connect()
 
     return () => {
@@ -1268,6 +1288,10 @@ export function TerminalView({
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       scrollAnchorRef.current?.reset()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('resume', onResume)
+      window.removeEventListener('pageshow', onResume)
+      window.removeEventListener('online', onOnline)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
       resetResizeEchoGate()
