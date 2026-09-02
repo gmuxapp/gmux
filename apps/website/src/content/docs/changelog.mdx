@@ -38,6 +38,49 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.1 - 2026-09-02
+
+### Highlights
+
+**Task families**
+Sessions now form families: agents, subagents, and process children share a redesigned sidebar and family panel with state filters and bulk mark-read/stop/interrupt actions. `gmux promote` makes a child a structural root, `gmux reparent` moves it, and per-root depth budgets bound recursive swarms ([#453](https://github.com/gmuxapp/gmux/pull/453), [#464](https://github.com/gmuxapp/gmux/pull/464), [#485](https://github.com/gmuxapp/gmux/pull/485), [#492](https://github.com/gmuxapp/gmux/pull/492), [#505](https://github.com/gmuxapp/gmux/pull/505)).
+
+**Attention that behaves**
+Unread attention is separate from durable error outcomes, child completions follow their direct parent, and successful supervised process exits mark themselves read. Less notification archaeology ([#472](https://github.com/gmuxapp/gmux/pull/472), [#499](https://github.com/gmuxapp/gmux/pull/499), [#511](https://github.com/gmuxapp/gmux/pull/511)).
+
+**Terminal fidelity**
+Session switches and reconnects preserve colors, normal/alternate buffers, cursor position, scroll margins, and soft-wrap provenance. Scroll anchoring holds your place during streaming output, and mobile Shift composes with Tab ([#484](https://github.com/gmuxapp/gmux/pull/484), [#500](https://github.com/gmuxapp/gmux/pull/500), [#503](https://github.com/gmuxapp/gmux/pull/503), [#510](https://github.com/gmuxapp/gmux/pull/510)).
+
+**Performance at scale**
+Conversation indexing moves behind daemon availability: in the merged 3,000-conversation benchmark, first health improved from 4.15s to 0.06s. Broadcast bursts are coalesced, and indexed, incremental projections cut a re-encoded one-row update at 10,000 sessions from about 100ms to 24ms ([#512](https://github.com/gmuxapp/gmux/pull/512), [#517](https://github.com/gmuxapp/gmux/pull/517), [#518](https://github.com/gmuxapp/gmux/pull/518), [#519](https://github.com/gmuxapp/gmux/pull/519)).
+
+**Multi-host**
+Peer bootstrap is bounded and atomic; shared cross-tailnet Tailscale hosts connect directly, and omitted remote rows are visible instead of silently disappearing. `/v1/health` now reports `conversation_index` and `session_recovery` progress ([#477](https://github.com/gmuxapp/gmux/pull/477), [#494](https://github.com/gmuxapp/gmux/pull/494), [#513](https://github.com/gmuxapp/gmux/pull/513), [#521](https://github.com/gmuxapp/gmux/pull/521)).
+
+**ntfy notifications (Experimental)**
+The owning daemon can send best-effort ntfy pushes after gmux's notification grace and presence checks, without including prompts, output, commands, paths, or session titles ([#483](https://github.com/gmuxapp/gmux/pull/483)).
+
+### Upgrade notes
+
+- Pending data on launcher stdin (for example, `foo | gmux -- cmd`) now causes a hard usage-error exit before session creation. Managed commands do not inherit launcher stdin; use `</dev/null` when no input is intended or `gmux send` to provide input.
+- First 2.1 startup applies state-store migrations 00002–00005 and keeps an automatic owner-only pre-migration backup. Downgrading after 00005 is lossy because 2.0 cannot restore promoted-family structure; use that backup to roll back.
+- The unversioned protocol-2 session snapshot stream is deprecated and available for 2.1 only. Custom consumers must request `session_stream=3` before protocol 2 is removed in the next release.
+
+### Behavior changes
+
+- Successful supervised process exits are automatically marked read when the direct parent has a live local runner; failures, interruptions, and unsupervised exits remain unread ([#511](https://github.com/gmuxapp/gmux/pull/511)).
+- Family relationships use `gmux promote` and `gmux reparent`; promotion is structural. The Experimental `agent.max_subagents_by_depth` setting defaults to `[-1, 8]`.
+- ntfy notifications require the ntfy app or a push-capable browser. With [`[notifications.ntfy]`](/reference/host-toml/#notificationsntfy), treat topics on public servers as secrets and keep `host.toml` owner-only (`0600` or stricter).
+
+### Improvements
+
+- Source and contributor builds use the exact Go 1.26.1 toolchain ([#520](https://github.com/gmuxapp/gmux/pull/520)).
+
+### Fixes
+- **(build)** support direct Go 1.27 invocations ([#523](https://github.com/gmuxapp/gmux/pull/523))
+- **(web)** recover SSE after fatal transport failures ([#522](https://github.com/gmuxapp/gmux/pull/522))
+
+---
 ## v2.1.0 - 2026-09-01
 
 ### Highlights
