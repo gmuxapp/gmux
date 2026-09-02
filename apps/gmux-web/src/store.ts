@@ -2435,14 +2435,17 @@ export function initStore(): () => void {
     else if (connState.value === 'connected') connState.value = 'reconnecting'
   }
   const supervisor = createSSESupervisor({
+    onFailure: onTransportFailure,
     connect: callbacks => {
       const next = new EventSource('/v1/events?session_stream=3') as unknown as SSESource
       next.addEventListener('open', callbacks.opened)
-      next.addEventListener('error', () => {
-        onTransportFailure()
-        callbacks.failed()
-      })
-      for (const [type, listener] of sourceBindings) next.addEventListener(type, listener)
+      next.addEventListener('error', callbacks.failed)
+      for (const [type, listener] of sourceBindings) {
+        next.addEventListener(type, event => {
+          callbacks.activity()
+          listener(event)
+        })
+      }
       return next
     },
     onRetryScheduled: () => {
@@ -2561,11 +2564,27 @@ export function initStore(): () => void {
     } catch { /* ignore */ }
   })
 
-  const onVisibilityChange = () => {
-    if (document.visibilityState === 'visible') supervisor.revalidate()
+  let lifecycleTimer: ReturnType<typeof setTimeout> | null = null
+  const isVisible = () => typeof document !== 'undefined' && document.visibilityState === 'visible'
+  const scheduleLifecycleRevalidation = () => {
+    // A single logical wake delivers several of visibilitychange/pageshow/
+    // resume/online, often in separate task turns. One shared debounce
+    // coalesces them into at most one revalidation, and the supervisor then
+    // only replaces a source that is unhealthy or stale: a protocol-3
+    // bootstrap re-sends every session row, so a full reconnect per focus is
+    // expensive on a phone. A hidden tab never revalidates — checked both
+    // when scheduling and when the timer fires, since the tab can be hidden
+    // again inside the debounce window.
+    if (!isVisible() || lifecycleTimer !== null) return
+    lifecycleTimer = setTimeout(() => {
+      lifecycleTimer = null
+      if (!isVisible()) return
+      supervisor.revalidate()
+    }, 1000)
   }
-  const onResume = () => supervisor.revalidate()
-  const onOnline = () => supervisor.revalidate()
+  const onVisibilityChange = () => scheduleLifecycleRevalidation()
+  const onResume = () => scheduleLifecycleRevalidation()
+  const onOnline = () => scheduleLifecycleRevalidation()
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisibilityChange)
     document.addEventListener('resume', onResume)
@@ -2576,6 +2595,8 @@ export function initStore(): () => void {
   }
   supervisor.start()
   cleanups.push(() => {
+    if (lifecycleTimer !== null) clearTimeout(lifecycleTimer)
+    lifecycleTimer = null
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       document.removeEventListener('resume', onResume)

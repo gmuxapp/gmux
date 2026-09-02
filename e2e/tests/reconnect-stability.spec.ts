@@ -68,6 +68,20 @@ async function installEventSourceProbe(page: Page): Promise<void> {
   })
 }
 
+async function installWebSocketProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const Native = window.WebSocket
+    const sockets: any[] = []
+    ;(window as any).__gmuxWebSockets = sockets
+    ;(window as any).WebSocket = class extends Native {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols)
+        sockets.push(this)
+      }
+    }
+  })
+}
+
 test.describe('SSE reconnect stability', () => {
   test('recovers from a fatal 503 response without a page reload', async ({ page }) => {
     await installEventSourceProbe(page)
@@ -114,6 +128,92 @@ test.describe('SSE reconnect stability', () => {
       undefined,
       { timeout: 5_000 },
     )
+  })
+
+  test('a wake on a healthy stream creates no new EventSource', async ({ page }) => {
+    await installEventSourceProbe(page)
+    await openApp(page)
+    await page.waitForFunction(() => (window as any).__gmuxEventSources?.[0]?.readyState === 1)
+    await page.waitForTimeout(1_000)
+
+    // Every bootstrap re-sends the full sessions transaction and world frame,
+    // which is expensive on cellular at the operator's session count. A phone
+    // unlock delivers several lifecycle signals; none may cost a bootstrap.
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event('online'))
+        window.dispatchEvent(new Event('pageshow'))
+        document.dispatchEvent(new Event('visibilitychange'))
+        document.dispatchEvent(new Event('resume'))
+      })
+      await page.waitForTimeout(500)
+    }
+    await page.waitForTimeout(1_500)
+    expect(await page.evaluate(() => (window as any).__gmuxEventSources.length)).toBe(1)
+    await expect(page.locator('.app-reconnecting-pill')).not.toBeVisible()
+  })
+
+  test('wakes automatically after the bounded retry window is exhausted', async ({ page }) => {
+    test.setTimeout(100_000)
+    await installEventSourceProbe(page)
+    await openApp(page)
+    await page.waitForFunction(() => (window as any).__gmuxEventSources?.[0]?.readyState === 1)
+    await page.waitForTimeout(1_000)
+
+    const state = await readState()
+    await page.route('**/v1/events*', route => route.fulfill({
+      status: 503,
+      headers: { 'Content-Type': 'text/plain', 'Retry-After': '1' },
+      body: 'temporarily unavailable',
+    }))
+    process.kill(currentDaemonPid(state), 'SIGTERM')
+
+    // The supervisor's production budget is 60 seconds. Waiting for the
+    // actual exhaustion, rather than changing it through a test hook, proves
+    // a phone returning after a long absence gets a fresh wake budget.
+    const retryButton = page.locator('.app-reconnecting-pill button')
+    await expect(retryButton).toBeVisible({ timeout: 75_000 })
+
+    // Restore the real daemon while the fault is still installed. The wake
+    // below, not a button click, must reopen the exhausted supervisor.
+    await restartDaemon(state)
+    await page.unroute('**/v1/events*')
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('online'))
+      window.dispatchEvent(new Event('pageshow'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await expect(retryButton).not.toBeVisible({ timeout: 15_000 })
+    await page.waitForFunction(
+      () => (window as any).__gmuxEventSources.some((s: any) => s.__openStates.includes(1)),
+      undefined,
+      { timeout: 5_000 },
+    )
+    // Exactly one live source: replacement must never leak a parallel stream.
+    expect(await page.evaluate(() => (window as any).__gmuxEventSources
+      .filter((s: any) => s.readyState !== 2).length)).toBe(1)
+  })
+
+  test('terminal WebSocket revalidation avoids healthy churn and detects stale sockets', async ({ page }) => {
+    await installWebSocketProbe(page)
+    await openApp(page)
+    await gotoTestSession(page)
+    const healthyCount = await page.evaluate(() => (window as any).__gmuxWebSockets.length)
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await page.waitForTimeout(1_200)
+    expect(await page.evaluate(() => (window as any).__gmuxWebSockets.length)).toBe(healthyCount)
+
+    await page.evaluate(() => {
+      const realNow = Date.now.bind(Date)
+      ;(window as any).__gmuxRealDateNow = realNow
+      Date.now = () => realNow() + 61_000
+      window.dispatchEvent(new Event('online'))
+    })
+    await expect.poll(
+      () => page.evaluate(() => (window as any).__gmuxWebSockets.length),
+      { timeout: 5_000 },
+    ).toBeGreaterThan(healthyCount)
+    await page.evaluate(() => { Date.now = (window as any).__gmuxRealDateNow })
   })
 
   test('terminal WebSocket reconnects after the daemon restarts', async ({ page }) => {
