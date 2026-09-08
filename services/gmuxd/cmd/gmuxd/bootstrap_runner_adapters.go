@@ -415,6 +415,45 @@ type productionRunnerSpawner struct {
 	launched            map[string]runnerLaunchResult
 }
 
+// productionResolveRelaunchCommand is the production relaunch resolution: the
+// shared policy (package relaunch) applied with the live adapter resolver.
+// It is the single value injected as productionRunnerSpawner.ResolveCommand
+// (serve_central.go) and the one the HTTP guards consult, so presentation,
+// admission and execution cannot drift; tests must exercise *this* function
+// rather than re-implementing the lambda that used to live at the call site.
+func productionResolveRelaunchCommand(row centralstore.Session) []string {
+	legacy := centralSessionToLegacy(row)
+	cmd, _ := discovery.ResolveRelaunchLive(legacy.Adapter, legacy.ConversationRef, legacy.Command)
+	return cmd
+}
+
+// resolveCommand applies the injected relaunch resolution, defaulting to the
+// production one so a spawner built without wiring behaves identically.
+func (s *productionRunnerSpawner) resolveCommand(row centralstore.Session) []string {
+	if s.ResolveCommand != nil {
+		return s.ResolveCommand(row)
+	}
+	return productionResolveRelaunchCommand(row)
+}
+
+// CanSpawn answers Restart's pre-stop question (sessioncoord.RunnerSpawnChecker)
+// with exactly the predicate Spawn applies, minus any side effect.
+func (s *productionRunnerSpawner) CanSpawn(row centralstore.Session) error {
+	if len(s.resolveCommand(row)) == 0 {
+		return relaunchRefusal(row)
+	}
+	return nil
+}
+
+// relaunchRefusal is the actionable refusal for a row the relaunch policy
+// declines. The two refusals have different remedies, so they read differently.
+func relaunchRefusal(row centralstore.Session) error {
+	if row.ConversationRef != "" {
+		return fmt.Errorf("session %s cannot be resumed: its %s conversation (%s) is missing, empty, or no longer resumable by the adapter", row.ID, row.Adapter, row.ConversationRef)
+	}
+	return fmt.Errorf("session %s cannot be relaunched: no conversation to resume and no recorded command to rerun", row.ID)
+}
+
 func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Session) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -433,13 +472,9 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	if cwd == "" {
 		return "", fmt.Errorf("runner spawn: no usable directory")
 	}
-	if s.ResolveCommand != nil {
-		legacy.Command = s.ResolveCommand(row)
-	} else {
-		legacy.Command = discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
-	}
+	legacy.Command = s.resolveCommand(row)
 	if len(legacy.Command) == 0 {
-		return "", fmt.Errorf("runner spawn: session %s is not resumable", row.ID)
+		return "", fmt.Errorf("runner spawn: %w", relaunchRefusal(row))
 	}
 	endpoint := filepath.Join(paths.SessionSocketDir(), legacy.ID+".sock")
 	// A retained session may predate the socket lease protocol and therefore

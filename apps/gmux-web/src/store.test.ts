@@ -83,6 +83,44 @@ describe('postAction surfaces backend failures as error toasts', () => {
     expect(toasts.value[0].message).toBe('Kill failed: Internal Server Error')
   })
 
+  it('labels a failed rerun with the verb the UI showed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 400, statusText: 'Bad Request',
+      text: () => Promise.resolve(JSON.stringify({
+        ok: false, error: { code: 'not_resumable', message: 'no recorded command to rerun' },
+      })),
+    }))
+    await resumeSession('s1', 'rerun')
+    expect(toasts.value[0].message).toBe('Rerun failed: no recorded command to rerun')
+  })
+
+  it('tells the user when a rerun was relocated to the fallback directory', async () => {
+    // The daemon substitutes a directory when the recorded one is gone; a
+    // rerun executes an arbitrary recorded command, so this cannot be silent.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({
+        ok: true,
+        data: { pid: 7, session_id: 's1', original_cwd: '/gone', fallback_cwd: '/home/user' },
+      }),
+    }))
+    await resumeSession('s1', 'rerun')
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({
+      kind: 'info',
+      message: 'Rerunning in /home/user instead (/gone no longer exists)',
+    })
+  })
+
+  it('stays quiet when the relaunch happened where the session lived', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({ ok: true, data: { pid: 7, session_id: 's1' } }),
+    }))
+    await resumeSession('s1', 'rerun')
+    expect(toasts.value).toHaveLength(0)
+  })
+
   it('does NOT toast a network reject (connectivity is owned by the reconnecting pill)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     await resumeSession('s1')

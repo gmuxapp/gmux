@@ -16,7 +16,7 @@ import { MenuButton } from './menu-button'
 import { installCopySession } from './mock-data/export-session'
 import { ReplayView } from './replay-view'
 import { viewToPath } from './routing'
-import { lifecycleAction } from './session-actions'
+import { lifecycleAction, type RelaunchVerb } from './session-actions'
 import { SettingsModal } from './settings'
 import { Sidebar } from './sidebar'
 import {
@@ -182,7 +182,7 @@ class ErrorBoundary extends Component<
 function MainHeader({ session, onRestart, onResume, resuming }: {
   session: Session | null
   onRestart?: () => void
-  onResume?: (id: string) => void
+  onResume?: (id: string, verb?: RelaunchVerb) => void
   resuming?: boolean
 }) {
   const familyTriggerRef = useRef<HTMLButtonElement>(null)
@@ -328,7 +328,7 @@ function sessionHref(session: Session): string | undefined {
 function SessionMenu({ session, onRestart, onResume, resuming }: {
   session: Session
   onRestart?: () => void
-  onResume?: (id: string) => void
+  onResume?: (id: string, verb?: RelaunchVerb) => void
   resuming?: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -398,7 +398,7 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // button in ReplayView's action bar.
   const action = lifecycleAction(session, resuming)
   const actionHandler = action?.id === 'restart' ? onRestart
-    : action?.id === 'resume' && onResume ? () => onResume(session.id)
+    : action?.id === 'relaunch' && onResume ? () => onResume(session.id, action.verb)
     : undefined
   const showStale = action?.id === 'restart' && !!staleKind
 
@@ -888,13 +888,16 @@ function App() {
     dismissSession(session.id)
   }, [])
 
-  const handleResume = useCallback((id: string) => {
+  // The verb comes from the daemon's verdict (session.relaunch) so a failed
+  // rerun of a shell doesn't toast "Resume failed" for an action the UI
+  // labelled "Rerun".
+  const handleResume = useCallback((id: string, verb: RelaunchVerb = 'resume') => {
     setResumingId(id)
     // resumeSession never rejects (postAction converts failures to false
     // and surfaces the toast itself); branch on the boolean to clear the
     // "resuming…" spinner immediately on rejection instead of letting it
     // linger until the 10s timeout.
-    void resumeSession(id).then(ok => {
+    void resumeSession(id, verb).then(ok => {
       if (!ok) setResumingId(prev => prev === id ? null : prev)
     })
   }, [])

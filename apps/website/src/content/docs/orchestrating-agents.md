@@ -40,8 +40,11 @@ gmux agent logs a1b2c3d4                             # re-read the latest exchan
 
 An agent session names a **conversation**, not a process: prompting an
 inactive conversation transparently resumes it, and reading one never starts
-anything. Semantic surfaces report the agent as **active** or **inactive** —
-your script never branches on whether a process happens to be resident.
+anything. (The exception: a session whose agent exited before it ever bound a
+conversation has nothing to resume, so prompting it reruns the recorded
+command and delivers the prompt into a fresh conversation.) Semantic surfaces
+report the agent as **active** or **inactive** — your script never branches on
+whether a process happens to be resident.
 
 `--new` launches a new pi session (from this shell's env and cwd, local daemon
 only) and sends the prompt as its first work. A synchronous run prints the
@@ -148,8 +151,9 @@ everything that entered the loop.
 ordinary work; delivered into **running** work it merges into that activity,
 which settles once for everybody. Flags go before the id; everything after the
 id is the prompt, verbatim. A plain prompt transparently resumes an inactive
-conversation to deliver it; `--steer` and `cancel` fail when no activity is in
-progress and never resume.
+conversation to deliver it — or, when no conversation was ever bound, reruns
+the recorded command and delivers into a fresh one; `--steer` and `cancel`
+fail when no activity is in progress and never resume.
 
 ## Reading a conversation
 

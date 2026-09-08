@@ -295,8 +295,8 @@ func (d agentDeps) timer(dur time.Duration) <-chan time.Time {
 // POST /v1/sessions/{id}/resume's preconditions on purpose: a transparent
 // resume must not be able to succeed where an explicit one would refuse.
 func agentResumeGuard(ctx context.Context, boot *Bootstrap, gmuxBin string, row centralstore.Session) (int, string, string) {
-	if row.ExitedAt == nil || len(row.Command) == 0 {
-		return http.StatusBadRequest, "not_resumable", "session is not resumable"
+	if status, code, msg := relaunchGuard(row); status != 0 {
+		return status, code, msg
 	}
 	if gmuxBin == "" {
 		return http.StatusInternalServerError, "gmux_not_found", "gmux not found"
@@ -307,6 +307,43 @@ func agentResumeGuard(ctx context.Context, boot *Bootstrap, gmuxBin string, row 
 	}
 	if cwd == "" {
 		return http.StatusUnprocessableEntity, "cwd_missing", "the session's working directory no longer exists and no fallback directory is available"
+	}
+	return 0, "", ""
+}
+
+// relaunchGuard reports why a row cannot be relaunched, as (status, code,
+// message), or a zero status when POST /resume may proceed. It applies the
+// shared relaunch policy (package relaunch) that the wire converter presents
+// and the runner spawner executes, so a client is never refused for a row the
+// UI showed as relaunchable — and when it is refused, the message says which
+// of the two relaunch verbs was unavailable and why.
+func relaunchGuard(row centralstore.Session) (int, string, string) {
+	if row.ExitedAt == nil {
+		// Two shapes reach this, and the message must fit both: a session
+		// that is genuinely running, and one whose runner is gone but whose
+		// exit is not durable yet (the convergence window — the coordinator
+		// refuses those too, ErrConvergencePending). Telling the second one
+		// to "stop it first" would be nonsense advice about a dead process.
+		return http.StatusBadRequest, "not_resumable",
+			"this session has no recorded exit: if it is still running, restart it instead; if it just stopped, retry in a moment"
+	}
+	return relaunchCommandGuard(row)
+}
+
+// relaunchCommandGuard is relaunchGuard without the exit precondition, for
+// restart: restart stops a live session and then spawns it again, so a row
+// the spawner would refuse must be refused *before* the stop. Otherwise
+// "Restart" is a kill with extra steps — exactly what it was for every shell
+// session before the relaunch policy was shared.
+func relaunchCommandGuard(row centralstore.Session) (int, string, string) {
+	if len(productionResolveRelaunchCommand(row)) == 0 {
+		if row.ConversationRef != "" {
+			return http.StatusBadRequest, "not_resumable", fmt.Sprintf(
+				"this session's %s conversation (%s) is missing, empty, or no longer resumable by the adapter; start a new session instead",
+				row.Adapter, row.ConversationRef)
+		}
+		return http.StatusBadRequest, "not_resumable",
+			"this session has no conversation to resume and no recorded command to rerun; start a new session instead"
 	}
 	return 0, "", ""
 }

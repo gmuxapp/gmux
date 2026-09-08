@@ -5,6 +5,12 @@ import "reflect"
 // SessionProjection is the authority-neutral, copyable projection received
 // from a peer's snapshot.sessions stream. It intentionally contains only
 // wire/runtime facts; no durable store type crosses the peering boundary.
+//
+// Relaunch carries the owning peer's relaunch verdict verbatim ("resume" or
+// "rerun"): the owner is the only node that can resolve its own adapters'
+// conversations, and it is the node that will execute the request once we
+// forward it. Empty means the owner refuses — or that it runs a daemon older
+// than the field, which clients degrade to the Resumable-only behavior.
 type SessionProjection struct {
 	ID                    string            `json:"id"`
 	Peer                  string            `json:"peer,omitempty"`
@@ -29,6 +35,7 @@ type SessionProjection struct {
 	Unread                bool              `json:"unread"`
 	UnreadToken           string            `json:"unread_token"`
 	Resumable             bool              `json:"resumable,omitempty"`
+	Relaunch              string            `json:"relaunch,omitempty"` // "resume" | "rerun" | "" (refused / pre-field peer)
 	SocketPath            string            `json:"socket_path,omitempty"`
 	TerminalCols          uint16            `json:"terminal_cols,omitempty"`
 	TerminalRows          uint16            `json:"terminal_rows,omitempty"`

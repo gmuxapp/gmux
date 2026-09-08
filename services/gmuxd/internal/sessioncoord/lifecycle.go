@@ -92,6 +92,15 @@ type RunnerSpawner interface {
 	Spawn(ctx context.Context, session centralstore.Session) (endpoint string, err error)
 }
 
+// RunnerSpawnChecker is an optional extension implemented by spawners that can
+// answer "would you refuse this row?" without launching anything. Restart uses
+// it to refuse *before* stopping: restart is stop+spawn, so a row the spawner
+// would reject must never lose its running process to a doomed respawn.
+// Implementations must be pure and side-effect free.
+type RunnerSpawnChecker interface {
+	CanSpawn(session centralstore.Session) error
+}
+
 // RunnerSpawnCleaner is an optional extension implemented by spawners that
 // retain an exact process handle. It is invoked when replacement registration
 // fails, so a child that never became coordinator-owned cannot leak. Cleanup
@@ -278,10 +287,16 @@ func (c *Coordinator) Resume(ctx context.Context, id centralstore.SessionID) (Ru
 		return Runtime{}, err
 	}
 	defer release()
-	return c.resumeClaimed(ctx, id, cl)
+	return c.resumeClaimed(ctx, id, cl, nil)
 }
 
-func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.SessionID, cl *LifecycleClaim) (Runtime, error) {
+// resumeClaimed spawns under an already-held claim. authorized, when non-nil,
+// is the row snapshot the caller's decision was made against (Restart reads it
+// before the stop): the spawn then uses that snapshot instead of re-reading,
+// so a runner fact landing between the decision and the spawn — fact events do
+// not take the lifecycle claim — cannot flip the relaunch verdict under the
+// operation and strand a stopped session.
+func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.SessionID, cl *LifecycleClaim, authorized *centralstore.Session) (Runtime, error) {
 	if _, live := c.registry.current(id); live {
 		return Runtime{}, fmt.Errorf("%w: %s", ErrSessionAlive, id)
 	}
@@ -291,6 +306,13 @@ func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.Session
 	}
 	if !ok {
 		return Runtime{}, fmt.Errorf("%w: %s", centralstore.ErrSessionNotFound, id)
+	}
+	if authorized != nil {
+		// Keep the fresh row's convergence/liveness facts below, but spawn
+		// exactly what was authorized.
+		session.Adapter = authorized.Adapter
+		session.ConversationRef = authorized.ConversationRef
+		session.Command = append([]string(nil), authorized.Command...)
 	}
 	if session.ExitedAt == nil {
 		c.mu.Lock()
@@ -354,10 +376,25 @@ func (c *Coordinator) Restart(ctx context.Context, id centralstore.SessionID) (R
 		return Runtime{}, err
 	}
 	defer release()
+	// Decide against one snapshot, taken under the claim and *before* the
+	// stop, and carry it into the spawn. Without this, restart is a kill with
+	// extra steps whenever the spawner would refuse the row it re-reads.
+	authorized, ok, err := c.durable.Session(ctx, id)
+	if err != nil {
+		return Runtime{}, err
+	}
+	if !ok {
+		return Runtime{}, fmt.Errorf("%w: %s", centralstore.ErrSessionNotFound, id)
+	}
+	if checker, ok := c.spawner.(RunnerSpawnChecker); ok {
+		if err := checker.CanSpawn(authorized); err != nil {
+			return Runtime{}, fmt.Errorf("sessioncoord: restart refused for %s (session left running): %w", id, err)
+		}
+	}
 	if _, live := c.registry.current(id); live {
 		if err := c.stopClaimed(ctx, id); err != nil {
 			return Runtime{}, err
 		}
 	}
-	return c.resumeClaimed(ctx, id, cl)
+	return c.resumeClaimed(ctx, id, cl, &authorized)
 }

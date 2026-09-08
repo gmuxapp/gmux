@@ -72,6 +72,7 @@ gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream
 | `unread_token` | ✓ | ✓ | ✓ | ✓ read acknowledgement identity |
 | **Resume & conversations** |
 | `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
+| `relaunch` | — | ✓ derived | ✓ | ✓ Resume/Rerun affordance |
 | `conversation_file` | ✓ (hook) | ✓ | ✓ | ✓ duplicate-conversation warning |
 | **Routing** |
 | `slug` | ✓ opt | ✓ auto-derived | ✓ | ✓ URL routing |
@@ -131,10 +132,19 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `resumable` | boolean | Derived, never set manually: the session is dead, has evidence it actually ran, its adapter has not declared the conversation gone, and a resume command can be derived. |
+| `resumable` | boolean | Derived, never set manually: the session is dead, has evidence it actually ran, its adapter has not declared the conversation gone, and a relaunch command can be derived. Equivalent to `relaunch` being present. |
+| `relaunch` | `"resume"` \| `"rerun"`? | Which relaunch the **owning** daemon will perform for `POST /v1/sessions/{id}/resume`: `resume` continues the recorded conversation, `rerun` launches the recorded command again in the recorded directory (or, when that directory is gone, in the fallback directory the response reports as `fallback_cwd`). Absent means the daemon will refuse (or, for a peer row, that the owner runs a daemon older than the field — clients then fall back to `resumable`). Clients must not re-derive the verb from the adapter name: only the owner can resolve its adapters' conversations. |
 | `conversation_file` | string? | The agent's opaque conversation ref (for file-backed adapters, the transcript path), reported authoritatively by the agent hook (ADR 0011). Drives resume-command derivation; duplicate values across live sessions trigger a "conversation open in multiple tabs" warning. |
 
-The stored launch `command` is preserved across exit. Resuming derives a tool-specific resume command from `(adapter, conversation_ref)` at spawn time. Dead conversations can be resolved via `GET /v1/conversations/{adapter}/{slug}`.
+The stored launch `command` is preserved across exit. One policy decides what a
+relaunch runs, and both the wire projection and the runner spawner apply it
+(`services/gmuxd/internal/relaunch`): with a `conversation_file`, a
+tool-specific resume command is derived from `(adapter, conversation_ref)` at
+spawn time, and an unresolvable conversation makes the session non-relaunchable
+rather than silently starting a fresh one; without one — every shell and editor
+session, plus agents that died before their hook bound a conversation — the
+recorded launch command is rerun. Dead conversations can be resolved via `GET
+/v1/conversations/{adapter}/{slug}`.
 
 ### Routing
 
