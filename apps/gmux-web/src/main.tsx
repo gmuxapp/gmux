@@ -23,7 +23,7 @@ import {
   acknowledgePromotionAnnouncement, activityMap, beginPromotion, connState, 
   dismissSession, familyActivityById, health, 
   initStore, isPromotionAnnouncementDelivered,keybinds, 
-  keyboardOpen, macCommandIsCtrl,navigate, navigateToSession,peers, projects,promoteSession, promotionAnnouncements,
+  keyboardOpen, localPeerNames, macCommandIsCtrl,navigate, navigateToSession,peers, projects,promoteSession, promotionAnnouncements,
   promotionPending, reparentSession,restartSession, resumeSession, retrySSE, selected, selectedId, sessionDotState, 
   sessionStaleness, 
   sessions, setNavigate, settlePromotion, sseRetryAvailable, tabHref,terminalFindOpen, 
@@ -403,12 +403,14 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   const showStale = action?.id === 'restart' && !!staleKind
 
   // Presentation promotion (ADR 0026 §8). Eligibility mirrors the family
-  // projection's own edge rule and is null for peer-projected sessions, so
-  // the menu never offers a mutation the daemon would refuse. The `⋮` menu
+  // projection's own edge rule, so the menu never offers a mutation the
+  // daemon would refuse. Peer-owned sessions are included: the local daemon
+  // forwards the mutation to the host that owns the family. The `⋮` menu
   // is deliberately the only surface carrying these verbs: it exists for
   // every session view (desktop and mobile, alive and dead), and a promoted
   // session — no longer a family member — has no family panel to demote from.
-  const promotion = promotionAction(session, sessions.value, projects.value)
+  const promotion = promotionAction(session, sessions.value, projects.value,
+    name => localPeerNames.value.has(name))
   // In-flight guard: the menu closes on activation, but reopening it before
   // the authoritative snapshot lands would offer the same verb again — a
   // second POST per click (reproduced in e2e). The entry lives in the

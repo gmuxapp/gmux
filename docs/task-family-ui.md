@@ -17,17 +17,31 @@ presentation roots and cannot be hidden accidentally.
 `gmux promote <id>` severs the current edge and makes a session a root;
 `gmux reparent <id> <parent-id>` moves it under another session. The web UI
 exposes the same pair in the session's `⋮` menu ("Promote to root" /
-"Return to family", `promotionAction` in `family.ts`), offered only for
-daemon-owned sessions and only while the return target resolves locally as a
-semantic agent. Promote is blocked (visible, disabled, with the reason) when no
+"Return to family", `promotionAction` in `family.ts`), offered while the
+return target resolves as a semantic agent owned by the same host as the
+session. Promote is blocked (visible, disabled, with the reason) when no
 project places the session: an unplaced root has no sidebar row and no routable
 URL, and the daemon deliberately gives parentage no say in project matching.
 Return to family is blocked the same way when the resulting family root has no
 stamp-backed placement, so an outside-project parent cannot strand the selected
 child. Promotion re-roots the active-subagent budget under the promoted session
-and removes its notification suppressor. Both mutations are local-only;
-self-parenting, ancestor cycles, and cross-peer reassignment are rejected
-transactionally.
+and removes its notification suppressor. Self-parenting and ancestor cycles
+are rejected transactionally by the owning store.
+
+Both mutations work on peer-projected sessions, because neither is cross-peer:
+promote is reparent-to-null and a peer session's parent pointer is a pointer
+within its own daemon. The viewer never writes a peer projection — it forwards
+`POST /v1/sessions/{id@peer}/reparent` to the owning daemon under that peer's
+credentials, translating the requested parent out of the viewer's namespace
+(`id@peer` → `id`) on the way. The one genuine refusal is a family that would
+span daemons: a peer child under a local parent, a local child under a peer
+parent, or two different peers. `parent_session_id` drives one daemon's
+ordering scopes, recursive dismissal and notification suppression, none of
+which can cross a host boundary, so both the CLI and the daemon refuse it
+(`cross_peer`) and the menu never offers it. Peer placement follows the
+sidebar: a promoted peer row needs a reference folder for its host's project
+(Settings → “From other hosts”), otherwise the verb is blocked with the same
+no-project reason as a local unplaced row.
 
 The daemon derives `semantic_agent` from the existing
 `adapter.ConversationSource` capability. It covers the conversation-backed Pi,

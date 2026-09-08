@@ -210,11 +210,14 @@ export function familyAncestors(selected: Session, source: FamilySource): Sessio
  * Eligibility mirrors the projection's own edge rule (`familyIndex`), so the
  * menu can never offer a mutation whose result the sidebar wouldn't show:
  *
- *  - peer-projected sessions (network peers and Local/devcontainer peers
- *    alike) get nothing: the daemon refuses promote/demote for sessions it
- *    doesn't own (`local_only`), so offering the verb would be a lie;
- *  - a family child (cycle-safe, parent local and a semantic agent) can be
- *    promoted — but only if the resulting root row has
+ *  - a peer-projected session is offered the same verbs as a local one: the
+ *    edge belongs to the owning daemon, and the local daemon forwards the
+ *    mutation there (`parent_session_id` is a same-daemon pointer either way).
+ *    Only a family that would span daemons is refused, and neither verb can
+ *    ask for that: promote clears the edge, and Return to family targets the
+ *    launch parent, which is required below to be on the same host;
+ *  - a family child (cycle-safe, parent a semantic agent on the same host)
+ *    can be promoted — but only if the resulting root row has
  *    the same real stamp-backed placement the sidebar uses. A matching rule
  *    alone is not enough: `buildProjectFolders` buckets only stamped rows,
  *    including retained-dead sessions. The daemon deliberately has no
@@ -232,24 +235,29 @@ export type PromotionAction =
   | { readonly kind: 'promote'; readonly parent: Session; readonly blocked?: 'no-project' }
   | { readonly kind: 'demote'; readonly parent: Session; readonly blocked?: 'no-project' }
 
-/** The exact stamp-backed predicate used by `buildProjectFolders` for local
- * rows. Routing can serialize a disclaimed match, but that is not enough for
- * this menu: after a promotion/demotion the user must have a sidebar row too. */
-function hasSidebarPlacement(session: Session, projects: ProjectItem[]): boolean {
-  return sidebarProjectForSession(session, projects) !== null
+/** The exact stamp-backed predicate used by `buildProjectFolders`, for local
+ * and peer-owned rows alike. Routing can serialize a disclaimed match, but
+ * that is not enough for this menu: after a promotion/demotion the user must
+ * have a sidebar row too. */
+function hasSidebarPlacement(
+  session: Session,
+  projects: ProjectItem[],
+  isLocalPeer?: (peerName: string) => boolean,
+): boolean {
+  return sidebarProjectForSession(session, projects, isLocalPeer) !== null
 }
 
 export function promotionAction(
   session: Session,
   source: FamilySource,
   projects: ProjectItem[],
+  isLocalPeer?: (peerName: string) => boolean,
 ): PromotionAction | null {
-  if (session.peer) return null
   const index = indexFor(source)
   if (index.childIds.has(session.id)) {
     const parent = index.byId.get(session.parent_session_id!)
     if (!parent) return null
-    const placeable = hasSidebarPlacement(session, projects)
+    const placeable = hasSidebarPlacement(session, projects, isLocalPeer)
     return placeable
       ? { kind: 'promote', parent }
       : { kind: 'promote', parent, blocked: 'no-project' }
@@ -258,7 +266,11 @@ export function promotionAction(
   if (session.parent_session_id) return null
   if (!session.launched_from_session_id || session.launched_from_session_id === session.id) return null
   const parent = index.byId.get(session.launched_from_session_id)
-  if (!parent || parent.semantic_agent !== true || parent.peer) return null
+  // One family, one daemon: the launch parent must be owned by the same host
+  // as the session. (For a peer session both sides carry the same `peer`
+  // label, since the projection namespaces provenance with the parent edge.)
+  if (!parent || parent.semantic_agent !== true
+    || (parent.peer ?? '') !== (session.peer ?? '')) return null
 
   // Test the projection produced by reparenting to the launch parent. This
   // catches an unplaced ancestor even when the immediate target is placed.
@@ -267,7 +279,7 @@ export function promotionAction(
       ? { ...candidate, parent_session_id: parent.id }
       : candidate)
   const returnedRoot = familyRoot(session, returnedSessions)
-  return hasSidebarPlacement(returnedRoot, projects)
+  return hasSidebarPlacement(returnedRoot, projects, isLocalPeer)
     ? { kind: 'demote', parent }
     : { kind: 'demote', parent, blocked: 'no-project' }
 }

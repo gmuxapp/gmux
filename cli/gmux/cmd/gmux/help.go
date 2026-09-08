@@ -233,7 +233,8 @@ then escalates to SIGKILL. The session stays listed
   gmux promote <id>
 
 Severs the current family edge. The session gets independent family grouping,
-budget ownership, and recursive dismissal. Local sessions only. Undo by
+budget ownership, and recursive dismissal. Works on a peer session too
+(id@peer): the request is forwarded to the daemon that owns it. Undo by
 reparenting it under its former parent.
 `,
 
@@ -242,8 +243,9 @@ reparenting it under its former parent.
   gmux reparent <id> <parent-id>
 
 Changes family grouping, budget ownership, and recursive dismissal. Both
-sessions must be local to this daemon; self-parenting and cycles are refused.
-Use 'gmux promote <id>' to make the session a root again.
+sessions must be owned by the same daemon — both local, or both on the same
+peer (id@peer); a family cannot span hosts. Self-parenting and cycles are
+refused. Use 'gmux promote <id>' to make the session a root again.
 `,
 
 	"edit": `gmux edit: open a file in a managed editor session

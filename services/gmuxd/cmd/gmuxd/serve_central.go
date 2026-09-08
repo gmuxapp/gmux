@@ -1138,9 +1138,28 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	}
 	if peerManager != nil && action != "" {
 		if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+			// Reparent (including promote-to-root, which is reparent-to-null)
+			// is forwarded to the owning daemon, never applied to the local
+			// projection: the mutation belongs to the host that owns the
+			// family, and the peer's own token custody carries it there.
+			// Only a family that would span daemons is refused — see
+			// rewritePeerReparentBody.
 			if action == "reparent" {
-				writeError(w, http.StatusBadRequest, codeLocalOnly, fmt.Sprintf(
-					"%s is only available for sessions owned by this daemon; run gmux on the owning host", action))
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+					return
+				}
+				body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+				if err != nil || len(body) > 4096 {
+					writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
+					return
+				}
+				forward, code, message := rewritePeerReparentBody(body, peer.Config.Name)
+				if code != "" {
+					writeError(w, http.StatusBadRequest, code, message)
+					return
+				}
+				peer.ForwardBody(w, r, originalID, action, forward)
 				return
 			}
 			// Semantic agent actions are local-only in this slice (ADR 0027).
@@ -1191,6 +1210,16 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			if err = json.Unmarshal(rawParent, &parentID); err != nil || parentID == "" {
 				writeError(w, http.StatusBadRequest, "bad_request", "parent_session_id must be a session id or null")
 				return
+			}
+			// A local child cannot join a peer's family either: same refusal,
+			// stated as such instead of surfacing as "parent does not exist".
+			if peerManager != nil {
+				if peerParent, _ := peerManager.FindPeer(parentID); peerParent != nil {
+					writeError(w, http.StatusBadRequest, codeCrossPeer, fmt.Sprintf(
+						"cross-peer reparenting is not supported: the child is owned by this daemon and the requested parent by peer %q; a task family cannot span daemons",
+						peerParent.Config.Name))
+					return
+				}
 			}
 			value := centralstore.SessionID(parentID)
 			parent = &value

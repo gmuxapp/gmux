@@ -551,3 +551,85 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 	sort.Strings(ks)
 	return ks
 }
+
+// Promoting a peer session is a same-peer mutation: the session stays on its
+// daemon, only its parent pointer changes. The CLI must therefore address the
+// owning daemon through the local one (the daemon forwards it) instead of
+// refusing on the client side. Same for moving a peer child under another
+// parent on that same peer.
+func TestReparentPeerSessionsAddressTheOwningDaemon(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "kid@box", Peer: "box", Adapter: "shell", Alive: true, Slug: "kid"},
+		{ID: "boss@box", Peer: "box", Adapter: "pi", Alive: true, Slug: "boss"},
+		{ID: "local1", Adapter: "pi", Alive: true, Slug: "local"},
+	}
+	t.Run("promote", func(t *testing.T) {
+		d := startStubDaemon(t, sessions)
+		d.on(func(w http.ResponseWriter, _ *http.Request) { writeEnvelope(w, 200, map[string]any{}) })
+		out := captureStdout(t, func() {
+			if code := cmdPromote("kid@box"); code != 0 {
+				t.Fatalf("exit=%d", code)
+			}
+		})
+		got := d.lastRequest(t)
+		if got.path != "/v1/sessions/kid@box/reparent" || got.body != `{"parent_session_id":null}` {
+			t.Fatalf("request=%#v", got)
+		}
+		if !strings.Contains(out, "promoted kid@box to a root") {
+			t.Fatalf("stdout=%q", out)
+		}
+	})
+	t.Run("same-peer reparent", func(t *testing.T) {
+		d := startStubDaemon(t, sessions)
+		d.on(func(w http.ResponseWriter, _ *http.Request) { writeEnvelope(w, 200, map[string]any{}) })
+		if code := captureStdoutCode(t, func() int { return cmdReparent("kid@box", "boss@box") }); code != 0 {
+			t.Fatalf("exit=%d", code)
+		}
+		got := d.lastRequest(t)
+		// The parent is named in the viewer's namespace; translating it into
+		// the owner's is the daemon's job (one place, one rule).
+		if got.path != "/v1/sessions/kid@box/reparent" || got.body != `{"parent_session_id":"boss@box"}` {
+			t.Fatalf("request=%#v", got)
+		}
+	})
+	t.Run("cross-peer refused before any request", func(t *testing.T) {
+		for _, pair := range [][2]string{{"kid@box", "local1"}, {"local1", "boss@box"}} {
+			d := startStubDaemon(t, sessions)
+			var code int
+			err := captureStderr(t, func() { code = cmdReparent(pair[0], pair[1]) })
+			if code == 0 {
+				t.Fatalf("%v accepted", pair)
+			}
+			if !strings.Contains(err, "cross-peer reparenting is not supported") {
+				t.Fatalf("stderr=%q", err)
+			}
+			d.mu.Lock()
+			n := len(d.requests)
+			d.mu.Unlock()
+			if n != 0 {
+				t.Fatalf("%v sent %d request(s)", pair, n)
+			}
+		}
+	})
+}
+
+func captureStdoutCode(t *testing.T, fn func() int) int {
+	t.Helper()
+	code := 1
+	captureStdout(t, func() { code = fn() })
+	return code
+}
+
+// A peer session's wire id is already namespaced; qualifying it again would
+// print "id@peer@peer" and name a peer of a peer.
+func TestDisplayIDDoesNotDoubleQualifyPeerSessions(t *testing.T) {
+	if got := displayID(cliSession{ID: "kid@box", Peer: "box"}); got != "kid@box" {
+		t.Fatalf("displayID=%q", got)
+	}
+	if got := displayID(cliSession{ID: "kid", Peer: "box"}); got != "kid@box" {
+		t.Fatalf("displayID=%q", got)
+	}
+	if got := displayID(cliSession{ID: "kid"}); got != "kid" {
+		t.Fatalf("displayID=%q", got)
+	}
+}

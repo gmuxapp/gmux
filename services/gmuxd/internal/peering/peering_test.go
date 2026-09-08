@@ -1427,3 +1427,37 @@ func TestApplySessionsSnapshot_BroadcastsOnRealChange(t *testing.T) {
 		t.Error("155mk8b7@server should be dead after update")
 	}
 }
+
+// Family references enter the viewer's namespace with the session that owns
+// them. `launched_from_session_id` is one of those references — the web menu
+// resolves it to offer Return to family — so a bare id would name nothing
+// here, or worse collide with a local session's id.
+func TestApplySessionsSnapshot_NamespacesFamilyReferences(t *testing.T) {
+	sink := newMockSink()
+	p := newPeer(config.PeerConfig{Name: "server"}, sink, nil)
+
+	p.applySessionsSnapshot([]SessionProjection{
+		{ID: "kid", Adapter: "shell", Alive: true, ParentSessionID: "boss", LaunchedFromSessionID: "boss"},
+		// Already qualified: the origin means a host of its own, so it must
+		// not become "far@mid@server".
+		{ID: "promoted", Adapter: "pi", Alive: true, LaunchedFromSessionID: "far@mid"},
+	})
+
+	kid, ok := sink.findSession("server", "kid@server")
+	if !ok {
+		t.Fatal("kid@server not found in sink")
+	}
+	if kid.ParentSessionID != "boss@server" {
+		t.Errorf("parent = %q, want %q", kid.ParentSessionID, "boss@server")
+	}
+	if kid.LaunchedFromSessionID != "boss@server" {
+		t.Errorf("launched_from = %q, want %q", kid.LaunchedFromSessionID, "boss@server")
+	}
+	promoted, ok := sink.findSession("server", "promoted@server")
+	if !ok {
+		t.Fatal("promoted@server not found in sink")
+	}
+	if promoted.LaunchedFromSessionID != "far@mid" {
+		t.Errorf("launched_from = %q, want it retained", promoted.LaunchedFromSessionID)
+	}
+}
