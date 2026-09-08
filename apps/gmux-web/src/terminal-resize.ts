@@ -1,5 +1,32 @@
 import type { TerminalSize } from './terminal-io'
 
+/**
+ * Convert available pixels into a terminal grid, or refuse.
+ *
+ * Refusing (null) is the point. A container can transiently measure smaller
+ * than a single cell — a collapsed pane, a flex child mid-relayout, the
+ * mobile keyboard animating in — and clamping that to the minimum grid would
+ * publish a real 1-row (or 2-column) resize to the PTY, reflowing the
+ * running program for a layout state the user never saw. The caller treats
+ * null as "no measurement yet" and retries on the next usable layout, which
+ * is exactly what the initial-claim retry path already does for a terminal
+ * whose cell metrics have not settled.
+ */
+export function terminalGridSize(
+  availW: number,
+  availH: number,
+  cellWidth: number,
+  cellHeight: number,
+  roundRows: (value: number) => number = Math.floor,
+): TerminalSize | null {
+  if (!(cellWidth > 0) || !(cellHeight > 0)) return null
+  if (availW < cellWidth * 2 || availH < cellHeight) return null
+  return {
+    cols: Math.max(2, Math.floor(availW / cellWidth)),
+    rows: Math.max(1, roundRows(availH / cellHeight)),
+  }
+}
+
 export function sameSize(a: TerminalSize | null, b: TerminalSize | null): boolean {
   return a != null && b != null && a.cols === b.cols && a.rows === b.rows
 }

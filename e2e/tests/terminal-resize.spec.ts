@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { getTermState, isPillVisible, openApp, gotoTestSession } from '../helpers'
+import { apiGet, getTermState, isPillVisible, openApp, gotoTestSession, pollUntil } from '../helpers'
+
+async function ptySize(): Promise<{ cols?: number, rows?: number }> {
+  const id = process.env.GMUX_TEST_SESSION_ID!
+  const r = await apiGet<{ data: Array<{ id: string, terminal_cols?: number, terminal_rows?: number }> }>('/v1/sessions')
+  const s = r.body.data.find(x => x.id === id)
+  return { cols: s?.terminal_cols, rows: s?.terminal_rows }
+}
 
 test.describe('terminal resize', () => {
   test.beforeEach(async ({ page }) => {
@@ -32,6 +39,42 @@ test.describe('terminal resize', () => {
     expect(large.termCols!).toBeGreaterThan(small.termCols!)
     expect(large.termRows!).toBeGreaterThan(small.termRows!)
     // Driving the whole time → no pill.
+    expect(await isPillVisible(page)).toBe(false)
+  })
+
+  // The mobile-keyboard shape: the terminal shell passes through a height
+  // below one cell and settles at a *different* viable height. Two failure
+  // modes are pinned at once — a 1-row PTY resize while collapsed (the clamp
+  // bug), and a terminal stranded at the stale grid behind the reclaim pill
+  // afterwards (what committing the refusal as the viewport would cause).
+  test('a shell that collapses below one cell and settles smaller self-heals', async ({ page }) => {
+    const before = await getTermState(page)
+    expect(before.termRows!).toBeGreaterThan(4)
+
+    const setShellHeight = (flex: string) => page.evaluate((value) => {
+      const shell = document.querySelector('.terminal-shell') as HTMLElement
+      shell.style.flex = value
+    }, flex)
+
+    // Collapse below one cell (~17 px) and give the resize path time to run.
+    await setShellHeight('0 0 8px')
+    await page.waitForTimeout(600)
+    const collapsed = await ptySize()
+    expect(collapsed.rows, 'a non-viable measurement must not reach the PTY')
+      .toBe(before.termRows)
+
+    // Settle at a viable but different height.
+    await setShellHeight('0 0 300px')
+    const settled = await pollUntil(async () => {
+      const state = await getTermState(page)
+      return state.termRows !== before.termRows ? state : null
+    }, { timeoutMs: 5_000, description: 'terminal refits after the shell settles' })
+
+    expect(settled.termRows!).toBeGreaterThan(1)
+    expect(settled.termRows!).toBeLessThan(before.termRows!)
+    // Still driving: the PTY followed us down and no reclaim tap is needed.
+    await pollUntil(async () => (await ptySize()).rows === settled.termRows || null,
+      { timeoutMs: 5_000, description: 'PTY follows the settled viewport' })
     expect(await isPillVisible(page)).toBe(false)
   })
 
