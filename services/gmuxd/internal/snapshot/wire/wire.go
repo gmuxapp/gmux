@@ -13,12 +13,15 @@
 //     (internal/store/store.go resolveTitle): adapter title > shell title >
 //     CommandTitler(command) > adapter name.
 //   - Timestamps: durable Unix-ms → RFC3339 at second precision (FD-4).
-//   - Resume-command rewriting for dead rows as a pure function of
-//     (adapter, conversation ref); the durable row keeps the launch
-//     command (design §3.1 — one function, two call sites, zero
-//     persistence).
-//   - Resumable narrowing: dead ∧ command present ∧ verdict ≠ Gone (the
-//     composer's overlay), recomputed against the rewritten command.
+//   - Relaunch resolution for dead rows as a pure function of (adapter,
+//     conversation ref, recorded command) — relaunch.Resolve, the very
+//     function the runner spawner executes (design §3.1 — one function,
+//     two call sites, zero persistence). It yields both the rewritten
+//     command and the verb: "resume" continues a recorded agent
+//     conversation, "rerun" launches the recorded command again (all a
+//     dead shell can do).
+//   - Resumable narrowing: dead ∧ relaunchable ∧ verdict ≠ Gone (the
+//     composer's overlay), recomputed against the resolved command.
 //   - project_index: FD-1 flatten of the durable scoped ordering into the
 //     legacy per-project flat integer.
 package wire
@@ -40,10 +43,19 @@ type Status struct {
 }
 
 // Session is the exact ADR 0001 session wire shape — field-for-field the
-// wire struct inside store.Session.MarshalJSON (internal/store/store.go).
+// wire struct inside store.Session.MarshalJSON (internal/store/store.go),
+// plus the additive Relaunch verdict.
 // It is also the shape of a peer-session projection as received from a
 // peer's own snapshot.sessions feed, which is why the peer overlay
 // (PeerSessionSource) traffics in this type verbatim.
+//
+// Relaunch is the owning daemon's answer to "what will you do if I POST
+// /resume?" — "resume" (continue the recorded conversation), "rerun" (run
+// the recorded command again), or empty for "refuse". Clients must not
+// re-derive it from adapter names: only the owner can resolve its adapters'
+// conversations, and disagreement is how the UI came to offer resumes the
+// daemon then rejected. Empty also covers a peer running a pre-field daemon,
+// where clients fall back to Resumable alone.
 type Session struct {
 	ID                    string            `json:"id"`
 	Peer                  string            `json:"peer,omitempty"`
@@ -68,6 +80,7 @@ type Session struct {
 	Unread                bool              `json:"unread"`
 	UnreadToken           string            `json:"unread_token"`
 	Resumable             bool              `json:"resumable,omitempty"`
+	Relaunch              string            `json:"relaunch,omitempty"` // "resume" | "rerun" | "" (refused / pre-field peer)
 	SocketPath            string            `json:"socket_path,omitempty"`
 	TerminalCols          uint16            `json:"terminal_cols,omitempty"`
 	TerminalRows          uint16            `json:"terminal_rows,omitempty"`

@@ -298,10 +298,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	spawner := &productionRunnerSpawner{GmuxBin: gmuxBin, ResolveDir: func(row centralstore.Session) (string, error) {
 		dir, _, err := resolveResumeDirCentral(context.Background(), storeHandle, row)
 		return dir, err
-	}, ResolveCommand: func(row centralstore.Session) []string {
-		legacy := centralSessionToLegacy(row)
-		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
-	}}
+	}, ResolveCommand: productionResolveRelaunchCommand}
 
 	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, MaxSubagentsByDepth: cfg.Agent.MaxSubagentsByDepth.Values, SubagentBudgetDisabled: cfg.Agent.MaxSubagentsByDepth.Disabled, SemanticAgent: func(name string) bool { return converter.SemanticAgents[name] }, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
 		// The converter builds world.health.launchers but not the top-level
@@ -1271,8 +1268,8 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusNotFound, "not_found", "session not found")
 			return
 		}
-		if row.ExitedAt == nil || len(row.Command) == 0 {
-			writeError(w, http.StatusBadRequest, "not_resumable", "session is not resumable")
+		if status, code, msg := relaunchGuard(row); status != 0 {
+			writeError(w, status, code, msg)
 			return
 		}
 		if gmuxBin == "" {
@@ -1306,6 +1303,12 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 		}
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
+			return
+		}
+		// Refuse before stopping: restart is stop+spawn, so a row the spawner
+		// would refuse must not lose its running process to a failed respawn.
+		if status, code, msg := relaunchCommandGuard(row); status != 0 {
+			writeError(w, status, code, msg)
 			return
 		}
 		restartCwd, fellBack, err := resolveResumeDirCentral(r.Context(), boot.Store, row)

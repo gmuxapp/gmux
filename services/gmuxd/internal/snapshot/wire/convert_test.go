@@ -248,6 +248,54 @@ func TestResumeCommandRewrite(t *testing.T) {
 	}
 }
 
+// TestRelaunchVerbOnTheWire pins the verb the UI reads. It is the daemon's
+// answer to "what will POST /resume actually do?", and it must never claim
+// a verb the runner spawner would refuse (relaunch.Resolve decides for both).
+func TestRelaunchVerbOnTheWire(t *testing.T) {
+	resolver := func(adapter, ref string) []string {
+		if ref == "known-ref" {
+			return []string{adapter, "resume", ref}
+		}
+		return nil
+	}
+	conv := &Converter{ResumeCommand: resolver}
+
+	for _, tc := range []struct {
+		name string
+		mut  func(*central.SessionRow)
+		want string
+	}{
+		{"agent with a resumable conversation", func(r *central.SessionRow) {
+			r.Session.ConversationRef = "known-ref"
+		}, "resume"},
+		{"shell with no conversation reruns its command", func(*central.SessionRow) {}, "rerun"},
+		{"conversation the adapter cannot resume", func(r *central.SessionRow) {
+			r.Session.ConversationRef = "gone-ref"
+		}, ""},
+		{"verdict-gone row offers nothing", func(r *central.SessionRow) {
+			r.Resumable = false
+		}, ""},
+		{"no command and no conversation", func(r *central.SessionRow) {
+			r.Session.Command = nil
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := conv.session(localRow("1relaun1", false, tc.mut))
+			if got.Relaunch != tc.want {
+				t.Errorf("relaunch = %q, want %q", got.Relaunch, tc.want)
+			}
+			if got.Resumable != (tc.want != "") {
+				t.Errorf("resumable = %v, want %v (must agree with relaunch)", got.Resumable, tc.want != "")
+			}
+		})
+	}
+
+	// Alive rows carry no relaunch verb: the offered action is Restart.
+	if got := conv.session(localRow("1relaun2", true)); got.Relaunch != "" {
+		t.Errorf("alive row relaunch = %q, want empty", got.Relaunch)
+	}
+}
+
 func lpPlacement(peer, sess, slug, scope string, pos int) central.LocalPeerPlacementRow {
 	return central.LocalPeerPlacementRow{LocalPeerPlacementView: centralstore.LocalPeerPlacementView{
 		PeerKey: centralstore.PeerKey(peer), SessionID: sess, ProjectSlug: slug, SiblingScope: scope, Position: pos,

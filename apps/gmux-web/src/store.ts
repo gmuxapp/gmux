@@ -30,10 +30,11 @@ import {
 import { referencePresence, removeHostReferenceItems, removeReferenceItems, type UnresolvedHost, unresolvedReferences } from './references'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
+import { relaunchDirectoryNotice } from './session-actions'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { createSSESupervisor, type SSESource } from './sse-supervisor'
 import { formatFilterParam, parseFilterParam, type Selector, sessionMatchesFilter } from './tab-filter'
-import { pushError } from './toasts'
+import { pushError, pushToast } from './toasts'
 import type { DiscoveredProject, Folder, LauncherDef, PeerInfo, PeerProject, ProjectItem, Session } from './types'
 import { navigateWithReload } from './version-watch'
 
@@ -2005,8 +2006,12 @@ async function postAction(endpoint: string, label = 'Action', opts: {
    * rejection is the outcome the caller asked for anyway. */
   alsoOk?: number
   body?: unknown
+  /** Called with the parsed `data` object of a successful response. Used
+   * by relaunch, where the daemon reports a directory substitution the
+   * user has to know about. */
+  onData?: (data: Record<string, unknown>) => void
 } = {}): Promise<boolean> {
-  const { quiet = false, alsoOk, body } = opts
+  const { quiet = false, alsoOk, body, onData } = opts
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
@@ -2021,6 +2026,12 @@ async function postAction(endpoint: string, label = 'Action', opts: {
       // take the boolean and report once.
       if (!quiet) pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
       return false
+    }
+    if (onData) {
+      try {
+        const parsed = await resp.json() as { data?: Record<string, unknown> }
+        onData(parsed?.data ?? {})
+      } catch { /* a body-less success is still a success */ }
     }
     return true
   } catch {
@@ -2062,8 +2073,23 @@ export function dismissSession(sessionId: string): Promise<void> {
   )
 }
 
-export function resumeSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/resume`, 'Resume')
+/** Relaunch a dead session. `verb` names the action in the failure toast:
+ * the daemon exposes one endpoint and decides for itself whether that means
+ * resuming a conversation or rerunning the recorded command
+ * (services/gmuxd/internal/relaunch). The caller passes the verb the UI
+ * showed the user (session.relaunch) so the two agree.
+ *
+ * A success can still carry a surprise: when the recorded directory is gone
+ * the daemon relaunches in a fallback directory and says so. That matters
+ * most for `rerun`, which runs an arbitrary recorded command, so the
+ * substitution is toasted rather than swallowed. */
+export function resumeSession(sessionId: string, verb: 'resume' | 'rerun' = 'resume'): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/resume`, verb === 'rerun' ? 'Rerun' : 'Resume', {
+    onData: data => {
+      const notice = relaunchDirectoryNotice(verb, data)
+      if (notice) pushToast('info', notice)
+    },
+  })
 }
 
 export function restartSession(sessionId: string): Promise<boolean> {

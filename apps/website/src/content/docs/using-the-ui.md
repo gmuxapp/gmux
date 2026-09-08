@@ -23,7 +23,7 @@ Projects match sessions by filesystem path or git remote URL. Projects on other 
 
 Click a session to attach a full interactive terminal. **Cmd/Ctrl+F** opens find-in-terminal; the full default keymap and how to override it is in the [settings reference](/reference/settings/#default-keymap).
 
-The **⋮** menu holds the lifecycle action — **Restart** for a live session, **Resume** or **Rerun** for a dead one. Dead sessions replay their terminal history read-only: resuming continues an agent conversation where it left off, rerunning starts the command fresh in the same directory.
+The **⋮** menu holds the lifecycle action — **Restart** for a live session, **Resume** or **Rerun** for a dead one. Dead sessions replay their terminal history read-only: resuming continues an agent conversation where it left off, rerunning starts the command fresh in the directory the session recorded — and if that directory no longer exists, gmux relaunches in a fallback directory and tells you so in a notification. Which of the two you get is decided by the machine that owns the session, so the button only ever offers what that machine will actually do — shells and other sessions with no recorded conversation say **Rerun**, and a session whose conversation is gone offers neither.
 
 To get rid of a session, hover it in the sidebar and click **×**. This stops the session **and every session it launched**, then removes them from the UI — but it isn't data deletion: agent conversations stay in their own tools, and terminal history is kept until gmux eventually cleans it up.
 

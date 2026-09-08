@@ -474,7 +474,10 @@ each verb also answers `--help`.
 conversation that can always be continued; whether a process currently hosts
 it is gmux's problem. Semantic surfaces report the agent as **active** (work
 in progress) or **inactive** (settled) — never "alive" or "dead". Prompting an
-inactive conversation transparently resumes it; reading one never does.
+inactive conversation transparently resumes it; reading one never does. A
+session whose agent exited before binding a conversation has none to resume:
+prompting it reruns the recorded command, and the prompt lands in a fresh
+conversation.
 
 **Vocabulary.** A **visible exchange** is one user message and everything the
 agent did up to the next user message. An **iteration** is one completed
@@ -540,7 +543,8 @@ git diff | gmux agent prompt a3f20187                        # prompt from stdin
 
 - **no flag** — start fresh work. Requires an inactive agent; an inactive
   conversation with no resident process is resumed transparently to deliver
-  the prompt.
+  the prompt (or, when no conversation was ever bound, the recorded command is
+  rerun and the prompt lands in a fresh conversation).
 - `--follow-up` — submit after the current model response. Delivered to an
   **inactive** agent it starts ordinary work (like a plain prompt); delivered
   into **running** work it **merges into that activity** (pi drains its queue

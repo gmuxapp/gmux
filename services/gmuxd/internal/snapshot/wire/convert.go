@@ -7,6 +7,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/relaunch"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 )
@@ -22,9 +23,9 @@ type Converter struct {
 	// Titlers maps adapter name → command-title derivation.
 	Titlers map[string]func([]string) string
 	// ResumeCommand derives the resume form of a dead session's command
-	// from its adapter + opaque conversation ref. A nil func or a nil
-	// return keeps the recorded launch command (production
-	// subs.OnExit/Scan parity).
+	// from its adapter + opaque conversation ref. It is only the resolver:
+	// the relaunch *policy* around it (resume vs rerun vs refuse) lives in
+	// package relaunch and is shared verbatim with the runner spawner.
 	ResumeCommand func(adapterName, conversationRef string) []string
 	// IsLocalPeer reports whether a peer name is a Local peer (an
 	// extension of this host whose project stamps the parent owns).
@@ -148,32 +149,40 @@ func (c *Converter) session(row central.SessionRow) Session {
 		out.BinaryHash = row.Runtime.BinaryHash
 	}
 	if !row.Alive {
-		// Resume-command rewriting is presentation/spawn policy, never
-		// durable state: the row keeps the launch command, the wire shows
-		// the resume form (design §3.1). RunnerSpawner applies the same
-		// pure function at spawn.
+		// Relaunch resolution is presentation/spawn policy, never durable
+		// state: the row keeps the launch command, the wire shows what a
+		// relaunch would actually run (design §3.1). RunnerSpawner applies
+		// the same pure function at spawn, so the affordance the UI is
+		// offered and the command the daemon executes cannot disagree.
+		//
 		// The adapter is authoritative for a row that has a conversation
 		// ref: an empty derived command means that conversation cannot be
-		// resumed, and RunnerSpawner — which resolves the same way and
-		// ignores the durable command — will refuse to spawn. Falling back
-		// to the durable launch command here would advertise a resume the
-		// daemon cannot execute, so the row shows no command instead.
-		if c.ResumeCommand != nil && v.ConversationRef != "" {
-			out.Command = c.ResumeCommand(v.Adapter, v.ConversationRef)
+		// resumed, and the row is not relaunchable at all. A row with no
+		// conversation ref (every shell and editor session, plus agents
+		// that died before their hook bound one) can still be rerun from
+		// its recorded launch command — a different verb, which the wire
+		// now names instead of leaving clients to guess.
+		cmd, kind := relaunch.Resolve(c.ResumeCommand, v.Adapter, v.ConversationRef, v.Command)
+		if v.ConversationRef != "" {
+			// Adapter-authoritative: an unresolvable conversation shows no
+			// command rather than the stale launch command.
+			out.Command = cmd
 		}
 		// Narrowing: the composer's Resumable already folds in the verdict
-		// (dead ∧ durable command ∧ verdict ≠ Gone). Recompute the command
-		// term against the rewritten command so a row whose durable command
-		// is empty but whose conversation still resolves to a resume form
-		// becomes resumable — production parity, where Resumable derives
-		// from the post-rewrite command.
-		gone := len(v.Command) > 0 && !row.Resumable
-		out.Resumable = len(out.Command) > 0 && !gone
+		// (dead ∧ durable command ∧ verdict ≠ Gone, and never-started rows).
+		// A Gone conversation — or a row that never ran — offers nothing,
+		// whichever verb the policy would otherwise have picked.
+		if gone := len(v.Command) > 0 && !row.Resumable; gone {
+			kind = relaunch.None
+		}
+		out.Relaunch = string(kind)
+		out.Resumable = kind != relaunch.None
 	}
 	if row.Session.DismissedAt != nil {
 		// Defensive: ReadSnapshot filters dismissed rows (FD-2); a row that
 		// slips through must still never reach the wire.
 		out.Resumable = false
+		out.Relaunch = ""
 	}
 	return out
 }

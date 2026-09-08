@@ -3,6 +3,7 @@ package discovery
 import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/relaunch"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -36,4 +37,11 @@ func ResolveResumeCommandFor(adapterName, conversationRef string) []string {
 		return nil
 	}
 	return resumer.ResumeCommand(info)
+}
+
+// ResolveRelaunchLive applies the shared relaunch policy with the live
+// adapter resolver. It is the execution-side (runner spawn) entry point;
+// presentation applies the same policy through the snapshot wire converter.
+func ResolveRelaunchLive(adapterName, conversationRef string, command []string) ([]string, relaunch.Kind) {
+	return relaunch.Resolve(ResolveResumeCommandFor, adapterName, conversationRef, command)
 }

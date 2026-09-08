@@ -44,6 +44,20 @@ export const SessionSchema = z.object({
   // completion, including across runner replacement.
   unread_token: z.string().optional().default(''),
   resumable: z.boolean().optional().default(false),
+  // The owning daemon's verdict on which relaunch verb a dead session
+  // offers, and the single source of truth for the affordance: 'resume'
+  // continues the recorded agent conversation, 'rerun' launches the
+  // recorded command again in the recorded directory (the only thing a dead
+  // shell can do). Absent means the daemon will refuse to relaunch — or
+  // that the row came from a peer running a daemon older than this field,
+  // in which case clients fall back to `resumable`.
+  //
+  // Parsed as a plain string, not an enum: the verb set is daemon-owned
+  // policy and may grow, and a newer peer sending a third verb must not
+  // make the whole row fail to parse (the wire covenant is "ignore keys —
+  // and values — you don't understand"). Consumers narrow it themselves
+  // and treat anything unrecognized as absent (see relaunchVerb).
+  relaunch: z.string().optional(),
   // Absolute path of the agent conversation file this session holds, as
   // reported by the agent hook (ADR 0011). Two live sessions sharing one
   // conversation_file means the same conversation is open in multiple tabs;

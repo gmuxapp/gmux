@@ -25,6 +25,35 @@ export async function apiGet<T = unknown>(urlPath: string): Promise<{ status: nu
 }
 
 /**
+ * Bearer-auth `fetch` with a method + optional JSON body, against the test
+ * gmuxd (or, with `opts.port`/`opts.token`, another daemon a spec started —
+ * peer specs need to drive both ends).
+ */
+export async function apiFetch<T = unknown>(
+  method: string,
+  urlPath: string,
+  opts: { body?: unknown; port?: string | number; token?: string } = {},
+): Promise<{ status: number; body: T }> {
+  const port = String(opts.port ?? process.env.GMUXD_TEST_PORT ?? '')
+  const token = opts.token ?? process.env.GMUX_TEST_TOKEN
+  if (!port) throw new Error('GMUXD_TEST_PORT not set; global-setup did not run')
+  if (!token) throw new Error('GMUX_TEST_TOKEN not set; global-setup did not run')
+  const resp = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+  })
+  let body: T = undefined as unknown as T
+  try {
+    body = await resp.json() as T
+  } catch { /* non-JSON, leave body undefined */ }
+  return { status: resp.status, body }
+}
+
+/**
  * Poll `fn` until it returns a defined, truthy value (or until
  * `timeoutMs` elapses). Returns the resolved value or throws.
  *

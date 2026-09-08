@@ -8,7 +8,7 @@ import { loadWebglRenderer } from './webgl-renderer'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
-import { lifecycleAction } from './session-actions'
+import { lifecycleAction, type RelaunchVerb } from './session-actions'
 import { MenuButton } from './menu-button'
 import { isTouchDevice } from './touch'
 
@@ -32,8 +32,8 @@ type ReplayState =
  * see main.tsx for the routing.
  *
  * The action bar at the bottom carries the *primary* lifecycle action
- * for a dead session: Resume / Rerun (see lifecycleAction for the
- * agent-vs-rerun split). The same action is deliberately mirrored in
+ * for a dead session: Resume / Rerun (the owning daemon picks the verb;
+ * see lifecycleAction). The same action is deliberately mirrored in
  * the header SessionMenu — that's where Restart lives for alive
  * sessions, so muscle memory finds it there too. Promoting it out of
  * an implicit sidebar click means clicking a dead session navigates to
@@ -57,7 +57,7 @@ export function ReplayView({
 }: {
   session: Session
   terminalOptions: ITerminalOptions
-  onResume?: (id: string) => void
+  onResume?: (id: string, verb?: RelaunchVerb) => void
   resuming?: boolean
   onMenu?: () => void
 }) {
@@ -156,7 +156,7 @@ export function ReplayView({
   }, [session.id])
 
   const action = lifecycleAction(session, !!resuming)
-  const resumeShown = action?.id === 'resume' && !!onResume
+  const resumeShown = action?.id === 'relaunch' && !!onResume
   const menuShown = !!onMenu && isTouchDevice()
 
   return (
@@ -193,7 +193,7 @@ export function ReplayView({
               type="button"
               class="btn btn-primary"
               disabled={action!.disabled}
-              onClick={() => onResume!(session.id)}
+              onClick={() => onResume!(session.id, action!.verb)}
             >
               {action!.shortLabel}
             </button>

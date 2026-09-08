@@ -43,7 +43,7 @@ const SESSION_SCALAR_KEYS = [
   'id', 'peer', 'created_at', 'cwd', 'workspace_root', 'adapter', 'drive_mode',
   'parent_session_id', 'launched_from_session_id', 'semantic_agent', 'alive',
   'pid', 'exit_code', 'started_at', 'exited_at', 'title', 'subtitle', 'unread',
-  'unread_token', 'resumable', 'last_output_at', 'socket_path',
+  'unread_token', 'resumable', 'relaunch', 'last_output_at', 'socket_path',
   'terminal_cols', 'terminal_rows', 'slug', 'conversation_file',
   'runner_version', 'binary_hash', 'project_slug', 'project_index',
 ] as const satisfies readonly (keyof Session)[]

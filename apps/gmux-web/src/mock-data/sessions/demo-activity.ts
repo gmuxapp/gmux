@@ -71,7 +71,10 @@ export const DEMO_ACTIVITY: MockSession[] = [
   }),
   demo({
     id: '1eb5auvb', title: 'refactor launcher',
-    alive: false, resumable: true, pid: null, exit_code: 0,
+    // A dead claude session with a recorded conversation: the daemon would
+    // answer "resume" here, so the mock carries the same verdict the wire
+    // does (the UI never re-derives the verb from the adapter name).
+    alive: false, resumable: true, relaunch: 'resume', pid: null, exit_code: 0,
     created_at: ago(60 * 31), started_at: ago(60 * 31),
     exited_at: ago(60 * 30), last_output_at: ago(60 * 30),
   }),

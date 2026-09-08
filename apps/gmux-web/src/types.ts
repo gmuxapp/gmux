@@ -51,6 +51,17 @@ export interface Session {
   unread_token?: string
   resumable?: boolean
   /**
+   * Which relaunch verb the *owning* daemon will honor for this dead
+   * session: 'resume' (continue the recorded agent conversation) or
+   * 'rerun' (launch the recorded command again). Absent means either
+   * "the daemon will refuse" or "this row came from a peer running a
+   * daemon that predates the field", as does a verb this client does not
+   * know (the verb set is daemon-owned and may grow); `lifecycleAction`
+   * degrades to the `resumable` flag there. Never derive the verb from the adapter name:
+   * the daemon owns the policy (see internal/relaunch).
+   */
+  relaunch?: string
+  /**
    * RFC3339 timestamp of the session's most recent noteworthy state
    * transition (exited / unread on / working on / error on). Set by
    * the owning daemon. Drives the home dashboard's "Recent" section
