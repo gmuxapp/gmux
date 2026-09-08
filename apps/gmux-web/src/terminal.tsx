@@ -21,7 +21,7 @@ import { TerminalFindBar } from './terminal-find'
 import { canSendTerminalInput } from './terminal-input'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { type LinkInfo, linkAtPoint, openLinkAtPoint } from './terminal-link'
-import { decideViewportResize, sameSize, shouldQueueResizeEcho } from './terminal-resize'
+import { decideViewportResize, sameSize, shouldQueueResizeEcho, terminalGridSize } from './terminal-resize'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pushError } from './toasts'
@@ -159,8 +159,20 @@ function measureTerminalFit(
   const availW = shellEl.offsetWidth - padX - reserveWidth
   const availH = shellEl.offsetHeight - padY - overlayBar
 
-  let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  let rows = Math.max(1, (overlayBar > 0 ? Math.ceil : Math.floor)(availH / dims.css.cell.height))
+  // Refuse a non-viable measurement instead of clamping it to the minimum
+  // grid: a container that transiently measures below one cell (keyboard
+  // animation, collapsed pane, mid-relayout flex child) must not publish a
+  // 1-row/2-column resize to the PTY and reflow the running program. Callers
+  // treat null as "not measurable yet" and re-measure on the next layout.
+  const grid = terminalGridSize(
+    availW,
+    availH,
+    dims.css.cell.width,
+    dims.css.cell.height,
+    overlayBar > 0 ? Math.ceil : Math.floor,
+  )
+  if (!grid) return null
+  let { cols, rows } = grid
 
   // Guard against 1px overflow: xterm computes screen width as
   // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
@@ -442,6 +454,15 @@ export function TerminalView({
     if (!term || !shell) return
 
     const newVp = measureTerminalFit(term, shell)
+    // A refusal is *no information*, not a new viewport. Committing it would
+    // clear `prevViewport`, and drive/follow is derived from
+    // sameSize(prevViewport, ptySize) — so the next real measurement would be
+    // judged 'follow' and the terminal would sit at the stale grid behind the
+    // reclaim pill until the user taps it. That is exactly the mobile case
+    // this guard exists for: the keyboard passes through a non-viable height
+    // and settles at a *different* viable one. Keep the last known viewport
+    // and wait for the next layout notification instead.
+    if (!newVp) return
     const gate = resizeEchoGateRef.current
     const decision = decideViewportResize({
       prevViewport: viewportSizeRef.current,
@@ -484,8 +505,11 @@ export function TerminalView({
     if (!term || !shell) return
 
     const dims = measureTerminalFit(term, shell)
-    setViewportSize(dims); viewportSizeRef.current = dims
+    // Same rule as processViewportResize: never commit a refusal. Here it also
+    // keeps the pill on screen (it is gated on a non-null viewport), so a tap
+    // that lands mid-relayout can simply be tapped again.
     if (!dims) return
+    setViewportSize(dims); viewportSizeRef.current = dims
 
     applyOwnedResize(dims)
   }, [applyOwnedResize])
@@ -497,8 +521,11 @@ export function TerminalView({
     const shell = shellRef.current
     if (!term || !shell) return null
     const dims = measureTerminalFit(term, shell)
-    setViewportSize(dims); viewportSizeRef.current = dims
+    // A refused claim measurement is retried by watchForClaimMeasurement and
+    // falls back to checkpoint geometry on its deadline; it must not overwrite
+    // the viewport state with null on the way there.
     if (!dims) return null
+    setViewportSize(dims); viewportSizeRef.current = dims
     // A claim is also the ownership assertion and reconnect-redraw trigger,
     // so it must reach the runner even when checkpoint and viewport match.
     applyOwnedResize(dims, false, true)

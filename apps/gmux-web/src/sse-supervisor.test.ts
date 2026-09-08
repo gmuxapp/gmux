@@ -115,6 +115,98 @@ describe('SSE supervisor', () => {
     expect(sources).toHaveLength(2)
   })
 
+  it('pulls a deep pending retry forward on a wake, without collapsing the backoff', () => {
+    vi.useFakeTimers()
+    const scheduled = vi.fn()
+    const { supervisor, sources } = setup({ onRetryScheduled: scheduled })
+    supervisor.start()
+
+    // Back off to the ceiling: 500, 1000, 2000, 4000 → the pending retry is
+    // 8000 ms (×1.0 jitter here) away.
+    sources[0].emit('error')
+    vi.advanceTimersByTime(500)
+    sources[1].emit('error')
+    vi.advanceTimersByTime(1000)
+    sources[2].emit('error')
+    vi.advanceTimersByTime(2000)
+    sources[3].emit('error')
+    vi.advanceTimersByTime(4000)
+    sources[4].emit('error')
+    expect(sources).toHaveLength(5)
+
+    // The tab wakes 1 s into that 8 s wait. Waiting out the remaining 7 s is
+    // the defect: the wake is fresh evidence, so the attempt happens now.
+    vi.advanceTimersByTime(1000)
+    supervisor.revalidate()
+    vi.advanceTimersByTime(0)
+    expect(sources).toHaveLength(6)
+    expect(sources[4].closed).toBe(true)
+    // The pulled-forward attempt is the only one: the superseded 8 s timer
+    // must not open a second live source when it would have fired.
+    vi.advanceTimersByTime(10_000)
+    expect(sources).toHaveLength(6)
+
+    // Backoff is preserved, not reset: this failure schedules the ceiling
+    // delay again, not the 500 ms floor a manual retry would restore.
+    sources[5].emit('error')
+    vi.advanceTimersByTime(7999)
+    expect(sources).toHaveLength(6)
+    vi.advanceTimersByTime(1)
+    expect(sources).toHaveLength(7)
+  })
+
+  // Wakes must not become the retry clock. Every connect here is a full
+  // protocol-3 bootstrap, so a tab emitting wakes at the store's 1 Hz debounce
+  // ceiling (flapping mobile network: online/visibilitychange/pageshow) must
+  // still reconnect at roughly the backoff's rate, not the wake rate.
+  it('keeps the connect rate near the backoff rate under a sustained wake stream', () => {
+    vi.useFakeTimers()
+    const run = (wakeIntervalMs: number | null) => {
+      const { supervisor, sources } = setup()
+      supervisor.start()
+      // Every attempt fails immediately: the pure backoff schedule.
+      let handled = 0
+      const drain = () => {
+        while (handled < sources.length) sources[handled++].emit('error')
+      }
+      drain()
+      for (let elapsed = 0; elapsed < 60_000; elapsed += 100) {
+        vi.advanceTimersByTime(100)
+        drain()
+        if (wakeIntervalMs !== null && elapsed % wakeIntervalMs === 0) {
+          supervisor.revalidate()
+          drain()
+        }
+      }
+      supervisor.stop()
+      return sources.length
+    }
+
+    const base = run(null)
+    const woken = run(1_000)
+    // Sanity: the unwoken run really is backoff-paced (500 ms → 8 s ceiling).
+    expect(base).toBeLessThan(15)
+    expect(woken).toBeLessThanOrEqual(Math.ceil(base * 1.5))
+  })
+
+  it('leaves a retry that is about to fire alone under a burst of wakes', () => {
+    vi.useFakeTimers()
+    const { supervisor, sources } = setup()
+    supervisor.start()
+    sources[0].emit('error')
+
+    // 500 ms pending: close enough that rescheduling buys nothing, so a
+    // burst of wakes must not churn through sources.
+    supervisor.revalidate()
+    supervisor.revalidate()
+    vi.advanceTimersByTime(0)
+    expect(sources).toHaveLength(1)
+    vi.advanceTimersByTime(500)
+    expect(sources).toHaveLength(2)
+    vi.advanceTimersByTime(10_000)
+    expect(sources).toHaveLength(2)
+  })
+
   it('cancels a pending automatic retry when a manual retry replaces it', () => {
     vi.useFakeTimers()
     const { supervisor, sources } = setup()
