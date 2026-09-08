@@ -67,9 +67,16 @@ export function isSessionVisibleInProject(session: Session, _project: ProjectIte
 export function sidebarProjectForSession(
   session: Session,
   projects: ProjectItem[],
+  isLocalPeer?: (peerName: string) => boolean,
 ): ProjectItem | null {
-  if (!session.project_slug || session.peer) return null
-  return projects.find(project => !project.peer && project.slug === session.project_slug) ?? null
+  if (!session.project_slug) return null
+  // Same owner key `buildProjectFolders` buckets by: a peer session lands in
+  // its host's reference folder, while a Local peer (devcontainer) is stamped
+  // by this host and lands in a local folder (ADR 0025).
+  const sessionPeer = session.peer ?? ''
+  const ownerPeer = sessionPeer !== '' && !isLocalPeer?.(sessionPeer) ? sessionPeer : ''
+  return projects.find(project =>
+    (project.peer ?? '') === ownerPeer && project.slug === session.project_slug) ?? null
 }
 
 export function matchSession(

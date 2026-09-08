@@ -200,6 +200,14 @@ func (p *Peer) Forward(w http.ResponseWriter, r *http.Request, originalID, actio
 	p.api.ForwardAction(w, r, originalID, action)
 }
 
+// ForwardBody forwards a session action with a rewritten request body.
+// Used for reparent, whose parent reference names a session in the
+// viewer's namespace and must reach the owner in the owner's own
+// namespace (promote-to-root carries no reference and forwards as-is).
+func (p *Peer) ForwardBody(w http.ResponseWriter, r *http.Request, originalID, action string, body []byte) {
+	p.api.ForwardActionBody(w, r, originalID, action, body)
+}
+
 // ForwardLaunch sends a launch request to the spoke. The top-level
 // "peer" field is stripped before forwarding so the spoke treats the
 // request as a local launch.
@@ -791,6 +799,15 @@ func (p *Peer) applySessionsSnapshot(input any) {
 		if sess.ParentSessionID != "" {
 			if _, parentPeer := ParseID(sess.ParentSessionID); parentPeer == "" {
 				sess.ParentSessionID = NamespaceID(sess.ParentSessionID, p.Config.Name)
+			}
+		}
+		// Launch provenance is a session reference in the same namespace as
+		// the parent edge, and the viewer resolves it the same way (Return to
+		// family). Left bare it would name nothing here — or worse, collide
+		// with a local session ID.
+		if sess.LaunchedFromSessionID != "" {
+			if _, fromPeer := ParseID(sess.LaunchedFromSessionID); fromPeer == "" {
+				sess.LaunchedFromSessionID = NamespaceID(sess.LaunchedFromSessionID, p.Config.Name)
 			}
 		}
 		sess.Peer = p.Config.Name

@@ -165,15 +165,44 @@ describe('task-family projection', () => {
       expect(promotionAction(selfie, [selfie], placed)).toBeNull()
     })
 
-    it('never offers mutations on peer-projected sessions', () => {
-      // The daemon refuses promote/demote for sessions it does not own
-      // (local_only) — network peers and Local/devcontainer peers alike.
+    it('offers promote/demote on peer-projected sessions, placed by their host folder', () => {
+      // Promote is reparent-to-null on the owning daemon — a same-peer
+      // mutation the local daemon forwards there. What the menu still owes
+      // is a real sidebar row, which for a peer session is the host's
+      // reference folder (`project.peer`), not a local project of the same
+      // slug.
       const root = agent('root', undefined, { peer: 'devbox' })
       const child = agent('child', 'root', { peer: 'devbox' })
       const promoted = agent('promoted', 'root', { peer: 'devbox', parent_session_id: undefined })
       const snapshot = [root, child, promoted]
-      expect(promotionAction(child, snapshot, placed)).toBeNull()
-      expect(promotionAction(promoted, snapshot, placed)).toBeNull()
+      const reference = [{ slug: 'p', peer: 'devbox', match: [] }]
+      expect(promotionAction(child, snapshot, reference)).toEqual({ kind: 'promote', parent: root })
+      expect(promotionAction(promoted, snapshot, reference)).toEqual({ kind: 'demote', parent: root })
+      // Local project of the same slug is a different folder: the peer row
+      // would not appear in it, so the action is blocked, not offered.
+      expect(promotionAction(child, snapshot, placed)).toEqual({
+        kind: 'promote', parent: root, blocked: 'no-project',
+      })
+      // A Local peer (devcontainer) is stamped by this host, so its rows
+      // bucket into the local folder (ADR 0025).
+      expect(promotionAction(child, snapshot, placed, name => name === 'devbox'))
+        .toEqual({ kind: 'promote', parent: root })
+    })
+
+    it('never offers a family that would span two daemons', () => {
+      // A family lives on one daemon: `parent_session_id` drives that
+      // daemon's ordering, dismissal and suppression. Return to family is
+      // the only verb that names a target, so it is the only one that can
+      // ask for a cross-host edge — and it refuses.
+      const localRoot = agent('root')
+      const peerPromoted = agent('promoted', 'root', { peer: 'devbox', parent_session_id: undefined })
+      expect(promotionAction(peerPromoted, [localRoot, peerPromoted], placed)).toBeNull()
+      const peerRoot = agent('proot', undefined, { peer: 'devbox' })
+      const localPromoted = agent('lpromoted', 'proot', { parent_session_id: undefined })
+      expect(promotionAction(localPromoted, [peerRoot, localPromoted], placed)).toBeNull()
+      // Two different peers are just as cross-host as peer/local.
+      const otherPeerChild = agent('other', 'proot', { peer: 'box2', parent_session_id: undefined })
+      expect(promotionAction(otherPeerChild, [peerRoot, otherPeerChild], placed)).toBeNull()
     })
 
     it('offers nothing to plain roots, orphans and cycle members', () => {

@@ -234,6 +234,16 @@ func (c *Client) ForwardAction(w http.ResponseWriter, r *http.Request, sessionID
 	c.proxyHTTP(w, r, path)
 }
 
+// ForwardActionBody is ForwardAction with a caller-supplied request
+// body, for the actions whose payload must be rewritten before it
+// crosses the peer boundary (reparent: a parent reference is named in
+// the viewer's namespace and has to arrive in the owner's).
+func (c *Client) ForwardActionBody(w http.ResponseWriter, r *http.Request, sessionID, action string, body []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	c.ForwardAction(w, r, sessionID, action)
+}
+
 // ForwardPath proxies an HTTP request to the spoke at the given
 // absolute path. The path must include the leading slash ("/v1/...").
 // Method, body, status, headers and Content-Type are preserved.

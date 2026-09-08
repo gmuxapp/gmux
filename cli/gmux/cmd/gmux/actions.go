@@ -311,10 +311,25 @@ func lookupInPool(pool []cliSession, ref string) (*cliSession, []cliSession) {
 // cannot occur and make the authoritative id@peer reference ambiguous.
 var validPeerName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
+// ownerLabel names the daemon that owns a session, for messages that have to
+// say why two sessions cannot be in one family.
+func ownerLabel(peer string) string {
+	if peer == "" {
+		return "this daemon"
+	}
+	return fmt.Sprintf("peer %q", peer)
+}
+
 // displayID returns the one canonical user-visible session address: the full
 // ID, qualified with @peer when the session is remote.
 func displayID(s cliSession) string {
 	if s.Peer == "" {
+		return s.ID
+	}
+	// The daemon already hands peer sessions out under their namespaced ID
+	// ("id@peer"); qualifying again would print "id@peer@peer" and name a
+	// peer-of-a-peer that doesn't exist.
+	if suffix := "@" + s.Peer; strings.HasSuffix(s.ID, suffix) {
 		return s.ID
 	}
 	return s.ID + "@" + s.Peer
@@ -476,14 +491,6 @@ func cmdReparentMutation(ref, parentRef string, promote bool) int {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
-	verb := "reparent"
-	if promote {
-		verb = "promote"
-	}
-	if sess.Peer != "" {
-		fmt.Fprintf(os.Stderr, "gmux: %s requires a session owned by this daemon; run gmux on the owning host\n", verb)
-		return 1
-	}
 	var parentID any
 	if !promote {
 		parent, resolveErr := resolveSession(parentRef)
@@ -491,8 +498,14 @@ func cmdReparentMutation(ref, parentRef string, promote bool) int {
 			fmt.Fprintln(os.Stderr, "gmux:", resolveErr)
 			return 1
 		}
-		if parent.Peer != "" {
-			fmt.Fprintln(os.Stderr, "gmux: parent session must be owned by this daemon; cross-peer reparenting is not supported")
+		// A family lives on one daemon. Both ends must therefore be owned by
+		// the same host: this daemon, or the same peer. Peer-owned pairs are
+		// legitimate and the daemon forwards them to their owner; a mixed
+		// pair is the one real refusal.
+		if parent.Peer != sess.Peer {
+			fmt.Fprintf(os.Stderr,
+				"gmux: cross-peer reparenting is not supported: %s is owned by %s and %s by %s; a task family cannot span daemons\n",
+				displayID(sess), ownerLabel(sess.Peer), displayID(parent), ownerLabel(parent.Peer))
 			return 1
 		}
 		parentID = parent.ID
