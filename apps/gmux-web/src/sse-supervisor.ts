@@ -47,7 +47,8 @@ export interface SSESupervisor {
  *  - `revalidate()` (a wake) and `retry()` (a tap) are new information and
  *    always open a fresh window, including after exhaustion — a phone that
  *    returns after ten minutes must recover without a tap. They never stack
- *    sources: a pending retry or an in-flight attempt absorbs the wake. A
+ *    sources: a pending retry or an in-flight attempt absorbs the wake, though
+ *    a retry still parked deep in the backoff is pulled forward to now. A
  *    wake refreshes the deadline only; a tap also restores the backoff floor.
  *
  * Lifecycle revalidation replaces only an unhealthy or stale source: after
@@ -55,6 +56,9 @@ export interface SSESupervisor {
  * TCP stream still delivers bytes, but a stream that delivered bytes moments
  * ago needs no new (full) bootstrap.
  */
+/** A pending retry closer than this to firing is left alone on a wake. */
+const wakeRescheduleThresholdMs = 1_000
+
 export function createSSESupervisor(options: SSESupervisorOptions): SSESupervisor {
   const now = options.now ?? Date.now
   const random = options.random ?? Math.random
@@ -66,6 +70,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
 
   let source: SSESource | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let timerDueAt = 0
   let lastActivityAt: number | null = null
   let openedAt: number | null = null
   let attemptStartedAt = 0
@@ -73,10 +78,22 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
   let generation = 0
   let attempts = 0
   let retryStartedAt: number | null = null
+  // When a wake last pulled a pending retry forward; bounds that privilege to
+  // once per `maxDelayMs` (cleared whenever the backoff itself is reset).
+  let lastWakePullAt: number | null = null
 
   const clearTimer = () => {
     if (timer !== null) clearTimeout(timer)
     timer = null
+  }
+
+  // Scheduling goes through here so a pending retry's due time is always
+  // known: a wake needs to tell "about to fire" from "parked deep in the
+  // backoff" without reaching into the timer handle.
+  const scheduleConnect = (delay: number) => {
+    clearTimer()
+    timerDueAt = now() + delay
+    timer = setTimeout(connect, delay)
   }
 
   const closeSource = () => {
@@ -128,6 +145,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
         if (openedAt !== null && now() - openedAt >= stableOpenDurationMs) {
           attempts = 0
           retryStartedAt = null
+          lastWakePullAt = null
         }
         closeSource()
         if (retryStartedAt === null) retryStartedAt = now()
@@ -141,7 +159,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
         // ±20% jitter avoids a set of resumed tabs reconnecting in lockstep.
         const delay = Math.max(0, Math.round(base * (0.8 + random() * 0.4)))
         options.onRetryScheduled?.()
-        timer = setTimeout(connect, delay)
+        scheduleConnect(delay)
       },
     })
     // A test double or an unusual implementation can report failure during
@@ -160,7 +178,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
     clearTimer()
     closeSource()
     options.onRetryScheduled?.()
-    timer = setTimeout(connect, 0)
+    scheduleConnect(0)
   }
 
   return {
@@ -169,6 +187,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
       stopped = false
       attempts = 0
       retryStartedAt = null
+      lastWakePullAt = null
       connect()
     },
     stop() {
@@ -181,6 +200,7 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
       if (stopped) return
       attempts = 0
       retryStartedAt = null
+      lastWakePullAt = null
       restart()
     },
     revalidate() {
@@ -199,7 +219,30 @@ export function createSSESupervisor(options: SSESupervisorOptions): SSESuperviso
       retryStartedAt = null
       // But it must not pile up sources. A pending retry or an attempt still
       // in flight already covers this wake; it now carries the new budget.
-      if (timer !== null) return
+      if (timer !== null) {
+        // A retry parked deep in the backoff (up to maxDelayMs plus jitter)
+        // would keep a just-woken tab dark for that whole delay, even though
+        // the wake is fresh evidence that the network moved. Pull the pending
+        // attempt forward instead of absorbing the wake silently. `attempts`
+        // is deliberately left grown, so the backoff is not collapsed: if
+        // this attempt fails too, the next delay is still the grown one.
+        // Timers about to fire anyway are left alone — rescheduling them buys
+        // nothing and would only add churn under a burst of wakes.
+        //
+        // And the pull itself is rate-limited to one per `maxDelayMs`. Without
+        // that, wakes — not the backoff — would set the reconnect rate: at the
+        // ceiling every wake more than a second early pulls the retry to now,
+        // the attempt fails, a fresh ceiling-length timer is armed, and the next
+        // wake pulls that one too. A tab emitting wakes at the store's 1 Hz
+        // debounce ceiling would then bootstrap ~1×/s forever, which is the
+        // load-shedding property the backoff exists for.
+        if (timerDueAt - now() > wakeRescheduleThresholdMs
+            && (lastWakePullAt === null || now() - lastWakePullAt >= maxDelayMs)) {
+          lastWakePullAt = now()
+          scheduleConnect(0)
+        }
+        return
+      }
       if (source !== null && source.readyState === 0
           && now() - attemptStartedAt < attemptTimeoutMs) return
       restart()
