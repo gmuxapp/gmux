@@ -68,11 +68,11 @@ Live session state is reported by the agent itself, not inferred by the daemon. 
 
 ### Conversation sources: index updates
 
-Separately, each file-backed adapter implements `ConversationSource` to keep the conversations index (URL resolution + search) current: a snapshot at startup, then incremental create/change/remove events via the shared `filewatch` watcher. This covers dead conversations that have no running session, which the hook path cannot.
+Separately, each file-backed adapter implements `ConversationSource` to keep the conversations index (URL resolution + search) current: incremental create/change/remove events via the shared `filewatch` watcher, plus a full scan at startup. The watchers start first and the startup scan then runs in the background (at most two adapter scans at a time), so binding the listeners never waits on the size of your conversation history; sessions serve immediately and gain resume commands progressively as each adapter finishes. `GET /v1/health` reports the progress as `conversation_index`. This covers dead conversations that have no running session, which the hook path cannot.
 
 ### Dead-session persistence
 
-Dead sessions survive daemon restarts because they are rows in the SQLite database. When a session exits, its state is committed to `state.db`; on startup gmuxd rediscovers surviving runners and merges their live state, then serves the first snapshot. There is no separate sweep or JSON file to synchronize.
+Dead sessions survive daemon restarts because they are rows in the SQLite database. When a session exits, its state is committed to `state.db`; on startup gmuxd serves rows from SQLite right away while it rediscovers surviving runners and merges their live state, reporting that convergence as `session_recovery` (`recovering`/`ready`, with expected and recovered counts) in `GET /v1/health`. There is no separate sweep or JSON file to synchronize.
 
 Retention: adapters own resumability and retention policy. Each adapter reconciles its retained candidates and returns a disposition (retain, remove, or unknown); unknown retains conservatively, so rows are only removed when their adapter positively confirms the conversation is gone. Dead-session scrollback is a cache with an aggregate byte target. There is no periodic scan of adapter conversation directories creating sessions — that mechanism was retired; the conversations index handles dead-conversation URL resolution.
 
@@ -120,7 +120,7 @@ The frontend is a projection of backend state. Session state arrives exclusively
 2. `snapshot.world` — projects, peers, health, launchers, and peer projects. It remains a separate protocol-2 full replacement; the 48 KiB session-event bound does not apply to world.
 3. `session-activity` — bare `{id}` ping, lossy by design.
 
-Reconnect discards unpublished staging and restarts from a leading-edge full replacement, so missed updates do not matter. Epochs increase strictly and the first accepted session protocol locks each transport against mixed-mode rollback. A quarantined row produces a persistent sidebar warning until a later clean bootstrap. Unversioned custom consumers and old tabs temporarily receive protocol-2 `snapshot.sessions`; `GET /v1/sessions` remains for the CLI and scripts.
+The frontend owns reconnection rather than leaving it to `EventSource`'s native retry, which can stop permanently after a fatal response (401/503) and strand the stream in `CLOSED`: a supervisor replaces the source with cancellable jittered backoff inside a bounded window, offers a manual retry when that window is exhausted, and revalidates the transport on resume/visibility/online lifecycle events (an `OPEN` readyState after a phone wakes is not proof that bytes still flow). Reconnect discards unpublished staging and restarts from a leading-edge full replacement, so missed updates do not matter. Epochs increase strictly and the first accepted session protocol locks each transport against mixed-mode rollback. A quarantined row produces a persistent sidebar warning until a later clean bootstrap. Unversioned custom consumers and old tabs temporarily receive protocol-2 `snapshot.sessions`; `GET /v1/sessions` remains for the CLI and scripts.
 
 Mutations use a bounded **optimistic overlay**: mark-read, dismiss, and reorder are stacked as pending mutations and replayed on top of incoming raw snapshots until the server echoes them back or a 5-second TTL expires. The UI feels instant, and a failed action self-heals back to server truth (plus an error toast).
 

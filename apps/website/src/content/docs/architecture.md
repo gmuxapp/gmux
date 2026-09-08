@@ -107,7 +107,7 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `POST /v1/register` / `POST /v1/deregister` | Runner registration fast path |
 | `GET /v1/events?session_stream=3` | SSE: bounded atomic `snapshot.sessions.{begin,batch,ready}`, row diagnostics, `snapshot.world`, `session-activity` (ADR 0001); unversioned requests temporarily retain legacy `snapshot.sessions` |
 | `/v1/peers/{peer}/...` | Forward an allowlisted write to a peer (ADR 0002) |
-| `GET /v1/health` | Daemon health, version, launchers, peer status |
+| `GET /v1/health` | Daemon health, version, launchers, peer status, plus startup progress: `conversation_index` (background conversation indexing) and `session_recovery` (runner rediscovery after a restart) |
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |
 
