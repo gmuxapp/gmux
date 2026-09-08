@@ -5,6 +5,7 @@ toolchain go1.26.1
 use (
 	./cli/gmux
 	./packages/adapter
+	./packages/buildversion
 	./packages/paths
 	./packages/scrollback
 	./packages/socklease

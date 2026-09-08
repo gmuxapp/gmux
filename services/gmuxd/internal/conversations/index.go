@@ -21,6 +21,14 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
+// refScan is the guard state for a ref with at least one Scan in flight:
+// how many are running, and how many removals landed since the entry was
+// created. A scan commits only if `gen` still matches what it snapshotted.
+type refScan struct {
+	pending int
+	gen     uint64
+}
+
 // Info holds metadata for a single stored conversation.
 type Info struct {
 	ConversationID string    // adapter-native conversation ID (typically a UUID)
@@ -49,13 +57,20 @@ type Index struct {
 	// conversation source is indexing the ref. Rendering the session list is
 	// a hot read path and must not re-read every dead conversation transcript.
 	resumeByRef map[string][]string
-	// removeGen counts Remove/RemoveByRef events per (adapter, ref). Scan
-	// snapshots it before its unlocked DescribeConversation and commits only
-	// if it is unchanged, so a watcher-observed deletion always beats an
-	// in-flight scan of the same ref — otherwise the scan's late Upsert would
-	// resurrect the deleted conversation until restart (zombie). The map only
-	// grows on removal events (manual rm, rotation), which are rare.
-	removeGen map[string]uint64
+	// scanning tracks per-(adapter, ref) in-flight Scans and the removal
+	// generation observed while they run. Scan snapshots the generation before
+	// its unlocked DescribeConversation and commits only if it is unchanged,
+	// so a watcher-observed deletion always beats an in-flight scan of the same
+	// ref — otherwise the scan's late Upsert would resurrect the deleted
+	// conversation until restart (zombie).
+	//
+	// The entry exists only while at least one scan of that ref is in flight,
+	// which is exactly the window the guard covers: a removal with no scan
+	// pending has nothing to invalidate (any later scan starts *after* it and
+	// re-reads the world), and the last scan to settle drops the entry. So the
+	// map is bounded by concurrent scans instead of growing once per removal
+	// event for the daemon's lifetime.
+	scanning map[string]refScan
 	// snapshotDone flips to true once the initial full snapshot of every
 	// adapter ConversationSource has finished (Snapshot or StartSnapshot).
 	// Until then, a lookup miss means "not indexed yet", not "absent".
@@ -68,7 +83,7 @@ func New() *Index {
 		byKey:            make(map[string]Info),
 		byConversationID: make(map[string]string),
 		resumeByRef:      make(map[string][]string),
-		removeGen:        make(map[string]uint64),
+		scanning:         make(map[string]refScan),
 	}
 }
 
@@ -242,16 +257,19 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		return ""
 	}
 
-	// Snapshot the ref's removal generation before the unlocked describe:
-	// a Remove event that lands while the file is being read/parsed must
-	// win over this scan's results (commitScanLocked re-checks it).
-	gen := idx.refGeneration(a.Name(), ref)
+	// Register the scan and snapshot the ref's removal generation before the
+	// unlocked describe: a Remove event that lands while the file is being
+	// read/parsed must win over this scan's results (the commit re-checks it).
+	gen := idx.beginScan(a.Name(), ref)
 
 	convInfo, err := desc.DescribeConversation(ref)
 	if err != nil {
 		// Keep stale-good state on transient descriptor failures, matching the
 		// main metadata index. A source Remove event is the authoritative
 		// signal that clears both entries.
+		idx.mu.Lock()
+		idx.endScanLocked(a.Name(), ref)
+		idx.mu.Unlock()
 		return ""
 	}
 
@@ -290,7 +308,10 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if idx.removeGen[refKey(a.Name(), ref)] != gen {
+	// Settle the scan under the same lock hold as the check it guards, so the
+	// entry survives exactly as long as it can still invalidate something.
+	defer idx.endScanLocked(a.Name(), ref)
+	if idx.scanning[refKey(a.Name(), ref)].gen != gen {
 		// The ref was removed while this scan was describing it; the removal
 		// is authoritative. Committing anyway would resurrect a deleted
 		// conversation with no future event to clear it.
@@ -308,11 +329,46 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 	return idx.upsertLocked(info)
 }
 
-// refGeneration returns the current removal generation for (adapter, ref).
-func (idx *Index) refGeneration(adapterName, ref string) uint64 {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return idx.removeGen[refKey(adapterName, ref)]
+// beginScan registers an in-flight scan of (adapter, ref) and returns the
+// removal generation it must still observe at commit time.
+func (idx *Index) beginScan(adapterName, ref string) uint64 {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	rk := refKey(adapterName, ref)
+	state := idx.scanning[rk]
+	state.pending++
+	idx.scanning[rk] = state
+	return state.gen
+}
+
+// endScanLocked retires one in-flight scan of (adapter, ref), dropping the
+// guard entry once none remain. Must be called with idx.mu held (write).
+func (idx *Index) endScanLocked(adapterName, ref string) {
+	rk := refKey(adapterName, ref)
+	state, ok := idx.scanning[rk]
+	if !ok {
+		return
+	}
+	state.pending--
+	if state.pending <= 0 {
+		delete(idx.scanning, rk)
+		return
+	}
+	idx.scanning[rk] = state
+}
+
+// noteRemovalLocked invalidates any scan of (adapter, ref) that is already in
+// flight. A removal with no scan pending needs no record: a scan starting
+// afterwards re-reads the world and so cannot be stale. Must be called with
+// idx.mu held (write).
+func (idx *Index) noteRemovalLocked(adapterName, ref string) {
+	rk := refKey(adapterName, ref)
+	state, ok := idx.scanning[rk]
+	if !ok {
+		return
+	}
+	state.gen++
+	idx.scanning[rk] = state
 }
 
 // Remove deletes a conversation from the index by conversation ID.
@@ -328,7 +384,7 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 	delete(idx.byConversationID, tk)
 	if info, exists := idx.byKey[indexKey(adapterName, key)]; exists {
 		delete(idx.resumeByRef, refKey(adapterName, info.Ref))
-		idx.removeGen[refKey(adapterName, info.Ref)]++
+		idx.noteRemovalLocked(adapterName, info.Ref)
 	}
 	delete(idx.byKey, indexKey(adapterName, key))
 	return true
@@ -350,10 +406,10 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	// Bump the removal generation even when nothing is indexed yet: the
-	// entry may be mid-scan (describe in flight), and that scan's commit
-	// must observe this removal and drop its result.
-	idx.removeGen[refKey(adapterName, ref)]++
+	// Invalidate even when nothing is indexed yet: the entry may be mid-scan
+	// (describe in flight), and that scan's commit must observe this removal
+	// and drop its result.
+	idx.noteRemovalLocked(adapterName, ref)
 	delete(idx.resumeByRef, refKey(adapterName, ref))
 	for key, info := range idx.byKey {
 		if info.Adapter != adapterName || info.Ref != ref {

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/buildversion"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 )
@@ -91,9 +92,11 @@ func gmuxdNeedsStartContext(ctx context.Context) bool {
 		return true
 	}
 
-	// "dev" builds never replace — avoids churn during development and needs
-	// no identity response once socket ownership is established.
-	if version == "dev" {
+	// Development builds never replace — avoids churn during development and
+	// needs no identity response once socket ownership is established. A source
+	// install stamps "dev+<hash>", which is still a development build: rebuilding
+	// must not start replacing the running daemon on every hash change.
+	if buildversion.IsDev(version) {
 		return false
 	}
 

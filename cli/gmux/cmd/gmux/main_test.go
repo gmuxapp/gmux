@@ -286,3 +286,21 @@ func TestParseHealthField(t *testing.T) {
 		t.Errorf("nonexistent = %q, want empty", got)
 	}
 }
+
+// A source install stamps "dev+<hash>" (see scripts/build.sh). It is still a
+// development build: rebuilding must not make every gmux invocation replace
+// the running daemon because the hash moved.
+func TestGmuxdNeedsStart_StampedDevNeverReplaces(t *testing.T) {
+	old := version
+	version = "dev+1a2b3c4d5e6f-dirty"
+	defer func() { version = old }()
+
+	stateDir, cleanup := startTestSocketDaemon(t, "0.4.3")
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	if gmuxdNeedsStart() {
+		t.Error("a stamped dev build must not replace a healthy daemon")
+	}
+}
+
