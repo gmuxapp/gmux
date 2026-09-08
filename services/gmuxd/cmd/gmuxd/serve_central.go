@@ -20,6 +20,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/buildversion"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
@@ -67,10 +68,22 @@ func implicitIncumbentCheck(sock string) error {
 	if !ok {
 		return fmt.Errorf("%w: socket owner with unavailable identity owns %s", errIncumbentHealthy, sock)
 	}
-	if ident.Version == version {
+	if sameDaemonBuild(ident.Version) {
 		return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
 	}
 	return nil
+}
+
+// sameDaemonBuild decides whether an incumbent counts as "same version" for the
+// implicit-replacement policy. Exact equality is not enough since source builds
+// carry a per-tree stamp (dev+<hash>, see scripts/build.sh): two rebuilds of the
+// same working tree would otherwise look like a version upgrade to each other,
+// and `gmuxd run` — the documented systemd/Docker/debug entry point — would
+// silently shut a healthy daemon down without --replace, in either direction.
+// Development builds are therefore one class; only a real version difference
+// earns an implicit takeover.
+func sameDaemonBuild(incumbent string) bool {
+	return buildversion.SameBuildClass(incumbent, version)
 }
 
 // registerGetProjectsRoute installs the production GET /v1/projects handler.
@@ -184,7 +197,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			return nil
 		}
 		ident, identityOK := unixipc.HealthIdentity(sock)
-		if !replace && (!identityOK || ident.Version == version) {
+		if !replace && (!identityOK || sameDaemonBuild(ident.Version)) {
 			if !identityOK {
 				return fmt.Errorf("%w: socket owner with unavailable identity owns %s", errIncumbentHealthy, sock)
 			}

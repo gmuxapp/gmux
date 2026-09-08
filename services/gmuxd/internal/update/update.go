@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/buildversion"
 )
 
 const (
@@ -27,13 +29,14 @@ type Checker struct {
 }
 
 // New starts a background checker. current is the running version (e.g. "v0.4.6").
-// If current is "dev", the checker does nothing.
+// If current is a development version the checker does nothing: no goroutine,
+// no network.
 func New(current string) *Checker {
 	c := &Checker{
 		current: current,
 		client:  &http.Client{Timeout: 10 * time.Second},
 	}
-	if current == "dev" {
+	if buildversion.IsDev(current) {
 		return c
 	}
 	go c.loop()

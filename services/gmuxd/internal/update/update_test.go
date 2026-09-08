@@ -43,3 +43,16 @@ func TestParseSemver(t *testing.T) {
 		}
 	}
 }
+
+// The update checker must stay silent — and offline — for every build that
+// came from a working tree, including the stamped "dev+<hash>" a source
+// install produces (scripts/build.sh).
+func TestDevBuildsNeverCheckForUpdates(t *testing.T) {
+	// The predicate itself lives in packages/buildversion (one copy for the
+	// three policies that key off it); pin the behaviour here.
+	for _, v := range []string{"dev", "dev+1a2b3c4d5e6f", "dev+1a2b3c4d5e6f-dirty"} {
+		if c := New(v); c.Available() != "" {
+			t.Errorf("dev build %q reported an available update: %q", v, c.Available())
+		}
+	}
+}
