@@ -825,6 +825,39 @@ function refreshDayBoundary(): void {
   if (mid !== dayBoundary.value) dayBoundary.value = mid
 }
 
+/**
+ * Re-evaluate the day-relative labels when the local day actually turns.
+ *
+ * The snapshot seam alone is not enough: a quiet tab (no sessions changing,
+ * no reconnect) commits nothing across midnight, so "Today" would keep
+ * naming yesterday until some unrelated update arrived. This is one timer
+ * armed for the next local midnight, not polling — it fires once a day, does
+ * a single signal write, and re-arms from the real clock afterwards, so a
+ * suspended tab that wakes late still converges on its next tick.
+ *
+ * The target is computed with the Date constructor (not +24h) so a DST
+ * transition still lands on the following local midnight.
+ */
+export function watchDayBoundary(): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const arm = () => {
+    const now = Date.now()
+    const d = new Date(now)
+    const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
+    // A second past midnight: fire inside the new day even if the timer is
+    // nudged early, and never schedule a zero-delay loop.
+    timer = setTimeout(() => {
+      refreshDayBoundary()
+      arm()
+    }, Math.max(1_000, next + 1_000 - now))
+  }
+  arm()
+  return () => {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+  }
+}
+
 /** The single source of truth for which sessions are eligible for the
  *  sidebar. Projects places this list into configured folders; Activity
  *  rearranges that placed set, so unstamped/unreferenced sessions that
@@ -2376,6 +2409,10 @@ export function initStore(): () => void {
     }
   })
   cleanups.push(disposeSidebarRepair)
+
+  // Day-relative sidebar/home labels are a function of the wall clock, so
+  // they need a clock trigger of their own — snapshot commits are not one.
+  cleanups.push(watchDayBoundary())
 
   if (USE_MOCK) {
     const localHost = new URLSearchParams(location.search).get('host')
