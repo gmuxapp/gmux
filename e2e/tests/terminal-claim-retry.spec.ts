@@ -107,6 +107,23 @@ function maxTick(text: string, tag: string): number {
   return nums.length ? Math.max(...nums) : 0
 }
 
+/**
+ * Buffer text with the ticker's own writes and all layout removed, for
+ * asserting on the pty's echo of typed keys.
+ *
+ * The session writes a TICK line every 0.3s while the test types, and the
+ * echo of a keystroke is emitted by the tty the moment that key arrives. A
+ * tick landing between two keystrokes therefore splits the echoed marker
+ * across lines — observed as `echo INP` / `TICK_R_7` / `UT_OK_R` — and a
+ * plain substring match on the raw buffer fails even though every keystroke
+ * reached the runner. That is what this assertion is about, so strip the
+ * concurrent writer's tokens and all whitespace/line breaks and match the
+ * echo itself (`echoINPUT_OK_R`) instead of racing the tick.
+ */
+function echoedInput(text: string, tag: string): string {
+  return text.replace(new RegExp(`TICK_${tag}_\\d+`, 'g'), '').replace(/\s+/g, '')
+}
+
 /** Shadow term.dimensions with undefined → measureTerminalFit returns null. */
 async function forceNullMeasurement(page: Page) {
   await page.waitForFunction(() => (window as any).__gmuxTerm && (window as any).__testWs && (window as any).__releaseWs)
@@ -132,6 +149,10 @@ test('null first claim recovers via a later real measurement (resize lifecycle)'
   const id = await launchSession(page, tickerCommand('R'))
   await navigate(page, id)
   await forceNullMeasurement(page)
+  // The in-app fallback deadline starts with the claim, which runs as soon as
+  // the released replay is consumed — a hair after this line. Recovery is
+  // timed against it below.
+  const claimStart = Date.now()
 
   // Stall begins: replay rendered, live ticks held, spinner up. Wait past
   // the immediate rAF re-measurement budget so recovery must come from the
@@ -150,7 +171,15 @@ test('null first claim recovers via a later real measurement (resize lifecycle)'
   await restoreMeasurement(page)
   await page.setViewportSize({ width: 1000, height: 700 })
 
-  await expect(page.locator('.terminal-loading')).toHaveCount(0, { timeout: 2_000 })
+  // Wait for the claim on the condition, then assert what actually matters:
+  // that it landed before the fallback deadline, so it came from the measured
+  // ResizeObserver path and not from the give-up timer (which clears the
+  // spinner too). A fixed short window would instead conflate "slow frame
+  // under load" with "wrong recovery path".
+  await expect(page.locator('.terminal-loading')).toHaveCount(0, { timeout: FALLBACK_MS + 4_000 })
+  expect(Date.now() - claimStart,
+    'claim completed no earlier than the fallback deadline: recovery did not come from the measured path')
+    .toBeLessThan(FALLBACK_MS)
   await pollUntil(async () => {
     const text = await bufferText(page)
     return maxTick(text, 'R') > base + 3 ? text : null
@@ -163,7 +192,7 @@ test('null first claim recovers via a later real measurement (resize lifecycle)'
   // Input opened with the claim.
   await page.locator('.xterm').click()
   await page.keyboard.type('echo INPUT_OK_R\n')
-  await pollUntil(async () => (await bufferText(page)).includes('INPUT_OK_R') || undefined,
+  await pollUntil(async () => echoedInput(await bufferText(page), 'R').includes('echoINPUT_OK_R') || undefined,
     { timeoutMs: 5_000, description: 'input echoes after measured recovery' })
 })
 
@@ -205,11 +234,14 @@ test('permanently-null measurement falls back within the deadline; input reopens
   // Pre-claim input never reached the shell; post-fallback input echoes.
   await page.locator('.xterm').click()
   await page.keyboard.type('echo INPUT_OK_P\n')
-  const text = await pollUntil(async () => {
-    const t = await bufferText(page)
-    return t.includes('INPUT_OK_P') ? t : null
+  const echoed = await pollUntil(async () => {
+    const t = echoedInput(await bufferText(page), 'P')
+    return t.includes('echoINPUT_OK_P') ? t : null
   }, { timeoutMs: 5_000, description: 'input echoes after fallback claim' })
-  expect(text).not.toContain('INPUT_DROPPED_P')
+  // Same normalization for the negative: pre-claim keystrokes must be absent
+  // even in the interleaving-immune view (a split echo must not read as a
+  // dropped one).
+  expect(echoed).not.toContain('INPUT_DROPPED_P')
 
   // No claim was ever sent: the runner keeps its original geometry.
   expect(await terminalCols(id)).toBe(colsBefore)
