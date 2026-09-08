@@ -47,9 +47,6 @@ importers:
       '@preact/signals':
         specifier: ^2.9.0
         version: 2.9.0(preact@10.29.0)
-      '@trpc/client':
-        specifier: ^11.6.0
-        version: 11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)
       '@xterm/addon-fit':
         specifier: 0.12.0-beta.288
         version: 0.12.0-beta.288(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/baeffe1f08c007e194c842b0f913665a48643c19)
@@ -1188,17 +1185,6 @@ packages:
 
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
-
-  '@trpc/client@11.12.0':
-    resolution: {integrity: sha512-zTwFKQdE99pvNm7kXFdHo5xIQpGqpQJHtqVkT9o+i8h/0fbDOUBEEbFVICiMsNA+GiXskoaDRX2l+z6ir+Ug3w==}
-    peerDependencies:
-      '@trpc/server': 11.12.0
-      typescript: '>=5.7.2'
-
-  '@trpc/server@11.12.0':
-    resolution: {integrity: sha512-rpZnf5FUjNndE/AjGIy+FvEHR52iBd0u0wySqWCwXj67wraj3qCuBr5Opcf0Te/g67C/YztqceFkLoG0r4mp4Q==}
-    peerDependencies:
-      typescript: '>=5.7.2'
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -4010,15 +3996,6 @@ snapshots:
       '@types/hast': 3.0.4
 
   '@shikijs/vscode-textmate@10.0.2': {}
-
-  '@trpc/client@11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)':
-    dependencies:
-      '@trpc/server': 11.12.0(typescript@5.9.3)
-      typescript: 5.9.3
-
-  '@trpc/server@11.12.0(typescript@5.9.3)':
-    dependencies:
-      typescript: 5.9.3
 
   '@types/chai@5.2.3':
     dependencies:
