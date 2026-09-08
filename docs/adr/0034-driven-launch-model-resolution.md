@@ -1,8 +1,39 @@
 # ADR 0034: driven-launch model resolution
 
-**Status:** Accepted
+**Status:** Accepted as design; **not implemented** — see [Implementation status](#implementation-status)
 **Date:** 2026-08-02
 **Related:** ADR 0027 (semantic agent CLI), ADR 0029 (agent sessions abstract runner residency), ADR 0033 (session drive modes, capability boundaries, and canonical session spec)
+
+## Implementation status
+
+**As of 2.1 none of the resolution described below ships.** The decision is
+accepted and written in the present tense throughout, as ADRs here are; it
+lands with the model-catalog slice of the ACP host program
+(`docs/acp-host-program.md` §2.8 and slice 7). What ships today is only the
+launch surface the resolver will later sit behind:
+
+- `gmux agent prompt --new --model <M>` launches **pi** and hands `<M>` to
+  pi's own `--model` flag verbatim (`agentLaunchAdapter` in
+  `cli/gmux/cmd/gmux/agent.go`, `Pi.LaunchCommand` in
+  `packages/adapter/adapters/pi.go`). gmux does not parse, normalize, or
+  validate the value: `model:effort@harness` is not recognized as a grammar,
+  `@harness` selects nothing, and `:effort` is not split off. An unusable
+  value fails inside pi, after the session exists — not in gmux.
+- There is **no candidate corpus**: no adapter model-catalog capability, no
+  installed/authenticated filtering, and no web model picker to share it
+  with (the web new-session flow has no model field).
+- **No rung of the ladder exists**: no whole-token matching, no
+  `preferred_harnesses` key (`host.toml` is strictly validated, so writing
+  it is an error today), no launch history, no recency tiebreak, no effort
+  default, no echo of a resolved canonical form. The launch argv is recorded
+  on the session, which is the only sense in which the selection is frozen.
+
+Stability, per the 2.x covenant (PR #507, `reference/stability.md`): the
+`--model` **flag** is covenanted, its **value grammar is adapter-owned and
+experimental**. Everything below — the spec grammar, the ladder, the
+`preferred_harnesses` key, and the echo/freeze contract — is future work and
+carries no compatibility promise until it ships and the stability reference
+says so.
 
 ## Context
 
@@ -27,6 +58,8 @@ data must drive the web UI model picker.
 ## Decision
 
 ### Scope
+
+*(Design, not current behavior — see [Implementation status](#implementation-status).)*
 
 Resolution applies only where gmux chooses the launch command: driven
 launches (`gmux agent prompt --new --model <spec>`) and the web UI
@@ -86,9 +119,9 @@ There is no implicit default model.
 
 ### Configuration
 
-One new key: `preferred_harnesses`, the ordered harness preference of rung
-3, shipped with a sane default covering all supported harnesses so
-zero-config works. It is per-user intent: one user routes shorthand `fable`
+One new key: `preferred_harnesses` (not yet present in `host.toml`), the
+ordered harness preference of rung 3, to ship with a sane default covering
+all supported harnesses so zero-config works. It is per-user intent: one user routes shorthand `fable`
 via pi, another via claude, each without canonical specs. A future `default_model` may be added;
 initially an underspecified launch fails and asks.
 

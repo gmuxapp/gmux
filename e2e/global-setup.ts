@@ -223,6 +223,10 @@ export default async function globalSetup(_config: FullConfig) {
     sessionId,
     port,
     token: testToken,
+    // Teardown's last-resort handle on this run's runners: they inherit
+    // GMUX_SOCKET_DIR from the daemon, and it is unique per run, so it
+    // identifies exactly the processes this suite is responsible for.
+    socketDir,
   }))
 
   // Playwright reads baseURL from config, but config is evaluated before

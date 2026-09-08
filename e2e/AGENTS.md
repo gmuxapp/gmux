@@ -39,6 +39,29 @@ defense-in-depth for future tests that spawn agents like `pi` or
 `claude` (which would otherwise read the operator's real
 `~/.pi/agent/` etc.); audit it manually when touching this setup.
 
+## Process cleanup contract
+
+A suite run must leave nothing running. Runners are not children of
+gmuxd (ADR 0011), so killing the process groups `global-setup.ts`
+spawned reaches the daemon and the one setup session only — every
+session a test launches through `/v1/launch` would otherwise outlive
+teardown forever (the ticker scripts never exit).
+
+`global-teardown.ts` therefore does two things: it asks the daemon to
+kill every session it still knows about, and then sweeps `/proc` for
+any process whose `GMUX_SOCKET_DIR` is this run's socket dir. The
+sweep is what actually holds, because `tests/z-terminal-disconnect.spec.ts`
+deliberately SIGTERMs the daemon — after that there is nobody left to
+ask. The socket dir is a fresh mkdtemp per run, so the sweep can never
+reach a runner of the operator's own daemon.
+
+When adding a test that launches its own session, nothing extra is
+needed — but check after a full run:
+
+```bash
+pgrep -af "$PWD/bin/gmux __run"   # must print nothing
+```
+
 ## Adapter-session fixtures
 
 `fixtures.ts` knows how to write minimally valid JSONL session files

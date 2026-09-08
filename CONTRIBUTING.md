@@ -6,11 +6,16 @@
 |------|---------|---------|
 | **Node.js** ≥ 20 | JS/TS tooling | [nodejs.org](https://nodejs.org) |
 | **pnpm** ≥ 9 | Package manager | `npm i -g pnpm` |
-| **Go** ≥ 1.22 | Native services (gmuxd, gmux) | [go.dev](https://go.dev/dl/) |
+| **Go** ≥ 1.26.1 | Native services (gmuxd, gmux) | [go.dev](https://go.dev/dl/) |
 | **watchexec** | Auto-rebuild Go on file change (dev mode) | `pacman -S watchexec` / `cargo install watchexec-cli` / [github.com/watchexec/watchexec](https://github.com/watchexec/watchexec/releases) |
 | **jj** | Version control | [martinvonz.github.io/jj](https://martinvonz.github.io/jj/) |
 
 Optional: **moon** is installed locally via pnpm (`@moonrepo/cli`), no global install needed.
+
+The exact release toolchain is pinned in `go.work` (`toolchain go1.26.1`) and
+printed by `scripts/go-toolchain.sh`; `scripts/build.sh` requests it via
+`GOTOOLCHAIN` so builds never drift to another patch release. A newer ambient
+Go works for plain `go build` / `go test` too.
 
 ## Getting started
 
