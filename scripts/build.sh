@@ -29,10 +29,16 @@ dev_version() {
   # The `-e $ROOT/.git` test matters: inside a secondary jj workspace (a grove)
   # there is no .git of its own, and git would happily answer with the *parent*
   # repository's HEAD, which is a different tree.
+  #
+  # --no-optional-locks is what makes "read-only" true rather than nearly true:
+  # `git status` otherwise refreshes the stat cache, which *writes* .git/index
+  # and takes index.lock while doing it. A build must not touch the repository
+  # it is reading, and must not contend with an editor or a jj snapshot for the
+  # index lock.
   if [ -e "$ROOT/.git" ] && command -v git >/dev/null 2>&1 \
-    && hash="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null)" \
+    && hash="$(git --no-optional-locks -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null)" \
     && [ -n "$hash" ]; then
-    if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git --no-optional-locks -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
       echo "dev+$hash-dirty"
     else
       echo "dev+$hash"
