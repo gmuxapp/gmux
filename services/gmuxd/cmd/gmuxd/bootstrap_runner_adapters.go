@@ -437,7 +437,9 @@ func (s *productionRunnerSpawner) resolveCommand(row centralstore.Session) []str
 }
 
 // CanSpawn answers Restart's pre-stop question (sessioncoord.RunnerSpawnChecker)
-// with exactly the predicate Spawn applies, minus any side effect.
+// with exactly the relaunch-command predicate Spawn applies, minus any side
+// effect. Spawn's later steps (directory resolution, socket lease, exec,
+// readiness) are out of scope and still run after the stop.
 func (s *productionRunnerSpawner) CanSpawn(row centralstore.Session) error {
 	if len(s.resolveCommand(row)) == 0 {
 		return relaunchRefusal(row)

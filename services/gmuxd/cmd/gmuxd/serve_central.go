@@ -1318,8 +1318,8 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
 		}
-		// Refuse before stopping: restart is stop+spawn, so a row the spawner
-		// would refuse must not lose its running process to a failed respawn.
+		// Refuse before stopping: restart is stop+spawn, so a row the relaunch
+		// policy refuses must not lose its running process to a failed respawn.
 		if status, code, msg := relaunchCommandGuard(row); status != 0 {
 			writeError(w, status, code, msg)
 			return
