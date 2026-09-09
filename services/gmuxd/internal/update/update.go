@@ -32,9 +32,16 @@ type Checker struct {
 // If current is a development version the checker does nothing: no goroutine,
 // no network.
 func New(current string) *Checker {
+	return newChecker(current, nil)
+}
+
+// newChecker is New with an injectable transport, so a test can observe
+// whether the checker went to the network at all — the property New's dev-build
+// branch exists for. A nil transport means http.DefaultTransport.
+func newChecker(current string, transport http.RoundTripper) *Checker {
 	c := &Checker{
 		current: current,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  &http.Client{Timeout: 10 * time.Second, Transport: transport},
 	}
 	if buildversion.IsDev(current) {
 		return c

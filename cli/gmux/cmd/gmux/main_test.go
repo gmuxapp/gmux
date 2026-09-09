@@ -303,4 +303,3 @@ func TestGmuxdNeedsStart_StampedDevNeverReplaces(t *testing.T) {
 		t.Error("a stamped dev build must not replace a healthy daemon")
 	}
 }
-

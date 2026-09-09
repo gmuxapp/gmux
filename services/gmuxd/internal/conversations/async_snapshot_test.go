@@ -30,10 +30,10 @@ type fakeConvAdapter struct {
 	describeGate    chan struct{}
 }
 
-func (f *fakeConvAdapter) Name() string                        { return f.name }
-func (f *fakeConvAdapter) Discover() bool                      { return true }
-func (f *fakeConvAdapter) Match([]string) bool                 { return false }
-func (f *fakeConvAdapter) Env(adapter.EnvContext) []string     { return nil }
+func (f *fakeConvAdapter) Name() string                    { return f.name }
+func (f *fakeConvAdapter) Discover() bool                  { return true }
+func (f *fakeConvAdapter) Match([]string) bool             { return false }
+func (f *fakeConvAdapter) Env(adapter.EnvContext) []string { return nil }
 func (f *fakeConvAdapter) SnapshotConversations(sink adapter.ConversationSink) {
 	if f.inFlight != nil {
 		n := f.inFlight.Add(1)

@@ -78,6 +78,77 @@ test.describe('terminal resize', () => {
     expect(await isPillVisible(page)).toBe(false)
   })
 
+  // The pill's tap handler (fitAndResize) has the same never-commit-a-refusal
+  // rule as the resize path, and it is the rule that keeps the pill itself on
+  // screen: the pill is gated on a non-null viewport, so committing a refused
+  // measurement would make the tap delete the only affordance that recovers
+  // the terminal.
+  test('a pill tap while the shell is collapsed is refused without losing the pill', async ({ page }) => {
+    const before = await getTermState(page)
+    expect(before.termRows!).toBeGreaterThan(4)
+
+    // Another client sizes the PTY away from this viewport, which is the only
+    // thing that raises the pill (the pill is derived purely from
+    // viewport-vs-PTY mismatch).
+    const sessionId = process.env.GMUX_TEST_SESSION_ID!
+    await page.evaluate(async (id) => {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = new WebSocket(`${proto}//${location.host}/ws/${id}?client=browser`)
+      ;(window as any).__secondClient = ws
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve()
+        ws.onerror = () => reject(new Error('second client failed to connect'))
+      })
+      ws.send(JSON.stringify({ type: 'resize', cols: 40, rows: 10 }))
+    }, sessionId)
+    try {
+      await pollUntil(async () => (await ptySize()).rows === 10 || null,
+        { timeoutMs: 5_000, description: 'the second client resized the PTY to 40x10' })
+      await pollUntil(async () => (await isPillVisible(page)) || null,
+        { timeoutMs: 5_000, description: 'pill appears once the PTY is sized elsewhere' })
+
+      // Collapse below one cell: every measurement is now a refusal.
+      await page.evaluate(() => {
+        (document.querySelector('.terminal-shell') as HTMLElement).style.flex = '0 0 8px'
+      })
+      await page.waitForTimeout(600)
+      expect(await isPillVisible(page), 'the collapse itself must not drop the pill').toBe(true)
+
+      // Tap the pill. A collapsed overlay is not actionable for
+      // locator.click() (zero height), but a real 0-height overlay still
+      // receives a dispatched click — which is exactly the tap a user lands
+      // mid-relayout on a phone.
+      const tapped = await page.evaluate(() => {
+        const el = document.querySelector('.terminal-resize-overlay') as HTMLElement | null
+        if (!el) return false
+        el.click()
+        return true
+      })
+      expect(tapped, 'pill element must exist to be tapped').toBe(true)
+      await page.waitForTimeout(600)
+
+      // The refusal must not have been committed: the pill is still there to
+      // be tapped again, and the PTY was not resized to a non-viable size.
+      expect(await isPillVisible(page), 'a refused tap must leave the pill tappable').toBe(true)
+      expect((await ptySize()).rows, 'a refused tap must not reach the PTY').toBe(10)
+
+      // And the affordance still works once layout recovers.
+      await page.evaluate(() => {
+        (document.querySelector('.terminal-shell') as HTMLElement).style.flex = '0 0 300px'
+      })
+      await page.waitForTimeout(600)
+      await page.evaluate(() => {
+        (document.querySelector('.terminal-resize-overlay') as HTMLElement | null)?.click()
+      })
+      await pollUntil(async () => (await isPillVisible(page)) ? null : true,
+        { timeoutMs: 5_000, description: 'a tap after recovery clears the pill' })
+      await pollUntil(async () => (await ptySize()).rows !== 10 || null,
+        { timeoutMs: 5_000, description: 'the recovered tap resized the PTY' })
+    } finally {
+      await page.evaluate(() => (window as any).__secondClient?.close())
+    }
+  })
+
   test('fresh connection claims at current viewport, ignoring server\'s prior PTY size', async ({ page }) => {
     // Shrink the viewport. Since this page is driving, the server's PTY
     // size follows us down to ~800x500.

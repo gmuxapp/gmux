@@ -11,7 +11,7 @@ import {
   navigateToSession, ownDotState, parseConnectURL, peerAppearance, peerOmittedTotal, peerStatusByName, peerStreamOmissions, peers,
   projects, promoteSession, promotionAnnouncements, promotionPending,
   PROMOTION_PENDING_TTL_MS, reconcilePromotionPending, removeSession, reorderSessions,
-  reparentSession, resumeSession, selectedFamilyChild, selectedId, sessions, sessionsLoaded,
+  reparentSession, restartSession, resumeSession, selectedFamilyChild, selectedId, sessions, sessionsLoaded,
   sessionStaleness, setAliveOnly, setFilterSelectors, setHostFilter, setNavigate,
   setSidebarMode, settlePromotion, sidebarActivity, sidebarMode, sidebarSessions, tabHref,
   toUISession, unreadCount, upsertSession, urlHash, urlPath, urlSearch, view, worldLoaded,
@@ -110,6 +110,35 @@ describe('postAction surfaces backend failures as error toasts', () => {
       kind: 'info',
       message: 'Rerunning in /home/user instead (/gone no longer exists)',
     })
+  })
+
+  it('tells the user when a restart was relocated to the fallback directory', async () => {
+    // /restart returns the same substitution payload as /resume, and a restart
+    // reruns the recorded command: the relocation is as user-visible here as
+    // it is for a rerun, so it cannot be dropped just because the button says
+    // "Restart".
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({
+        ok: true,
+        data: { pid: 9, session_id: 's1', original_cwd: '/gone', fallback_cwd: '/home/user' },
+      }),
+    }))
+    await restartSession('s1')
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({
+      kind: 'info',
+      message: 'Restarting in /home/user instead (/gone no longer exists)',
+    })
+  })
+
+  it('stays quiet when a restart happened where the session lived', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({ ok: true, data: { pid: 9, session_id: 's1' } }),
+    }))
+    await restartSession('s1')
+    expect(toasts.value).toHaveLength(0)
   })
 
   it('stays quiet when the relaunch happened where the session lived', async () => {

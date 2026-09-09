@@ -157,9 +157,9 @@ func resolveMainGitDir(gitdir string) string {
 	}
 
 	// Fallback: walk up assuming standard .git/worktrees/<name> layout.
-	parent := filepath.Dir(gitdir)           // .git/worktrees
+	parent := filepath.Dir(gitdir) // .git/worktrees
 	if filepath.Base(parent) == "worktrees" {
-		return filepath.Dir(parent)          // .git
+		return filepath.Dir(parent) // .git
 	}
 	return ""
 }

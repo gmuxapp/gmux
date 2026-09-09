@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
 # Build gmuxd and gmux release binaries.
-# Usage: ./scripts/build.sh [--skip-frontend]
+# Usage: ./scripts/build.sh [--skip-frontend] [--print-plan]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/bin"
 WEB_EMBED="$ROOT/services/gmuxd/cmd/gmuxd/web"
-
-# A toolchain directive is a preferred minimum under GOTOOLCHAIN=auto; a newer
-# ambient Go can still win. Builds must use the repository's exact toolchain.
-GO_TOOLCHAIN="$("$ROOT/scripts/go-toolchain.sh")"
-export GOTOOLCHAIN="$GO_TOOLCHAIN"
-if ! GO_VERSION="$(go version 2>&1)"; then
-  echo "error: required Go toolchain $GO_TOOLCHAIN is unavailable." >&2
-  echo "The go command could not find or download it:" >&2
-  echo "$GO_VERSION" >&2
-  exit 1
-fi
-echo "→ Using $GO_VERSION"
 
 # ── Version stamp ──
 #
@@ -41,10 +29,16 @@ dev_version() {
   # The `-e $ROOT/.git` test matters: inside a secondary jj workspace (a grove)
   # there is no .git of its own, and git would happily answer with the *parent*
   # repository's HEAD, which is a different tree.
+  #
+  # --no-optional-locks is what makes "read-only" true rather than nearly true:
+  # `git status` otherwise refreshes the stat cache, which *writes* .git/index
+  # and takes index.lock while doing it. A build must not touch the repository
+  # it is reading, and must not contend with an editor or a jj snapshot for the
+  # index lock.
   if [ -e "$ROOT/.git" ] && command -v git >/dev/null 2>&1 \
-    && hash="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null)" \
+    && hash="$(git --no-optional-locks -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null)" \
     && [ -n "$hash" ]; then
-    if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git --no-optional-locks -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
       echo "dev+$hash-dirty"
     else
       echo "dev+$hash"
@@ -66,24 +60,74 @@ dev_version() {
   echo "dev"
 }
 
+# Mirror of buildversion.IsDev (packages/buildversion): a build "came from a
+# working tree" iff it is "dev" or "dev+<hash>[-dirty]". The Go side is the
+# source of truth — anything that must not be mistaken for a release (the
+# update checker, the daemon replacement policy) asks it — and this shell copy
+# exists only so the build never hands a source binary a release identity.
+is_dev_version() {
+  case "$1" in
+    dev | dev+*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 skip_frontend=false
+print_plan=false
 for arg in "$@"; do
   case "$arg" in
     --skip-frontend) skip_frontend=true ;;
+    # Print the computed stamp and whether the frontend would be rebuilt, then
+    # exit without building anything. The seam scripts/build_test.sh drives.
+    --print-plan) print_plan=true ;;
   esac
 done
 
 # The stamp the currently embedded bundle was built with. A --skip-frontend
-# build must reuse it: the daemon serves that bundle, and version-watch turns
-# any bundle/daemon disagreement into a forced full page load on the next
-# in-app navigation (one lost SPA state per tab, per daemon-only rebuild).
+# build reuses it: the daemon serves that bundle, and version-watch turns any
+# bundle/daemon disagreement into a forced full page load on the next in-app
+# navigation (one lost SPA state per tab, per daemon-only rebuild).
+#
+# The reuse is *guarded*, because the cache is not always adoptable. A single
+# `VERSION=v9.9.9 ./scripts/build.sh` leaves a release string behind, and
+# reusing it would stamp every later daemon-only build v9.9.9: no longer
+# buildversion.IsDev, so the update checker goes online and the daemon/CLI
+# replacement policies treat a source binary as a release. So the stamp is
+# adopted only when it is a dev-class build; and when it disagrees with the
+# version this build stamps anyway, the frontend is rebuilt instead of leaving
+# bundle and daemon at different versions.
 EMBED_STAMP="$BIN/.web-version"
-if [ -z "${VERSION:-}" ] && [ "$skip_frontend" = true ] && [ -s "$EMBED_STAMP" ]; then
-  VERSION="$(cat "$EMBED_STAMP")"
+if [ "$skip_frontend" = true ] && [ -s "$EMBED_STAMP" ]; then
+  embedded_stamp="$(cat "$EMBED_STAMP")"
+  want_version="${VERSION:-$(dev_version)}"
+  if [ -z "${VERSION:-}" ] && is_dev_version "$embedded_stamp"; then
+    VERSION="$embedded_stamp"
+  elif [ "$embedded_stamp" != "$want_version" ]; then
+    echo "→ Embedded bundle is stamped $embedded_stamp, this build stamps $want_version: rebuilding the frontend"
+    skip_frontend=false
+  fi
 fi
 
 VERSION="${VERSION:-$(dev_version)}"
 export VERSION
+
+if [ "$print_plan" = true ]; then
+  echo "version=$VERSION"
+  echo "frontend=$([ "$skip_frontend" = true ] && echo skip || echo build)"
+  exit 0
+fi
+
+# A toolchain directive is a preferred minimum under GOTOOLCHAIN=auto; a newer
+# ambient Go can still win. Builds must use the repository's exact toolchain.
+GO_TOOLCHAIN="$("$ROOT/scripts/go-toolchain.sh")"
+export GOTOOLCHAIN="$GO_TOOLCHAIN"
+if ! GO_VERSION="$(go version 2>&1)"; then
+  echo "error: required Go toolchain $GO_TOOLCHAIN is unavailable." >&2
+  echo "The go command could not find or download it:" >&2
+  echo "$GO_VERSION" >&2
+  exit 1
+fi
+echo "→ Using $GO_VERSION"
 echo "→ Stamping version $VERSION"
 
 mkdir -p "$BIN"

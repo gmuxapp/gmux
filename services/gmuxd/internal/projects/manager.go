@@ -23,8 +23,8 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // auto-assignment of sessions to projects. All mutations go through
 // Manager to ensure atomic load+modify+save.
 type Manager struct {
-	mu             sync.Mutex
-	stateDir       string
+	mu       sync.Mutex
+	stateDir string
 
 	// Broadcast is called after every state mutation that should be
 	// synced to connected clients (via SSE). The caller receives the

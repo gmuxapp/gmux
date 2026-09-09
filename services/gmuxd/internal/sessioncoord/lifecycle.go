@@ -93,10 +93,16 @@ type RunnerSpawner interface {
 }
 
 // RunnerSpawnChecker is an optional extension implemented by spawners that can
-// answer "would you refuse this row?" without launching anything. Restart uses
-// it to refuse *before* stopping: restart is stop+spawn, so a row the spawner
-// would reject must never lose its running process to a doomed respawn.
-// Implementations must be pure and side-effect free.
+// answer "would the relaunch policy refuse this row?" without launching
+// anything. Restart uses it to refuse *before* stopping: restart is stop+spawn,
+// so a row rejected by the relaunch policy must never lose its running process
+// to a doomed respawn.
+//
+// The scope is the command predicate only — whether a command can be resolved
+// for this row — not everything Spawn does. Directory resolution, the socket
+// lease, exec and the readiness timeout still run after the stop and can still
+// fail there; the row then stays relaunchable, so the UI keeps offering
+// recovery. Implementations must be pure and side-effect free.
 type RunnerSpawnChecker interface {
 	CanSpawn(session centralstore.Session) error
 }

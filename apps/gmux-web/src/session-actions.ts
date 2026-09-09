@@ -59,16 +59,19 @@ export function relaunchVerb(
  * runs an arbitrary recorded command, so running it somewhere else is a fact
  * the user has to be told rather than a detail to drop.
  *
+ * `restart` is the same payload from /restart (stop+spawn of a live session),
+ * which substitutes directories by the same rule.
+ *
  * Returns null when nothing was substituted.
  */
 export function relaunchDirectoryNotice(
-  verb: RelaunchVerb,
+  verb: RelaunchVerb | 'restart',
   data: Record<string, unknown> | null | undefined,
 ): string | null {
   const fallback = data?.fallback_cwd
   const original = data?.original_cwd
   if (typeof fallback !== 'string' || !fallback) return null
-  const word = verb === 'resume' ? 'Resumed' : 'Rerunning'
+  const word = verb === 'resume' ? 'Resumed' : verb === 'restart' ? 'Restarting' : 'Rerunning'
   const from = typeof original === 'string' && original ? ` (${original} no longer exists)` : ''
   return `${word} in ${fallback} instead${from}`
 }
