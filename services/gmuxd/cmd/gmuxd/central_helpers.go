@@ -64,7 +64,7 @@ type sessionEncodeMemo struct {
 
 	mu           sync.Mutex
 	peerFiltered *wire.SessionsPayload
-	proto2       map[bool][]byte               // peer-filtered? -> marshaled payload
+	proto2       map[bool][]byte                // peer-filtered? -> marshaled payload
 	proto3       map[bool][]sessionstream.Event // peer-filtered? -> transaction events
 }
 
@@ -364,8 +364,8 @@ func centralSessionToLegacy(row centralstore.Session) compatSession {
 		Title:           row.Title,
 		Subtitle:        row.Subtitle,
 		Status:          status,
-		Unread:           row.Unread,
-		UnreadToken: row.UnreadToken,
+		Unread:          row.Unread,
+		UnreadToken:     row.UnreadToken,
 		TerminalCols:    uint16Value(row.TerminalCols),
 		TerminalRows:    uint16Value(row.TerminalRows),
 		Slug:            row.Slug,
@@ -397,8 +397,8 @@ func legacySessionFromWire(s wire.Session) compatSession {
 		Title:           s.Title,
 		Subtitle:        s.Subtitle,
 		Status:          status,
-		Unread:           s.Unread,
-		UnreadToken: s.UnreadToken,
+		Unread:          s.Unread,
+		UnreadToken:     s.UnreadToken,
 		Resumable:       s.Resumable,
 		SocketPath:      s.SocketPath,
 		TerminalCols:    s.TerminalCols,

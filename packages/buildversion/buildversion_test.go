@@ -28,11 +28,11 @@ func TestSameBuildClass(t *testing.T) {
 		want bool
 	}{
 		{"dev", "dev", true},
-		{"dev+aaaaaaaaaaaa", "dev+bbbbbbbbbbbb", true},   // rebuild, same class
-		{"dev", "dev+aaaaaaaaaaaa-dirty", true},          // stamped vs unstamped
+		{"dev+aaaaaaaaaaaa", "dev+bbbbbbbbbbbb", true}, // rebuild, same class
+		{"dev", "dev+aaaaaaaaaaaa-dirty", true},        // stamped vs unstamped
 		{"v2.1.1", "v2.1.1", true},
-		{"v2.1.1", "v2.1.0", false},                      // real upgrade
-		{"dev+aaaaaaaaaaaa", "v2.1.1", false},            // dev vs release
+		{"v2.1.1", "v2.1.0", false},           // real upgrade
+		{"dev+aaaaaaaaaaaa", "v2.1.1", false}, // dev vs release
 		{"v2.1.1", "dev", false},
 	} {
 		if got := SameBuildClass(tc.a, tc.b); got != tc.want {

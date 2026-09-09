@@ -1178,6 +1178,7 @@ func recKey(r *placementRec) string {
 	}
 	return "p:" + escape(r.peer) + ":" + escape(r.session)
 }
+
 // placementKeyIndex answers "is recKey k placed in project p" in O(1). Built
 // once per pass so desiredScope stays O(1) per record instead of scanning
 // every placement (O(P²) per rewrite once children exist).

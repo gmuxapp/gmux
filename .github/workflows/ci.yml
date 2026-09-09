@@ -44,6 +44,11 @@ jobs:
       - name: Verify build script version plan
         run: bash scripts/build_test.sh
 
+      # `go vet` (the per-module lint task) ignores formatting; this is the
+      # gate for it. Sub-second over the whole tree.
+      - name: Verify Go formatting
+        run: ./scripts/gofmt-check.sh
+
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: "22"

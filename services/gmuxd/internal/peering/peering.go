@@ -121,11 +121,11 @@ type SpokeDiscovered struct {
 
 // PeerInfo is the public status of a single peer connection.
 type PeerInfo struct {
-	Name            string        `json:"name"`
-	URL             string        `json:"url"`
-	Status          string        `json:"status"`
-	SessionCount    int           `json:"session_count"`
-	LastError       string        `json:"last_error,omitempty"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	Status       string `json:"status"`
+	SessionCount int    `json:"session_count"`
+	LastError    string `json:"last_error,omitempty"`
 	// SessionsOmitted is the number of session rows the peer's last committed
 	// protocol-3 transaction quarantined at the sender (e.g. row_too_large,
 	// transaction_limit). Non-zero means this peer's sessions in the merged
@@ -135,9 +135,9 @@ type PeerInfo struct {
 	// them.
 	SessionsOmitted      int            `json:"sessions_omitted,omitempty"`
 	SessionsOmittedCodes map[string]int `json:"sessions_omitted_codes,omitempty"`
-	Version         string        `json:"version,omitempty"`
-	DefaultLauncher string        `json:"default_launcher,omitempty"`
-	Launchers       []LauncherDef `json:"launchers,omitempty"`
+	Version              string         `json:"version,omitempty"`
+	DefaultLauncher      string         `json:"default_launcher,omitempty"`
+	Launchers            []LauncherDef  `json:"launchers,omitempty"`
 	// Local is true when this peer is conceptually an extension of
 	// the host (a devcontainer discovered by the Docker watcher,
 	// not a network peer). Local peers don't own their own project

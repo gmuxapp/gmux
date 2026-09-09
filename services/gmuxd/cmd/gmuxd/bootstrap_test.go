@@ -103,7 +103,7 @@ func TestBootstrapReconstructsActiveSubagentBudgetAfterConvergence(t *testing.T)
 	}
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{ID: child, Adapter: "pi", Alive: true, CreatedAt: 2, ObservedAt: 3, ParentSessionID: &root}, Incarnation: "restart-child"}
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{"child.sock": meta}, blocked: map[string]bool{}}
-	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1,
 		Store: store, Runners: runners, Converter: &wire.Converter{},
 		Endpoints:           EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{"child.sock"}, nil }),
 		MaxSubagentsByDepth: []int{1}, SemanticAgent: func(adapter string) bool { return adapter == "pi" },
@@ -142,7 +142,7 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	resolver := &bootstrapCountingResolver{}
 	durable := &bootstrapCountingDurable{Durable: store}
 	var reported atomic.Int64
-	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, 
+	boot, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1,
 		Store: store, Durable: durable, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
 		Resolver: resolver, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
 		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{endpoint}, nil }),
