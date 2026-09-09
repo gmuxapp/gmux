@@ -89,6 +89,10 @@ describe('relaunchDirectoryNotice', () => {
     })).toBe('Rerunning in /home/user instead (/gone/project no longer exists)')
     expect(relaunchDirectoryNotice('resume', { fallback_cwd: '/home/user' }))
       .toBe('Resumed in /home/user instead')
+    // /restart carries the same payload and also reruns a recorded command.
+    expect(relaunchDirectoryNotice('restart', {
+      original_cwd: '/gone/project', fallback_cwd: '/home/user',
+    })).toBe('Restarting in /home/user instead (/gone/project no longer exists)')
   })
 })
 

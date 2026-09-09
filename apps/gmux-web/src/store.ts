@@ -2125,8 +2125,20 @@ export function resumeSession(sessionId: string, verb: 'resume' | 'rerun' = 'res
   })
 }
 
+/** Restart a live session: stop it and relaunch it in place.
+ *
+ * Reports a substituted directory for the same reason resumeSession does —
+ * /restart returns the same `original_cwd`/`fallback_cwd` payload, and a
+ * restart whose recorded directory is gone reruns the recorded command
+ * somewhere else. Silence there would be a restart that quietly changed where
+ * the session lives. */
 export function restartSession(sessionId: string): Promise<boolean> {
-  return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart')
+  return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart', {
+    onData: data => {
+      const notice = relaunchDirectoryNotice('restart', data)
+      if (notice) pushToast('info', notice)
+    },
+  })
 }
 
 // Family mutations change the single parent edge. Deliberately no optimistic
