@@ -94,7 +94,13 @@ describe('watchDayBoundary across a DST transition', () => {
   const savedTZ = process.env.TZ
 
   beforeEach(() => { process.env.TZ = 'America/New_York' })
-  afterEach(() => { process.env.TZ = savedTZ })
+  // Assigning an undefined savedTZ back would store the *string* "undefined",
+  // which Node resolves to UTC — and vitest reuses worker processes across
+  // files, so that would silently move any later TZ-sensitive test to UTC.
+  afterEach(() => {
+    if (savedTZ === undefined) delete process.env.TZ
+    else process.env.TZ = savedTZ
+  })
 
   it('arms 23 hours for the short day, not 24', () => {
     // Sat 2026-03-07 22:00 EST. If the process did not pick the zone up, this
