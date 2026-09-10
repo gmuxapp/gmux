@@ -258,6 +258,15 @@ type Coordinator struct {
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}
 	convergeClosed     bool
+	// convergeAbandonedIDs collects candidates the startup pass gave up on
+	// transiently (see NoteAbandonedRecovery). It is consumed and discarded by
+	// FinishConvergence, which freezes convergeUnresolved from it.
+	convergeAbandonedIDs map[centralstore.SessionID]struct{}
+	// convergeUnresolved is the frozen degraded set: candidates swept dead
+	// with no answer. Decided once at window close, only ever shrunk by
+	// recoveryInstalledLocked, so readiness is monotone. It distinguishes a
+	// closed window's ready from degraded; no lifecycle decision reads it.
+	convergeUnresolved map[centralstore.SessionID]struct{}
 	converged          chan struct{}
 
 	closing bool
@@ -314,6 +323,40 @@ func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtyS
 	return c
 }
 func (c *Coordinator) Registry() *Registry { return c.registry }
+
+// lineageWarmBudget caps the takeover lineage warm inside ONE registration.
+//
+// It bounds a real O(registrations × same-adapter refs) hazard: the warm set
+// is every same-adapter conversation ref in the durable store (dead rows
+// included, see takeoverRefs), one describe per ref is adapter I/O that reads
+// and parses a whole conversation transcript, and the startup converge pass
+// registers every surviving runner concurrently. On a long-lived install
+// (1600 refs / hundreds of MB of transcripts) one full warm costs seconds, so
+// without this cap every registration in the pass burned its entire runner
+// budget warming instead of installing, the pass abandoned every runner, and
+// recovery slipped to the next 30s discovery tick.
+//
+// Exceeding it is a legal degradation, identical to the failed-list-read path
+// below, and it is safe in one direction only because covers() is monotone in
+// cache content: it returns true on ref equality (cache-independent) or when
+// BOTH lineage entries are present, and entries are written only after a
+// complete describe. A partial cache is therefore a subset of the full
+// cache's coverage — strictly fewer takeover decisions, never a different
+// one. Registration liveness, the thing restart recovery depends on, must
+// never wait on takeover bookkeeping.
+//
+// Two consequences, both self-healing on the next reconcile pass, worth being
+// precise about:
+//
+//   - takeoverEvictions: a dead row the winner covers is not evicted yet.
+//   - coveredByLive: a fast-dead registration whose conversation IS covered by
+//     a live session is no longer skipped, so a phantom dead row is durably
+//     WRITTEN (not merely a cleanup deferred) until reconcile removes it.
+//
+// On a large install truncation is the normal case, so takeover completeness
+// leans on the periodic reconcile pass; that is why its warm shares this
+// budget and why the cache is process-lifetime and only grows.
+const lineageWarmBudget = 1500 * time.Millisecond
 
 // Register performs subscribe-first convergence. Runner I/O (Subscribe and
 // Meta) is performed outside the lifecycle mutex so a slow or hung runner
@@ -518,7 +561,9 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 			if meta.Registration.Facts.ConversationRef != nil {
 				metaRef = *meta.Registration.Facts.ConversationRef
 			}
-			c.lineage.warm(ctx, c.resolver, meta.Registration.Adapter, takeoverRefs(list, meta.Registration.Adapter, metaRef))
+			warmCtx, warmCancel := context.WithTimeout(ctx, lineageWarmBudget)
+			c.lineage.warm(warmCtx, c.resolver, meta.Registration.Adapter, takeoverRefs(list, meta.Registration.Adapter, metaRef))
+			warmCancel()
 		}
 	}
 
@@ -785,6 +830,9 @@ loop:
 		installMu.Unlock()
 		replacedEntry, replaced := c.registry.install(registryEntry{Runtime: runtime, cancel: streamCancel, stream: stream, dead: make(chan struct{})})
 		streamInstalled = true
+		// A recovery candidate the startup pass had abandoned just came back:
+		// promote it out of the degraded set, permanently (see RecoveryState).
+		c.recoveryInstalledLocked(id)
 		if replaced {
 			closeEntry(replacedEntry)
 		}

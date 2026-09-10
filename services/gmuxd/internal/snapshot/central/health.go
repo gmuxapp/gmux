@@ -38,6 +38,31 @@ type HealthInfo struct {
 	// SessionRecovery makes a daemon replacement's bounded runner convergence
 	// visible. Optional preserves the additive health covenant for producers
 	// that do not have a local lifecycle coordinator (fixtures and peers).
+	//
+	// Status is monotone: recovering → (degraded →) ready.
+	//
+	//	recovering — the convergence window is open; expected/recovered show
+	//	             progress. Bounded by the one-shot convergence close.
+	//	degraded   — recovery FINISHED but is not complete: the startup pass
+	//	             swept sessions dead that it had abandoned transiently (it
+	//	             never got an answer about them). Terminal and unhealthy —
+	//	             an install gate or probe should fail or alert on it, not
+	//	             wait. Only one thing promotes it to ready: the abandoned
+	//	             runner registering ALIVE again (via the periodic discovery
+	//	             pass). A runner that answers dead, or never answers again,
+	//	             leaves the daemon degraded until restart.
+	//	ready      — recovery is complete or definitively finished: every
+	//	             expected runner is installed, or nothing was expected
+	//	             (a daemon with no previously-alive rows reports ready 0/0
+	//	             immediately and never advertises a recovery phase), or
+	//	             every candidate was resolved — recovered, or provably gone.
+	//
+	// The status is decided at the convergence close and only ever promoted;
+	// Expected and Recovered are LIVE counts and therefore informational. An
+	// ordinary session exit lowers Recovered long after recovery finished and
+	// must not change the status — which is why consumers gate on the status,
+	// not on the counts, and why a short count under ready never means "the
+	// sessions are gone".
 	SessionRecovery *SessionRecovery `json:"session_recovery,omitempty"`
 	// RunnerHash is the sha256 of the gmux runner binary on disk.
 	RunnerHash      string                `json:"runner_hash,omitempty"`

@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/paths"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
@@ -334,6 +337,22 @@ func (b *Bootstrap) convergeOpen(ctx context.Context) ([]string, error) {
 	defer cancel()
 	var wg sync.WaitGroup
 	var transportViolatedDeadline atomic.Bool
+	// abandoned collects the sessions this pass asked about and never got an
+	// answer for. It is what separates a closed window's "recovery finished"
+	// from "recovery complete": those runners may well still be alive and get
+	// picked up by the next discovery pass, so readiness must report degraded
+	// rather than an authoritative-looking ready with a short count.
+	//
+	// Membership is deliberately narrow (see abandonedRecoveryCandidate): only
+	// a genuinely transient, retryable non-answer counts. A provably absent
+	// runner, a permanent protocol verdict and a daemon-side bug (a store
+	// error, a logic error) are all resolutions, not abandonment — the first
+	// is honest deadness and the others would make an unrelated defect read as
+	// "your sessions might still be there".
+	var (
+		abandonedMu sync.Mutex
+		abandoned   []centralstore.SessionID
+	)
 	for _, ep := range endpoints {
 		ep := ep
 		wg.Add(1)
@@ -359,6 +378,17 @@ func (b *Bootstrap) convergeOpen(ctx context.Context) ([]string, error) {
 				if errors.Is(e, sessioncoord.ErrInvalidSessionID) || errors.Is(e, sessioncoord.ErrResumeIdentityMismatch) || errors.Is(e, sessioncoord.ErrReplaceWithoutClaim) {
 					class = "permanent"
 				}
+				// Deliberately keyed on the error, not on `class`: the
+				// classification above is a log label whose "unreachable"
+				// bucket is a catch-all (it holds store errors and logic
+				// errors too), while readiness needs the strictly narrower
+				// question below. A permanent verdict can never satisfy it,
+				// so the label is not consulted here.
+				if id, ok := abandonedRecoveryCandidate(ep, e); ok {
+					abandonedMu.Lock()
+					abandoned = append(abandoned, id)
+					abandonedMu.Unlock()
+				}
 				e = fmt.Errorf("(%s): %w", class, e)
 			}
 			b.classifyRegister(context.WithoutCancel(ctx), "bootstrap converge", ep, ident, rt, e)
@@ -377,6 +407,13 @@ func (b *Bootstrap) convergeOpen(ctx context.Context) ([]string, error) {
 	if transportViolatedDeadline.Load() {
 		return nil, errors.New("bootstrap: runner transport ignored cancellation; readiness withheld")
 	}
+	// Recorded before the window closes: the close is what freezes readiness,
+	// and it must never freeze as ready while this pass swept a session dead
+	// it never got an answer about.
+	abandonedMu.Lock()
+	notes := append([]centralstore.SessionID(nil), abandoned...)
+	abandonedMu.Unlock()
+	b.Coordinator.NoteAbandonedRecovery(notes...)
 	for {
 		_, err = b.Coordinator.FinishConvergence(ctx, b.cfg.Clock())
 		if err == nil {
@@ -394,6 +431,37 @@ func (b *Bootstrap) convergeOpen(ctx context.Context) ([]string, error) {
 		}
 		retry = min(retry*2, retryMax)
 	}
+}
+
+// abandonedRecoveryCandidate decides whether one failed converge registration
+// is a transient, retryable non-answer about a specific recovery candidate,
+// and therefore whether it must withhold `ready`.
+//
+// Two narrow conditions, both required:
+//
+//  1. The failure is a deadline or cancellation. That is precisely "I asked
+//     and never got an answer inside the budget", the case where the runner
+//     is probably still alive. Everything else is a resolution: ECONNREFUSED
+//     and ENOENT mean nothing is listening (honest deadness, the row is
+//     rightly swept), a permanent protocol verdict is a verdict, and a store
+//     or logic error is a daemon-side defect that must surface as an error in
+//     the log rather than as "your sessions might still be there".
+//  2. The endpoint names a plausible session id. The socket pathname is a
+//     hint, never identity (a pathname can change hands, which is why
+//     registration re-checks physical socket identity) — but it is the only
+//     attribution available for a probe that timed out before /meta, and it
+//     is enough for a diagnostic: the coordinator ignores ids that are not
+//     recovery candidates, so a stale socket belonging to no candidate can no
+//     longer make an unrelated shortfall look like abandonment.
+func abandonedRecoveryCandidate(endpoint string, err error) (centralstore.SessionID, bool) {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return "", false
+	}
+	id := strings.TrimSuffix(filepath.Base(endpoint), ".sock")
+	if !paths.IsValidSessionID(id) {
+		return "", false
+	}
+	return centralstore.SessionID(id), true
 }
 
 // StartPostConvergence repairs runtime state before publishing the first

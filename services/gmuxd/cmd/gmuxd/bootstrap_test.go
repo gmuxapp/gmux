@@ -32,9 +32,12 @@ func (s *bootstrapStream) Close() error                            { return nil 
 func (s *bootstrapStream) Incarnation() string { return s.incarnation }
 
 type bootstrapRunners struct {
-	mu             sync.Mutex
-	metas          map[string]sessioncoord.RunnerMeta
-	blocked        map[string]bool
+	mu      sync.Mutex
+	metas   map[string]sessioncoord.RunnerMeta
+	blocked map[string]bool
+	// metaErr makes every Meta fail with a non-transport error (a daemon-side
+	// defect), which must not read as recovery uncertainty.
+	metaErr        error
 	subscribeCalls atomic.Int64
 	metaCalls      atomic.Int64
 }
@@ -52,6 +55,9 @@ func (r *bootstrapRunners) Meta(ctx context.Context, ep string) (sessioncoord.Ru
 	if r.blocked[ep] {
 		<-ctx.Done()
 		return sessioncoord.RunnerMeta{}, ctx.Err()
+	}
+	if r.metaErr != nil {
+		return sessioncoord.RunnerMeta{}, r.metaErr
 	}
 	m, ok := r.metas[ep]
 	if !ok {
@@ -272,6 +278,11 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 	default:
 		t.Fatal("readiness barrier withheld after durable finish")
 	}
+	// A fresh daemon has no recovery candidates, so abandoning the "slow"
+	// endpoint probe must not make it advertise a recovery phase (#521).
+	if got := b.Coordinator.RecoveryState(); got.Status != "ready" || got.Expected != 0 || got.Recovered != 0 {
+		t.Fatalf("fresh daemon recovery state = %+v, want ready 0/0", got)
+	}
 	if err := b.StartPostConvergence(ctx, []string{"good"}); err != nil {
 		t.Fatal(err)
 	}
@@ -310,4 +321,113 @@ func containsString(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestBootstrapConvergeReportsDegradedForAbandonedCandidates wires the pass's
+// own classification into readiness: a candidate whose runner did not answer
+// inside the budget is abandoned, not resolved, so the closed window must
+// report degraded rather than an authoritative ready with a short count.
+func TestBootstrapConvergeReportsDegradedForAbandonedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := centralstore.UnixMillis(1000)
+	for _, id := range []centralstore.SessionID{"1g8schlb", "1ve25bnc"} {
+		if _, _, err := store.InsertSession(ctx, centralstore.NewSession{ID: id, Adapter: "shell", Command: []string{"sh"}, Remotes: map[string]string{}, CreatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	good, hung := "/run/sessions/1g8schlb.sock", "/run/sessions/1ve25bnc.sock"
+	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{
+		good: {Registration: centralstore.RunnerRegistration{ID: "1g8schlb", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}},
+	}, blocked: map[string]bool{hung: true}}
+	b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{good, hung}, nil }), Clock: func() centralstore.UnixMillis { return now }, RunnerBudget: 100 * time.Millisecond, ConvergeDeadline: 2 * time.Second, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Converge(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Coordinator.RecoveryState(); got.Status != "degraded" || got.Expected != 2 || got.Recovered != 1 {
+		t.Fatalf("recovery state after abandoning one runner = %+v, want degraded 1/2", got)
+	}
+	// The runner answers on the next discovery pass: degraded promotes to
+	// ready, once, without ever returning to recovering.
+	runners.mu.Lock()
+	runners.blocked = map[string]bool{}
+	runners.metas[hung] = sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{ID: "1ve25bnc", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}}
+	runners.mu.Unlock()
+	if err := b.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Coordinator.RecoveryState(); got.Status != "ready" || got.Recovered != 2 {
+		t.Fatalf("recovery state after periodic recovery = %+v, want ready 2/2", got)
+	}
+}
+
+// TestBootstrapConvergeResolvedFailuresDoNotDegradeReadiness pins the
+// distinction the whole degraded state rests on: only a transient non-answer
+// withholds ready. A runner that is provably gone, a permanent protocol
+// verdict and a daemon-side error are all RESOLUTIONS of a candidate — the
+// row is rightly swept and the daemon is honestly ready, not "maybe your
+// sessions are still there". Without this, counting every non-permanent
+// failure (or every failure at all) as abandonment passed the whole suite.
+func TestBootstrapConvergeResolvedFailuresDoNotDegradeReadiness(t *testing.T) {
+	now := centralstore.UnixMillis(1000)
+	cases := []struct {
+		name string
+		meta sessioncoord.RunnerMeta
+		err  error
+	}{
+		{
+			// Permanent protocol verdict: the runner answered with an
+			// unusable identity. Nothing to wait for.
+			name: "permanent",
+			meta: sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{ID: "not a session id", Adapter: "shell", Alive: true, CreatedAt: now, ObservedAt: now}},
+		},
+		{
+			// A daemon-side defect, exactly as seen in a production log
+			// ("sql: transaction has already been committed"). It must surface
+			// as an error, not as recovery uncertainty.
+			name: "store error",
+			err:  errors.New("sql: transaction has already been committed or rolled back"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			store, err := centralstore.Open(ctx, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if _, _, err := store.InsertSession(ctx, centralstore.NewSession{ID: "1ve25bnc", Adapter: "shell", Command: []string{"sh"}, Remotes: map[string]string{}, CreatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			ep := "/run/sessions/1ve25bnc.sock"
+			runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}, metaErr: tc.err}
+			if tc.err == nil {
+				runners.metas[ep] = tc.meta
+			}
+			b, err := newBootstrap(BootstrapConfig{ComposeMinInterval: -1, Store: store, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{}, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{}, Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{ep}, nil }), Clock: func() centralstore.UnixMillis { return now }, RunnerBudget: 100 * time.Millisecond, ConvergeDeadline: 2 * time.Second, RetryInitial: time.Millisecond, RetryMaximum: 2 * time.Millisecond})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Converge(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := b.Coordinator.RecoveryState(); got.Status != "ready" || got.Expected != 1 || got.Recovered != 0 {
+				t.Fatalf("recovery state after a resolved (%s) candidate = %+v, want ready 0/1", tc.name, got)
+			}
+			row, ok, err := store.Session(ctx, "1ve25bnc")
+			if err != nil || !ok || row.ExitedAt == nil {
+				t.Fatalf("resolved candidate was not swept: row=%+v ok=%v err=%v", row, ok, err)
+			}
+		})
+	}
 }
