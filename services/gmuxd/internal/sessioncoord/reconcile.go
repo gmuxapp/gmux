@@ -228,7 +228,16 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	for _, adapter := range adapters {
 		group := byAdapter[adapter]
 		if c.takeover {
-			c.lineage.warm(ctx, c.resolver, adapter, takeoverRefs(sessions, adapter))
+			// Bounded for the same reason registration's warm is (see
+			// lineageWarmBudget): this pass runs on the startup path before the
+			// remote listeners bind and on every periodic tick, and the ref
+			// universe is O(conversation history). The cache persists across
+			// passes and only grows, so successive passes complete the universe
+			// progressively; a truncated pass defers evictions, it never makes a
+			// wrong one.
+			warmCtx, warmCancel := context.WithTimeout(ctx, lineageWarmBudget)
+			c.lineage.warm(warmCtx, c.resolver, adapter, takeoverRefs(sessions, adapter))
+			warmCancel()
 		}
 		for start := 0; start < len(group); start += c.reconcileBatch {
 			end := min(start+c.reconcileBatch, len(group))

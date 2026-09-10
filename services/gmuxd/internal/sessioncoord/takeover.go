@@ -59,9 +59,18 @@ type lineageEntry struct {
 // lineageCache is the coordinator's runtime-only (adapter, ref) → lineage
 // map. It has its own lock because warming performs adapter I/O and must
 // never hold the lifecycle mutex.
+//
+// inflight is the single-flight claim set: exactly one warm describes a given
+// (adapter, ref) at a time and every other warm waits for that result instead
+// of repeating the adapter I/O. Registrations are concurrent by design (the
+// startup converge pass fires one per surviving runner at once) and they all
+// warm the SAME same-adapter ref universe, so without this the work is
+// O(runners × refs) identical describes — the hazard lineageWarmBudget bounds
+// in time and this bounds in duplication.
 type lineageCache struct {
-	mu      sync.Mutex
-	entries map[string]lineageEntry
+	mu       sync.Mutex
+	entries  map[string]lineageEntry
+	inflight map[string]chan struct{}
 }
 
 func lineageKey(adapter, ref string) string { return adapter + "\x00" + ref }
@@ -73,32 +82,96 @@ func (l *lineageCache) get(adapter, ref string) (lineageEntry, bool) {
 	return e, ok
 }
 
+// claim is the single-flight gate for one key. It returns either a done
+// channel the caller must publish through (it owns the describe), or a wait
+// channel that closes when the current owner is finished.
+func (l *lineageCache) claim(key string) (own, wait chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if waiting, ok := l.inflight[key]; ok {
+		return nil, waiting
+	}
+	if l.inflight == nil {
+		l.inflight = make(map[string]chan struct{})
+	}
+	own = make(chan struct{})
+	l.inflight[key] = own
+	return own, nil
+}
+
+// release ends the claim whether or not the describe succeeded. A failure is
+// deliberately not cached (see lineageEntry), so a waiter released by a failed
+// describe simply finds no entry and moves on; the next warm retries.
+//
+// It is always deferred at the claim site: the resolver reads and parses
+// arbitrary on-disk transcripts, and a panic there must not leave the claim
+// held. A retained claim whose channel never closes is worse than a slow
+// describe — it would block every later warm for that key until each caller's
+// deadline (and the reconcile warm, which runs under the daemon context, would
+// block forever).
+func (l *lineageCache) release(key string, own chan struct{}) {
+	l.mu.Lock()
+	if l.inflight[key] == own {
+		delete(l.inflight, key)
+	}
+	l.mu.Unlock()
+	close(own)
+}
+
 // warm describes every not-yet-cached ref through the resolver. I/O; must be
 // called without any coordinator lock. A nil resolver caches the empty
 // lineage (nothing to learn later — ref equality still applies).
+//
+// Two properties make it safe to call from N concurrent registrations: each
+// (adapter, ref) is described at most once at a time (single-flight), and
+// every wait for another warm's describe is bounded by ctx — a hung resolver
+// delays only its own key's waiters until the caller's deadline, never the
+// whole pass, and never permanently.
 func (l *lineageCache) warm(ctx context.Context, resolver ConversationResolver, adapter string, refs []string) {
 	for _, ref := range refs {
 		if ref == "" {
 			continue
 		}
+		if ctx.Err() != nil {
+			return // budget spent: the rest stays uncached and is retried later
+		}
 		if _, ok := l.get(adapter, ref); ok {
 			continue
 		}
-		entry := lineageEntry{}
-		if resolver != nil {
-			info, err := resolver.DescribeConversation(ctx, adapter, ref)
-			if err != nil {
-				continue // not cached: retried on the next warm
+		key := lineageKey(adapter, ref)
+		own, wait := l.claim(key)
+		if own == nil {
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return
 			}
-			entry = lineageEntry{id: info.ID, ancestors: info.AncestorIDs}
+			continue
 		}
-		l.mu.Lock()
-		if l.entries == nil {
-			l.entries = make(map[string]lineageEntry)
-		}
-		l.entries[lineageKey(adapter, ref)] = entry
-		l.mu.Unlock()
+		l.describeOwned(ctx, resolver, adapter, ref, key, own)
 	}
+}
+
+// describeOwned performs one owned describe and publishes its result. It is a
+// separate function so release can be deferred: the entry is always published
+// BEFORE the claim is released, so a waiter that wakes finds the cached
+// lineage rather than racing the publish.
+func (l *lineageCache) describeOwned(ctx context.Context, resolver ConversationResolver, adapter, ref, key string, own chan struct{}) {
+	defer l.release(key, own)
+	entry := lineageEntry{}
+	if resolver != nil {
+		info, err := resolver.DescribeConversation(ctx, adapter, ref)
+		if err != nil {
+			return // not cached: retried on the next warm
+		}
+		entry = lineageEntry{id: info.ID, ancestors: info.AncestorIDs}
+	}
+	l.mu.Lock()
+	if l.entries == nil {
+		l.entries = make(map[string]lineageEntry)
+	}
+	l.entries[lineageKey(adapter, ref)] = entry
+	l.mu.Unlock()
 }
 
 // covers reports whether the owner's bound conversation is, or descends
