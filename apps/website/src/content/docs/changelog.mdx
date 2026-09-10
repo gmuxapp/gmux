@@ -38,6 +38,53 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.1 - 2026-09-10
+
+### Highlights
+
+v2.1.1 is a patch release: no new features, no schema or protocol changes. It fixes two user-reported defects, hardens the web app's reconnection path, and closes a set of small residuals found in review of 2.1.0.
+
+**Reconnection that self-heals**
+Browsers permanently close an `EventSource` after a fatal response, and the web app used to sit on "reconnecting" until you reloaded the page. The session stream is now supervised: failed transports are replaced with jittered backoff and a bounded retry window, a manual **Retry** is offered when that window is exhausted, and returning to the tab (or coming back online) revalidates the stream with no tap required. A stalled stream that reports itself as open is caught the same way. Revalidation is coalesced and skipped while the tab is hidden, so switching apps on a phone does not re-download the session snapshot ([#522](https://github.com/gmuxapp/gmux/pull/522), [#527](https://github.com/gmuxapp/gmux/pull/527)).
+
+**Peer sessions are first-class in families**
+"Promote to root" and same-host reparenting now work for sessions that live on a peered daemon, from both the web UI and the CLI. The action is forwarded to the owning daemon under that peer's own credentials; moving a session between hosts is still refused, now with an explicit `cross_peer` error instead of an incidental 404 ([#525](https://github.com/gmuxapp/gmux/pull/525)).
+
+**Rerun means rerun**
+Dead shell sessions were offered a "Resume" that the daemon then refused, because shells have no conversation to resume. The sidebar and the daemon now share one relaunch policy, carried on the wire as an additive `relaunch: "resume" | "rerun"` field computed by the owning daemon: sessions with a resumable conversation resume; sessions with only a recorded command rerun it in the recorded directory. Restarting a live shell no longer stops it only to refuse the respawn ([#526](https://github.com/gmuxapp/gmux/pull/526)).
+
+### Upgrade notes
+
+- No migrations. Downgrading to 2.1.0 is safe.
+- Source builds now compile with Go 1.27 as well as the pinned 1.26.1 release toolchain; direct `go build` / `go test` work without `GOTOOLCHAIN` ([#523](https://github.com/gmuxapp/gmux/pull/523)).
+- Source installs report a diagnostic version such as `dev+<hash>`, `dev+<hash>-dirty`, or `dev+<hash>~`, instead of a bare `dev`. All dev-class builds are treated alike by the daemon replacement policy and the update checker: a fresh source build does not replace a running dev daemon unless you pass `--replace` ([#528](https://github.com/gmuxapp/gmux/pull/528), [#530](https://github.com/gmuxapp/gmux/pull/530)).
+- Older peers that do not send `relaunch` fall back to the previous adapter-based behavior until they are upgraded.
+
+### Behavior changes
+
+- Rerunning a session whose recorded directory no longer exists falls back to your home directory and says so in the toast, rather than silently ([#526](https://github.com/gmuxapp/gmux/pull/526)).
+- The terminal no longer sends a resize while its container is smaller than one cell (for example, during the mobile keyboard animation), so programs are not reflowed to a single row; a refused measurement is never committed as the viewport, so the terminal follows the next viable size instead of stalling behind the "Sized for another device" pill ([#527](https://github.com/gmuxapp/gmux/pull/527)).
+- Sidebar day groupings ("Today", "Yesterday") roll over at local midnight without waiting for another update ([#527](https://github.com/gmuxapp/gmux/pull/527)).
+
+### Improvements
+
+- The asynchronous conversation index no longer retains a guard entry per removed conversation for the daemon's lifetime ([#528](https://github.com/gmuxapp/gmux/pull/528)).
+- ADR 0034 (model resolution) is marked as accepted design that is not implemented; contributor docs describe the actual toolchain, health fields, and reconnection behavior ([#529](https://github.com/gmuxapp/gmux/pull/529)).
+- E2E suite: a split-echo race in the claim-retry spec is fixed at the assertion, and teardown no longer leaks runner processes; a `gofmt` check joins the CI checks job ([#529](https://github.com/gmuxapp/gmux/pull/529), [#530](https://github.com/gmuxapp/gmux/pull/530)).
+
+### Fixes
+- **(build)** support direct Go 1.27 invocations ([#523](https://github.com/gmuxapp/gmux/pull/523))
+- **(web)** recover SSE after fatal transport failures ([#522](https://github.com/gmuxapp/gmux/pull/522))
+- **(peering)** promote and same-peer reparent for peer sessions ([#525](https://github.com/gmuxapp/gmux/pull/525))
+- **(web)** patch-release polish — resize refusal, day labels, wake retry, dep trim ([#527](https://github.com/gmuxapp/gmux/pull/527))
+- **(gmuxd,build)** patch-release polish — bounded scan guard, diagnostic dev version ([#528](https://github.com/gmuxapp/gmux/pull/528))
+- rerun dead shell sessions instead of refusing the relaunch the UI offered ([#526](https://github.com/gmuxapp/gmux/pull/526))
+- **(daemon)** recover surviving runners on the first pass after a restart, and stop reporting an abandoned pass as ready ([#531](https://github.com/gmuxapp/gmux/pull/531))
+
+### Docs
+- correct 2.1 docs against shipped behavior; fix two e2e defects ([#529](https://github.com/gmuxapp/gmux/pull/529))
+
+---
 ## v2.1.0 - 2026-09-01
 
 ### Highlights
