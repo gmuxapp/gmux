@@ -114,6 +114,10 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `scrollback_cache_mb` | `number` | `256` | Aggregate cache target for dead-session scrollback. `0` disables the limit. |
+| `auto_dismiss_days` | `number` | `0` | **Experimental.** Automatically dismiss this host's own dead, read sessions that have been idle for more than this many days. Dismissal is hidden-not-forgotten (ADR 0026): the row, its conversation, provenance and scrollback stay in `state.db`, resume still works, and re-registration makes it visible again. Never touches a running session, a session whose runner state is still being recovered, or a family with a visible descendant. `0` (default) disables the sweep. Runs after startup and every 6 hours. |
+| `auto_dismiss_unread` | `boolean` | `false` | **Experimental.** Let `auto_dismiss_days` also hide sessions that still carry the unread marker. |
+
+`retention_days` and `retention_max` are accepted for compatibility but currently have no effect.
 
 Session values must be non-negative.
 

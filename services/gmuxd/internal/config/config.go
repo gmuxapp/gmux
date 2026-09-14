@@ -86,10 +86,25 @@ type DiscoveryConfig struct {
 }
 
 // SessionsConfig controls retention of dead sessions and their scrollback cache.
+//
+// retention_days / retention_max are the ADR 0016 whole-dir deletion caps
+// for conversation-less corpses. They are parsed and validated but INERT
+// since ADR 0026: their only consumer (sessionmeta.Store.Sweep) has no
+// caller. They are kept so existing host.toml files keep loading (strict
+// validation), and left with their original meaning rather than silently
+// repurposed.
+//
+// auto_dismiss_days / auto_dismiss_unread are the replacement (spike, R2):
+// a daemon-side sweep that DISMISSES (ADR 0026 §6: hidden, not forgotten)
+// this host's own dead, read rows idle for longer than auto_dismiss_days.
+// Zero (the default) disables the sweep. auto_dismiss_unread extends it to
+// rows still carrying the unread marker; off by default.
 type SessionsConfig struct {
-	RetentionDays     int `toml:"retention_days"`
-	RetentionMax      int `toml:"retention_max"`
-	ScrollbackCacheMB int `toml:"scrollback_cache_mb"`
+	RetentionDays     int  `toml:"retention_days"`
+	RetentionMax      int  `toml:"retention_max"`
+	ScrollbackCacheMB int  `toml:"scrollback_cache_mb"`
+	AutoDismissDays   int  `toml:"auto_dismiss_days"`
+	AutoDismissUnread bool `toml:"auto_dismiss_unread"`
 }
 
 // AgentConfig is the semantic-agent subsystem: what `gmux agent …` and the web
@@ -285,6 +300,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Sessions.RetentionMax < 0 {
 		return fmt.Errorf("sessions.retention_max must be non-negative")
+	}
+	if cfg.Sessions.AutoDismissDays < 0 || int64(cfg.Sessions.AutoDismissDays) > maxRetentionDays {
+		return fmt.Errorf("sessions.auto_dismiss_days must be between 0 and %d", maxRetentionDays)
 	}
 	maxScrollbackCacheMB := effectiveIntMax(int64(math.MaxInt64 >> 20))
 	if cfg.Sessions.ScrollbackCacheMB < 0 || int64(cfg.Sessions.ScrollbackCacheMB) > maxScrollbackCacheMB {

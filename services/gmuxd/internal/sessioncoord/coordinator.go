@@ -104,6 +104,9 @@ type Durable interface {
 	// DismissSessionTree and RemoveSessionAtVersion back the dismissal and
 	// hard-deletion coordinator operations (see dismiss.go).
 	DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error)
+	// DismissSessions backs the retention auto-dismiss sweep (see
+	// autodismiss.go): an explicit, already-closed candidate set.
+	DismissSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error)
 	RemoveSessionAtVersion(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
 }
 
