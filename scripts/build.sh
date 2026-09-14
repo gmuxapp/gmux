@@ -141,6 +141,11 @@ if [ "$skip_frontend" = false ]; then
   # Copy dist into the go:embed directory
   rm -rf "$WEB_EMBED/assets" "$WEB_EMBED/favicon.svg" "$WEB_EMBED/manifest.json"
   cp -r "$ROOT/apps/gmux-web/dist/"* "$WEB_EMBED/"
+  # SPIKE R1: precompress static assets at build time. The daemon serves the
+  # .gz sibling verbatim when the client accepts gzip (frontend.go), so the
+  # 926 KB bundle costs no deflate CPU per request and ships at level 9.
+  find "$WEB_EMBED" \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.json' -o -name '*.html' \) \
+    -size +1k -exec gzip -9 -k -f {} \;
   # Record what the embedded bundle reports as its version, so a later
   # --skip-frontend build can stamp the daemon to match it. Kept next to the
   # binaries, not inside the embed dir (which is embedded with `all:`).

@@ -4,10 +4,13 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
+	"strconv"
 	"strings"
 )
 
@@ -68,6 +71,14 @@ func embeddedHandler() http.Handler {
 			if strings.HasPrefix(fsPath, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
+			// SPIKE R1: a build-time .gz sibling costs the daemon nothing at
+			// request time (no deflate CPU, no per-request allocation) and
+			// compresses at level 9 instead of the middleware's streaming 5.
+			// Falls through to the middleware when the sibling is absent, so
+			// a build without the gzip step still serves compressed bytes.
+			if servePrecompressed(w, r, sub, fsPath) {
+				return
+			}
 			fileServer.ServeHTTP(w, r)
 			return
 		}
@@ -75,4 +86,31 @@ func embeddedHandler() http.Handler {
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+// servePrecompressed serves fsPath+".gz" when the client accepts gzip and
+// the sibling exists. Reports whether it handled the request.
+func servePrecompressed(w http.ResponseWriter, r *http.Request, sub fs.FS, fsPath string) bool {
+	if !strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
+		return false
+	}
+	// Let the file server answer ranged requests from the identity file.
+	if r.Header.Get("Range") != "" {
+		return false
+	}
+	data, err := fs.ReadFile(sub, fsPath+".gz")
+	if err != nil {
+		return false
+	}
+	if ct := mime.TypeByExtension(path.Ext(fsPath)); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if r.Method == http.MethodHead {
+		return true
+	}
+	_, _ = w.Write(data)
+	return true
 }
