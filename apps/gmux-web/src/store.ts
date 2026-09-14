@@ -1599,6 +1599,87 @@ let sessionStreamMode: SessionStreamMode = 'unknown'
 let sessionsBootstrap: SessionsBootstrap | null = null
 let lastSessionEpoch = 0
 
+/* ── SPIKE (R5/R6): epoch-chained deltas + resume ──────────────────────────
+ *
+ * `resumeEpoch` is the epoch whose value is *committed* in `_rawSessions`.
+ * Unlike `lastSessionEpoch` (transport-scoped staging state, reset on every
+ * transport failure) it survives a reconnect, because the committed rows do
+ * too — that is exactly what lets the next connection ask the daemon for
+ * `since=<resumeEpoch>` instead of paying a 3.2 MB re-bootstrap (#522 tax).
+ * `streamBootID` scopes it: epochs restart at 1 on a daemon restart, so an
+ * epoch only means something paired with the boot it was minted in.
+ */
+let streamBootID: string | null = null
+let resumeEpoch = 0
+
+/** Query string for a session-stream subscription, including the resume hint
+ * when one is available. Exported for tests. */
+export function sessionStreamURL(): string {
+  const base = '/v1/events?session_stream=3&delta=1'
+  if (streamBootID && resumeEpoch > 0) {
+    return `${base}&since=${resumeEpoch}&boot=${encodeURIComponent(streamBootID)}`
+  }
+  return base
+}
+
+/** `stream.hello` is the daemon's answer to `delta=1`: it names the boot the
+ * epochs belong to. A different boot invalidates any resume point we hold. */
+export function noteStreamHello(bootID: string): void {
+  if (streamBootID !== null && streamBootID !== bootID) resumeEpoch = 0
+  streamBootID = bootID
+}
+
+export function _deltaResumeState(): { bootID: string | null, epoch: number } {
+  return { bootID: streamBootID, epoch: resumeEpoch }
+}
+
+export function _resetDeltaResumeState(): void {
+  streamBootID = null
+  resumeEpoch = 0
+}
+
+/**
+ * Apply one delta event: the rows whose value changed and the ids that left
+ * this subscriber's view, moving the committed projection from `fromEpoch` to
+ * `epoch`. Returns false when the delta does not chain onto what we hold —
+ * the caller then drops the transport and re-bootstraps.
+ *
+ * Structural sharing (#512/#518) is preserved by construction: untouched rows
+ * are carried over as the *same objects*, so `reconcileSessions` reuses the
+ * previous array identity for them and `diffReplacedRows` still sees a
+ * positional replacement. Rows are kept in ascending-id order because that is
+ * the order the daemon emits snapshots in (wire.Converter sorts by id), so a
+ * delta-fed store and a snapshot-fed store are positionally identical.
+ */
+export function applySessionsDelta(
+  bootID: string, fromEpoch: number, epoch: number,
+  upsert: ProtocolSession[], remove: string[],
+): boolean {
+  if (sessionStreamMode === 'legacy') return false
+  if (!Number.isSafeInteger(epoch) || epoch <= 0 || !Number.isSafeInteger(fromEpoch)) return false
+  if (streamBootID !== null && bootID !== streamBootID) return false
+  if (resumeEpoch === 0 || fromEpoch !== resumeEpoch || epoch < fromEpoch) return false
+  const prev = _rawSessions.peek()
+  const removed = new Set(remove)
+  const pending = new Map<string, Session>()
+  for (const row of upsert) pending.set(row.id, toUISession(row))
+  const out: Session[] = []
+  for (const row of prev) {
+    if (removed.has(row.id)) continue
+    const next = pending.get(row.id)
+    if (next) { pending.delete(row.id); out.push(next) } else out.push(row)
+  }
+  for (const row of pending.values()) out.push(row)
+  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  sessionStreamMode = 'v3'
+  resumeEpoch = epoch
+  if (epoch > lastSessionEpoch) lastSessionEpoch = epoch
+  // A delta supersedes any transaction still staging for an older epoch.
+  if (sessionsBootstrap && sessionsBootstrap.epoch <= epoch) sessionsBootstrap = null
+  applySessionsSnapshot(out)
+  return true
+}
+
 /** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
  * atomic-visibility tests. Production calls them only from EventSource. */
 export function beginSessionsBootstrap(version: number, epoch: number): void {
@@ -1641,6 +1722,7 @@ export function readySessionsBootstrap(epoch: number): boolean {
   if (!sessionsBootstrap || sessionsBootstrap.epoch !== epoch) return false
   const { rows, warnings, omittedTotal } = sessionsBootstrap
   sessionsBootstrap = null
+  resumeEpoch = epoch // SPIKE (R6): committed epoch, survives a reconnect
   applySessionsSnapshot(rows.map(toUISession))
   sessionStreamWarnings.value = warnings
   sessionStreamOmittedTotal.value = omittedTotal
@@ -2494,6 +2576,10 @@ export function initStore(): () => void {
   // Missed deltas don't matter: each snapshot is a full replacement.
   // Reset the negotiated stream state before creating a new supervisor.
   resetSessionsTransport()
+  // A fresh subscription starts with no committed rows, so no resume point.
+  // (Resume spans supervisor reconnects within one page, not page reloads:
+  // the committed rows are what a resume patches.)
+  _resetDeltaResumeState()
   sessionStreamWarnings.value = []
   sessionStreamOmittedTotal.value = 0
   sseRetryAvailable.value = false
@@ -2512,7 +2598,7 @@ export function initStore(): () => void {
   const supervisor = createSSESupervisor({
     onFailure: onTransportFailure,
     connect: callbacks => {
-      const next = new EventSource('/v1/events?session_stream=3') as unknown as SSESource
+      const next = new EventSource(sessionStreamURL()) as unknown as SSESource
       next.addEventListener('open', callbacks.opened)
       next.addEventListener('error', callbacks.failed)
       for (const [type, listener] of sourceBindings) {
@@ -2572,6 +2658,37 @@ export function initStore(): () => void {
     } catch (err) {
       discardSessionsBootstrap()
       console.warn('snapshot.sessions.ready: bad event', err)
+    }
+  })
+
+  // SPIKE (R5/R6): additive delta events. A daemon that does not know
+  // `delta=1` simply never sends them and the transaction path below runs
+  // unchanged.
+  addSourceListener('stream.hello', (e) => {
+    try {
+      const { boot_id: bootID } = JSON.parse(e.data) as { boot_id?: string }
+      if (typeof bootID === 'string' && bootID) noteStreamHello(bootID)
+    } catch (err) {
+      console.warn('stream.hello: bad event', err)
+    }
+  })
+
+  addSourceListener('snapshot.sessions.delta', (e) => {
+    try {
+      const d = JSON.parse(e.data) as {
+        boot_id: string, epoch: number, from_epoch: number
+        upsert?: ProtocolSession[], remove?: string[]
+      }
+      if (applySessionsDelta(d.boot_id, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [])) return
+      // The chain broke (bug, or a daemon that answered a resume we cannot
+      // apply). Drop the resume point and take a full bootstrap.
+      console.warn('snapshot.sessions.delta: chain broken, re-bootstrapping')
+      _resetDeltaResumeState()
+      activeSSESupervisor?.retry()
+    } catch (err) {
+      console.warn('snapshot.sessions.delta: bad event', err)
+      _resetDeltaResumeState()
+      activeSSESupervisor?.retry()
     }
   })
 

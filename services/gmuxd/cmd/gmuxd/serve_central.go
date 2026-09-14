@@ -40,6 +40,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
@@ -335,6 +336,10 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	hostname, _ := os.Hostname()
 	peerManager = peering.NewProjectionManager(nil, hostname, nil, peerAdapter.hooks(), peering.WithTransport(peerTransport))
 	peerAdapter.manager = peerManager
+	// SPIKE (R5): the delta ring must classify rows for the ?as=peer audience
+	// with exactly FilterOwned's rule, so it needs the same predicate the
+	// handlers use. Installed before the composer can broadcast.
+	fanout.SetOwnershipFilter(func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
 	if err := reconcileManualPeers(context.Background(), storeHandle, peerManager); err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
@@ -914,6 +919,22 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			// the marker; an old tab, peer, or custom consumer omits it and gets
 			// protocol 2 for one transitional release.
 			semanticSessions := useSemanticSessionStream(asPeer, r.URL.Query().Get("session_stream"))
+			// SPIKE (R5/R6): additive opt-in. `delta=1` asks for epoch-chained
+			// deltas instead of a full transaction per mutation; `since=<epoch>`
+			// plus `boot=<boot_id>` asks to resume a dropped connection instead
+			// of re-bootstrapping. Both are ignored for protocol-2 consumers
+			// and may be declined at any time by sending today's transaction.
+			wantDelta := semanticSessions && r.URL.Query().Get("delta") == "1"
+			deltaClass := deltaClassAll
+			if asPeer {
+				deltaClass = deltaClassOwned
+			}
+			sinceEpoch := uint64(0)
+			if wantDelta && r.URL.Query().Get("boot") == fanout.BootID() {
+				if v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64); err == nil {
+					sinceEpoch = v
+				}
+			}
 			initial, ch, cancel := fanout.Subscribe()
 			defer cancel()
 			isLocalPeer := func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }
@@ -922,9 +943,34 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			// class × protocol; the rest reuse the bytes. Epochs are allocated
 			// by the fanout under its mutex, so they are strictly increasing in
 			// each connection's delivery order.
+			// lastSentEpoch is the only per-connection state deltas add: the
+			// epoch whose value this connection has already published.
+			lastSentEpoch := uint64(0)
+			sendDelta := func(memo *sessionEncodeMemo) (bool, error) {
+				if !wantDelta || lastSentEpoch == 0 || memo == nil {
+					return false, nil
+				}
+				touched, ok := fanout.TouchedSince(lastSentEpoch, memo.epoch, deltaClass)
+				if !ok {
+					return false, nil
+				}
+				upsert, remove := memo.DeltaRows(asPeer, isLocalPeer, touched)
+				event, fits, err := sessionstream.EncodeDelta(fanout.BootID(), lastSentEpoch, memo.epoch, upsert, remove)
+				if err != nil || !fits {
+					return false, nil // oversized or unencodable: fall back to the transaction
+				}
+				if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
+					return true, err
+				}
+				lastSentEpoch = memo.epoch
+				return true, nil
+			}
 			sendSessions := func(memo *sessionEncodeMemo) error {
 				if memo == nil {
 					return nil
+				}
+				if sent, err := sendDelta(memo); sent {
+					return err
 				}
 				if !semanticSessions {
 					data, encodeErr := memo.Proto2(asPeer, isLocalPeer)
@@ -937,10 +983,43 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				if encodeErr != nil {
 					return encodeErr
 				}
-				return sendSSETransaction(r.Context(), rc, w, events)
+				if err := sendSSETransaction(r.Context(), rc, w, events); err != nil {
+					return err
+				}
+				lastSentEpoch = memo.epoch
+				return nil
 			}
-			if err := sendSessions(initial.SessionsEncode); err != nil {
-				return
+			if wantDelta {
+				// Feature detection: a client that asked for deltas learns
+				// whether this daemon speaks them, and which boot its epochs
+				// belong to, before any session data arrives.
+				if err := sendSSEFrame(rc, w, "stream.hello", map[string]any{
+					"version": sessionstream.ProtocolVersion,
+					"boot_id": fanout.BootID(),
+					"delta":   true,
+				}); err != nil {
+					return
+				}
+			}
+			resumed := false
+			if sinceEpoch > 0 && initial.SessionsEncode != nil {
+				// R6 resume: the chain is checked against the same ring; a gap
+				// too long (or an evicted epoch) silently falls through to the
+				// ordinary bootstrap below.
+				lastSentEpoch = sinceEpoch
+				sent, err := sendDelta(initial.SessionsEncode)
+				if err != nil {
+					return
+				}
+				resumed = sent
+				if !sent {
+					lastSentEpoch = 0
+				}
+			}
+			if !resumed {
+				if err := sendSessions(initial.SessionsEncode); err != nil {
+					return
+				}
 			}
 			if !asPeer && initial.Frames.World != nil {
 				// Same staleness as /v1/health: the cached world frame's
