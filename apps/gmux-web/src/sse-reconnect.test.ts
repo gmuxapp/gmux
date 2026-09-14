@@ -58,9 +58,9 @@ describe('SSE reconnecting state', () => {
     source().emit('snapshot.sessions.ready', { epoch })
   }
 
-  it('explicitly requests protocol 3', () => {
+  it('explicitly requests protocol 3 (and opts in to deltas — SPIKE R5)', () => {
     cleanup = initStore()
-    expect(source().url).toBe('/v1/events?session_stream=3')
+    expect(source().url).toBe('/v1/events?session_stream=3&delta=1')
   })
 
   it('accepts the transitional legacy replacement on a legacy-only transport', () => {
