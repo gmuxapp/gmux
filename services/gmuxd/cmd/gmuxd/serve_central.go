@@ -1037,6 +1037,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		daemonCancel()
 		return 1
 	}
+	// Retention as auto-dismiss (spike R2): only after convergence closed, so
+	// every row's liveness is known before anything is hidden.
+	go runAutoDismiss(daemonCtx, boot.Coordinator, autoDismissPolicy(cfg.Sessions))
 
 	boot.StartOwnedTriggers(TriggerConfig{Tick: productionEndpointSchedule(daemonCtx, 30*time.Second), ConversationDeleted: productionConversationDeletionSource(daemonCtx, convIndex), PeerSessionsChanged: nil, PeerWorldChanged: nil, Activity: func(o sessioncoord.Outcome) { fanout.BroadcastActivity(string(o.ID)) }})
 
