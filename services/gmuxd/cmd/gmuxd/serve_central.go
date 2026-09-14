@@ -31,6 +31,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/httpz"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
@@ -1060,7 +1061,15 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		boot.Composer.MarkDirty(true, false)
 	})
 
-	authedHandler := netauth.Middleware(authToken, commonMux)
+	// SPIKE R1: compress the network listeners (TCP + tsnet), never the Unix
+	// socket. Kill switch: GMUXD_HTTP_COMPRESS=0 (a real PR would put this in
+	// host.toml). Placed outside auth so one wrapper covers every network
+	// response; upgrade requests pass through untouched.
+	var netHandler http.Handler = netauth.Middleware(authToken, commonMux)
+	if os.Getenv("GMUXD_HTTP_COMPRESS") != "0" {
+		netHandler = httpz.Gzip(netHandler)
+	}
+	authedHandler := netHandler
 	tcpLn, err := net.Listen("tcp", tcpAddr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: tcp listener on %s: %v\n", tcpAddr, err)
