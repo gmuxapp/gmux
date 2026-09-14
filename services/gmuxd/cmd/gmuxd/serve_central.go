@@ -1000,7 +1000,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				}
 			}
 		})
-		mux.Handle("/", spaHandler())
+		// The Unix socket never serves compressed bytes, so the
+		// precompressed bundle siblings are for the network mux only.
+		mux.Handle("/", spaHandler(compress && !unixOnly))
 	}
 	registerCommon(commonMux, false)
 	registerCommon(unixMux, true)

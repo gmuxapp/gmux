@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -443,6 +444,38 @@ func assertCompressionWiring(t *testing.T, unixClient *http.Client, port int, to
 		t.Fatalf("unix socket response was touched by compression: ce=%q vary=%q body=%.20q", unixResp.Header.Get("Content-Encoding"), unixResp.Header.Get("Vary"), unixBody)
 	}
 
+	// Unix socket, bundle path: the precompressed sibling must not be served
+	// there either (F1 in the #533 review: spaHandler is registered on both
+	// muxes, so this is the one path the middleware bypass alone does not
+	// cover). The embed dir may be empty in a bare `go test`, so only assert
+	// when the asset exists.
+	if assetPath := firstEmbeddedAsset(); assetPath != "" {
+		assetReq, _ := http.NewRequest(http.MethodGet, "http://localhost/"+assetPath, nil)
+		assetReq.Header.Set("Accept-Encoding", "gzip")
+		assetResp, err := unixClient.Do(assetReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assetBody, _ := io.ReadAll(assetResp.Body)
+		assetResp.Body.Close()
+		if assetResp.StatusCode != http.StatusOK || assetResp.Header.Get("Content-Encoding") != "" || assetResp.Header.Get("Vary") != "" || bytes.HasPrefix(assetBody, []byte{0x1f, 0x8b}) {
+			t.Fatalf("unix socket served %s compressed: status=%d ce=%q vary=%q", assetPath, assetResp.StatusCode, assetResp.Header.Get("Content-Encoding"), assetResp.Header.Get("Vary"))
+		}
+		// And the same asset over TCP is the sibling.
+		tcpAssetReq, _ := http.NewRequest(http.MethodGet, base+"/"+assetPath, nil)
+		tcpAssetReq.Header.Set("Authorization", "Bearer "+token)
+		tcpAssetReq.Header.Set("Accept-Encoding", "gzip")
+		tcpAssetResp, err := http.DefaultTransport.RoundTrip(tcpAssetReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, tcpAssetResp.Body)
+		tcpAssetResp.Body.Close()
+		if tcpAssetResp.Header.Get("Content-Encoding") != "gzip" {
+			t.Fatalf("tcp did not serve %s compressed: %v", assetPath, tcpAssetResp.Header)
+		}
+	}
+
 	// TCP, explicit gzip, raw wire: the SSE stream is encoded and the first
 	// event decodes before the stream ends (it never ends).
 	sseReq, _ := http.NewRequest(http.MethodGet, base+"/v1/events?session_stream=3", nil)
@@ -501,4 +534,22 @@ func assertCompressionWiring(t *testing.T, unixClient *http.Client, port int, to
 	if smallResp.StatusCode != http.StatusNotFound || smallResp.Header.Get("Content-Encoding") != "" || len(smallBody) >= 512 {
 		t.Fatalf("small error envelope: status=%d ce=%q len=%d", smallResp.StatusCode, smallResp.Header.Get("Content-Encoding"), len(smallBody))
 	}
+}
+
+// firstEmbeddedAsset returns the path of a hashed bundle asset with a .gz
+// sibling in the embedded web dir, or "" when the bundle is not built.
+func firstEmbeddedAsset() string {
+	entries, err := fs.ReadDir(webFS, "web/assets")
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "index-") && strings.HasSuffix(name, ".js") {
+			if _, err := fs.Stat(webFS, "web/assets/"+name+".gz"); err == nil {
+				return "assets/" + name
+			}
+		}
+	}
+	return ""
 }

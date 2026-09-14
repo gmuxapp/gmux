@@ -19,7 +19,7 @@ before:
     # home page footer permanently show "Frontend vdev / reload to
     # update" because the two never match.
     - bash -c 'cd apps/gmux-web && VERSION={{ .Version }} npx vite build'
-    - bash -c 'rm -rf services/gmuxd/cmd/gmuxd/web/assets services/gmuxd/cmd/gmuxd/web/favicon.svg services/gmuxd/cmd/gmuxd/web/manifest.json && cp -r apps/gmux-web/dist/* services/gmuxd/cmd/gmuxd/web/'
+    - ./scripts/embed-web.sh
 
 builds:
   - id: gmuxd
