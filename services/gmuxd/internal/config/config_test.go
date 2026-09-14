@@ -640,3 +640,51 @@ func TestLoadRejectsTopLevelMaxSubagentsByDepth(t *testing.T) {
 		t.Errorf("error = %q, want it to name the [agent] section", err)
 	}
 }
+
+func TestLoadHTTPCompression(t *testing.T) {
+	t.Run("default on", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		t.Setenv("GMUXD_HTTP_COMPRESS", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.HTTP.Compression || !cfg.CompressionEnabled() {
+			t.Fatalf("compression should default on: %+v", cfg.HTTP)
+		}
+	})
+	t.Run("file off", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		t.Setenv("GMUXD_HTTP_COMPRESS", "")
+		writeConfig(t, dir, "[http]\ncompression = false\n")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.HTTP.Compression || cfg.CompressionEnabled() {
+			t.Fatalf("compression should be off: %+v", cfg.HTTP)
+		}
+	})
+	t.Run("env kill switch wins", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		t.Setenv("GMUXD_HTTP_COMPRESS", "0")
+		writeConfig(t, dir, "[http]\ncompression = true\n")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.HTTP.Compression || cfg.CompressionEnabled() {
+			t.Fatalf("GMUXD_HTTP_COMPRESS=0 must win: %+v", cfg.HTTP)
+		}
+	})
+	t.Run("unknown key rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		writeConfig(t, dir, "[http]\ncompress = false\n")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "http.compress") {
+			t.Fatalf("expected unknown-key error, got %v", err)
+		}
+	})
+}

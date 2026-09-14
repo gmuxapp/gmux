@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -132,6 +133,8 @@ func TestServeCentralExposesRecoveryBeforeConvergenceAndServesSQLiteState(t *tes
 	t.Setenv("XDG_STATE_HOME", stateHome)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("GMUX_SOCKET_DIR", filepath.Join(base, "run"))
+	token := strings.Repeat("c0ffee", 11)[:64]
+	t.Setenv("GMUXD_TOKEN", token)
 	port := freePort(t)
 	cfgDir := filepath.Join(configHome, "gmux")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -403,6 +406,8 @@ func TestServeCentralExposesRecoveryBeforeConvergenceAndServesSQLiteState(t *tes
 		t.Fatalf("legacy second SSE=%q", legacyEvent)
 	}
 
+	assertCompressionWiring(t, client, port, token)
+
 	if !unixipc.Shutdown(sock) {
 		t.Fatal("failed to shut daemon down")
 	}
@@ -413,5 +418,87 @@ func TestServeCentralExposesRecoveryBeforeConvergenceAndServesSQLiteState(t *tes
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("daemon did not exit")
+	}
+}
+
+// assertCompressionWiring checks the production listener wiring end to end
+// on the in-process daemon: the TCP listener compresses the SSE stream (and
+// the client can still read it event by event), a Go client decodes JSON
+// transparently, and the Unix socket never compresses — even for a client
+// that explicitly asks.
+func assertCompressionWiring(t *testing.T, unixClient *http.Client, port int, token string) {
+	t.Helper()
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	// Unix socket: untouched.
+	unixReq, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/sessions", nil)
+	unixReq.Header.Set("Accept-Encoding", "gzip")
+	unixResp, err := unixClient.Do(unixReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unixBody, _ := io.ReadAll(unixResp.Body)
+	unixResp.Body.Close()
+	if unixResp.Header.Get("Content-Encoding") != "" || unixResp.Header.Get("Vary") != "" || !bytes.HasPrefix(unixBody, []byte("{")) {
+		t.Fatalf("unix socket response was touched by compression: ce=%q vary=%q body=%.20q", unixResp.Header.Get("Content-Encoding"), unixResp.Header.Get("Vary"), unixBody)
+	}
+
+	// TCP, explicit gzip, raw wire: the SSE stream is encoded and the first
+	// event decodes before the stream ends (it never ends).
+	sseReq, _ := http.NewRequest(http.MethodGet, base+"/v1/events?session_stream=3", nil)
+	sseReq.Header.Set("Authorization", "Bearer "+token)
+	sseReq.Header.Set("Accept-Encoding", "gzip")
+	sseResp, err := http.DefaultTransport.RoundTrip(sseReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sseResp.Body.Close()
+	if sseResp.StatusCode != http.StatusOK || sseResp.Header.Get("Content-Encoding") != "gzip" || sseResp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("tcp SSE: status=%d headers=%v", sseResp.StatusCode, sseResp.Header)
+	}
+	zr, err := gzip.NewReader(sseResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEvent := make(chan string, 1)
+	go func() {
+		ev, _ := readFirstSSEEvent(t, bufio.NewScanner(zr))
+		firstEvent <- ev
+	}()
+	select {
+	case ev := <-firstEvent:
+		if ev != "snapshot.sessions.begin" {
+			t.Fatalf("first gzip SSE event=%q", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gzip SSE stream did not deliver its first event: compressor buffered across the flush")
+	}
+
+	// TCP, default Go client (what the CLI over TCP and peers use). /v1/health
+	// is ~1 KB, above the 512-byte floor under which bodies stay identity.
+	jsonReq, _ := http.NewRequest(http.MethodGet, base+"/v1/health", nil)
+	jsonReq.Header.Set("Authorization", "Bearer "+token)
+	jsonResp, err := http.DefaultClient.Do(jsonReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonBody, _ := io.ReadAll(jsonResp.Body)
+	jsonResp.Body.Close()
+	if !jsonResp.Uncompressed || !bytes.HasPrefix(jsonBody, []byte("{")) {
+		t.Fatalf("tcp JSON: uncompressed=%v len=%d body=%.20q", jsonResp.Uncompressed, len(jsonBody), jsonBody)
+	}
+
+	// A small JSON body with no declared length stays identity (never inflated).
+	smallReq, _ := http.NewRequest(http.MethodGet, base+"/v1/sessions/nonexistent/scrollback", nil)
+	smallReq.Header.Set("Authorization", "Bearer "+token)
+	smallReq.Header.Set("Accept-Encoding", "gzip")
+	smallResp, err := http.DefaultTransport.RoundTrip(smallReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	smallBody, _ := io.ReadAll(smallResp.Body)
+	smallResp.Body.Close()
+	if smallResp.StatusCode != http.StatusNotFound || smallResp.Header.Get("Content-Encoding") != "" || len(smallBody) >= 512 {
+		t.Fatalf("small error envelope: status=%d ce=%q len=%d", smallResp.StatusCode, smallResp.Header.Get("Content-Encoding"), len(smallBody))
 	}
 }

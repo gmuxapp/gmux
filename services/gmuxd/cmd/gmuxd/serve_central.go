@@ -31,6 +31,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/httpz"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
@@ -171,6 +172,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		ScrollbackCacheBytes: int64(cfg.Sessions.ScrollbackCacheMB) << 20,
 	}
 	sessionDirs := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(retention))
+	compress := cfg.CompressionEnabled()
 	tcpAddr, err := cfg.ListenAddr()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
@@ -1060,7 +1062,19 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		boot.Composer.MarkDirty(true, false)
 	})
 
+	// Compress the network listeners (TCP + tsnet), never the Unix socket:
+	// the local CLI would pay CPU for nothing (the SPA handler's
+	// precompressed siblings follow the same rule, see registerCommon).
+	// Placed outside auth so one
+	// wrapper covers every network response, including auth errors; upgrade
+	// requests (the terminal WebSocket) pass through untouched. Off via
+	// `[http] compression = false` or GMUXD_HTTP_COMPRESS=0.
 	authedHandler := netauth.Middleware(authToken, commonMux)
+	if compress {
+		authedHandler = httpz.Gzip(authedHandler)
+	} else {
+		log.Printf("gmuxd: http compression disabled")
+	}
 	tcpLn, err := net.Listen("tcp", tcpAddr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: tcp listener on %s: %v\n", tcpAddr, err)

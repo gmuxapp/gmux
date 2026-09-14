@@ -15,6 +15,7 @@ Variables that affect the daemon.
 | `GMUXD_TOKEN` | Seed the auth token file on first start. | *(none)* |
 | `XDG_CONFIG_HOME` | Base directory for config files. | `~/.config` |
 | `XDG_STATE_HOME` | Base directory for runtime state (socket, auth token). | `~/.local/state` |
+| `GMUXD_HTTP_COMPRESS` | Set to `0` to disable gzip on the network listeners, overriding `[http] compression` in `host.toml`. Debugging aid; see [host.toml](/reference/host-toml/#http). | *(unset — follow host.toml)* |
 | `GMUXD_TS_HOSTNAME` | Seed the requested Tailscale node name at *first* registration (advanced/multi-instance setups); ignored once registered. | `gmux-<hostname>` |
 | `GMUXD_DEV_PROXY` | Proxy frontend requests to a Vite dev server (development only). | *(none)* |
 

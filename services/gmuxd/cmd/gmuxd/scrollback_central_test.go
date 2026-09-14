@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/scrollback"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/httpz"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
 
@@ -353,5 +355,91 @@ func TestBrokerTailParamIOErrorReturns500(t *testing.T) {
 	resp := f.doQuery(http.MethodGet, "1vshk4fu", "tail=5")
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("status: want 500, got %d (a silent 200 here would let the CLI report success on an IO error)", resp.StatusCode)
+	}
+}
+
+// TestBrokerReplayThroughGzipMiddleware is the dead-session replay path as
+// the phone sees it: the broker behind httpz.Gzip over a real TCP listener.
+// The 1.2 MB median replay must arrive gzip-encoded, decode byte-for-byte
+// to the identity body, keep the broker's own headers (unread token,
+// no-store), and stay identity for a client that does not accept gzip.
+// tail= renders through the same path and must behave the same way.
+func TestBrokerReplayThroughGzipMiddleware(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "2gz1p0ab")
+	var body strings.Builder
+	for i := 0; body.Len() < 1200*1024; i++ {
+		body.WriteString("\x1b[32m$\x1b[0m go test ./... line ")
+		body.WriteString(strings.Repeat("ok  \tgithub.com/gmuxapp/gmux/pkg\t0.12s\r\n", 1+i%3))
+	}
+	want := body.String()
+	f.writeScrollback(t, "2gz1p0ab", want)
+
+	srv := httptest.NewServer(httpz.Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/scrollback")
+		sess, ok := f.sessions[id]
+		scrollbackBrokerHandlerCentral(w, r, id, sess, ok, f.dirFor)
+	})))
+	defer srv.Close()
+
+	fetch := func(query, accept string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/sessions/2gz1p0ab/scrollback"+query, nil)
+		req.Header.Set("Accept-Encoding", accept)
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, raw
+	}
+	decode := func(raw []byte) []byte {
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	identity, identityBody := fetch("", "identity")
+	if identity.Header.Get("Content-Encoding") != "" || string(identityBody) != want {
+		t.Fatalf("identity replay changed: ce=%q len=%d", identity.Header.Get("Content-Encoding"), len(identityBody))
+	}
+
+	resp, wire := fetch("", "gzip")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("status=%d ce=%q", resp.StatusCode, resp.Header.Get("Content-Encoding"))
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q", got)
+	}
+	if resp.Header.Get(unreadTokenHeader) != identity.Header.Get(unreadTokenHeader) {
+		t.Errorf("unread token header lost through the wrapper")
+	}
+	if !bytes.Equal(decode(wire), []byte(want)) {
+		t.Fatalf("decoded replay differs from identity (%d wire bytes)", len(wire))
+	}
+	if len(wire)*5 > len(want) {
+		t.Fatalf("replay barely compressed: %d -> %d bytes", len(want), len(wire))
+	}
+
+	// tail= renders a subset; identity and gzip must agree.
+	_, tailIdentity := fetch("?tail=50", "identity")
+	tailResp, tailWire := fetch("?tail=50", "gzip")
+	if tailResp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("tail not compressed: %v", tailResp.Header)
+	}
+	if !bytes.Equal(decode(tailWire), tailIdentity) {
+		t.Fatal("tail= decoded body differs from identity")
 	}
 }
