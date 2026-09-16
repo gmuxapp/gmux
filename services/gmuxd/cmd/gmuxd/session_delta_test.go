@@ -322,7 +322,17 @@ func TestScopeChainStartsAtRegistration(t *testing.T) {
 	fanout.BroadcastFrames(wire.Frames{Sessions: payload(0)})
 	_, before := fanout.CurrentMemo()
 	fanout.BroadcastFrames(wire.Frames{Sessions: payload(1)})
+	// A client connecting between the broadcast and the registration bumps
+	// the fanout epoch without changing state. The chain must start at the
+	// epoch a GET /children page cut from the current memo carries, or every
+	// drawer open would refetch page 1 to "catch up" to nothing.
+	_, _, cancel := fanout.Subscribe()
+	defer cancel()
+	pageMemo, _ := fanout.CurrentMemo()
 	reg, _ := fanout.UpdateScopes(conn, []string{"children:r"}, nil)
+	if reg != pageMemo.epoch {
+		t.Fatalf("scope chains from %d, but a page cut now carries epoch %d", reg, pageMemo.epoch)
+	}
 	fanout.BroadcastFrames(wire.Frames{Sessions: payload(2)})
 	_, after := fanout.CurrentMemo()
 	if _, ok := fanout.ScopeTouchedSince(before, after, "children:r"); ok {

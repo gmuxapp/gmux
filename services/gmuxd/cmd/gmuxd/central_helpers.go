@@ -403,6 +403,15 @@ func (f *sseFanout) UpdateScopes(conn string, add, remove []string) (epoch uint6
 			f.ring.ReleaseScope(key)
 		}
 	}
+	// The chain starts at the STATE the baseline is taken from: f.current's
+	// epoch, not f.epoch. Subscribe bumps f.epoch without a broadcast, so the
+	// two differ whenever a client connected since the last mutation; a page
+	// cut from f.current (GET /children) then already reflects the chain
+	// start, and returning f.epoch made every drawer open refetch page 1.
+	base := f.epoch
+	if f.current != nil {
+		base = f.current.epoch
+	}
 	for _, key := range add {
 		if !validScopeKey(key) {
 			continue
@@ -410,12 +419,12 @@ func (f *sseFanout) UpdateScopes(conn string, add, remove []string) (epoch uint6
 		if _, held := cs.lastSent[key]; held {
 			continue
 		}
-		cs.lastSent[key] = f.epoch
+		cs.lastSent[key] = base
 		if f.ring != nil {
 			f.ring.AddScope(key, f.current)
 		}
 	}
-	return f.epoch, true
+	return base, true
 }
 
 // ScopesOf snapshots a connection's scopes and their last-sent epochs.
