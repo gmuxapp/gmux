@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { childrenViews, closeChildren, keepSetFor, loadMoreChildren, openChildren } from './children'
 import {
   familySegments, familyStateOf, isProcessSession, isRunningProcess, projectFamily,
   type FamilyNode, type FamilyState,
@@ -10,7 +11,7 @@ import { viewToPath } from './routing'
 import { formatAge } from './session-row'
 import {
   activityMap, cancelSession, familyActivityById, markSessionRead, ownDotState,
-  projects, sessions, tabHref,
+  projects, selectedId, sessions, tabHref,
 } from './store'
 import { pushError } from './toasts'
 import type { Session } from './types'
@@ -76,6 +77,59 @@ function FamilyRow({ node, selectedId, depth, expanded, view, now, onToggle }: {
           />
         </ul>
       )}
+      {depth > 0 && <LoadChildren session={session} loaded={node.children.length} depth={depth + 1} />}
+    </li>
+  )
+}
+
+/** PROTO (3.0): the on-demand seam. A node whose counts say it has more
+ * direct children than are loaded offers to page them in (and, once a page
+ * is loaded, keeps them live through a `children:<id>` scope). The root's
+ * own page is loaded by the drawer on open; this covers deeper levels. */
+function LoadChildren({ session, loaded, depth }: { session: Session, loaded: number, depth: number }) {
+  const view = childrenViews.value.get(session.id)
+  const known = session.descendant_counts?.children ?? 0
+  const total = view?.total ?? known
+  if (view?.loading) {
+    return <li><span class="family-more family-loading" style={{ paddingLeft: `${12 + depth * 18}px` }}>loading…</span></li>
+  }
+  if (view?.error) {
+    return (
+      <li>
+        <button type="button" class="family-more" style={{ paddingLeft: `${12 + depth * 18}px` }} onClick={() => { void openChildren(session.id, { force: true }) }}>
+          ⚠ {view.error} — retry
+        </button>
+      </li>
+    )
+  }
+  if (view?.stale) {
+    return (
+      <li>
+        <button type="button" class="family-more family-stale" style={{ paddingLeft: `${12 + depth * 18}px` }} onClick={() => { void openChildren(session.id, { force: true }) }}>
+          ↻ changed — refresh
+        </button>
+      </li>
+    )
+  }
+  const remaining = total - loaded
+  if (remaining <= 0) return null
+  if (!view || view.epoch === 0) {
+    return (
+      <li>
+        <button type="button" class="family-more" style={{ paddingLeft: `${12 + depth * 18}px` }} onClick={() => { void openChildren(session.id) }}>
+          <span class="family-more-chevron" aria-hidden="true">▸</span>
+          load {remaining} {remaining === 1 ? 'child' : 'children'}
+        </button>
+      </li>
+    )
+  }
+  if (!view.nextCursor) return null
+  return (
+    <li>
+      <button type="button" class="family-more" style={{ paddingLeft: `${12 + depth * 18}px` }} onClick={() => { void loadMoreChildren(session.id) }}>
+        <span class="family-more-chevron" aria-hidden="true">▸</span>
+        load more ({loaded} of {total})
+      </button>
     </li>
   )
 }
@@ -459,6 +513,15 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
   // so promoted sessions are roots here by that edge alone. The immutable
   // launched_from_session_id keeps the provenance “Return to family” uses.
   const projection = projectFamily(selected, sessions.value)
+  // PROTO (3.0): the root's children are not in the world state. Load the
+  // first page and hold a live scope while the panel is open; release both
+  // (keeping the selected member's spine hydrated) when it closes.
+  const rootId = projection.root.id
+  useEffect(() => {
+    void openChildren(rootId)
+    return () => { closeChildren(rootId, keepSetFor(selectedId.value)) }
+  }, [rootId])
+  const rootView = childrenViews.value.get(rootId)
   const stateFilter = filter === 'processes' ? null : filter
   // Structural agent ancestors remain context under a state filter, but a
   // selected process does not: error/waiting/active are agent-only views.
@@ -517,6 +580,13 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
                 now={now}
                 onToggle={toggle}
               />
+              <LoadChildren session={projection.root} loaded={projection.tree.children.length} depth={1} />
+              {rootView && rootView.epoch > 0 && (
+                <li class="family-page-status" aria-live="polite">
+                  {rootView.rows.length} of {rootView.total} direct children loaded
+                  {rootView.scoped ? (rootView.liveRows < rootView.rows.length ? ` · first ${rootView.liveRows} live` : ' · live') : ''}
+                </li>
+              )}
             </ul>
           )}
       </div>

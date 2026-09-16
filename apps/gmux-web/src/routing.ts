@@ -97,6 +97,16 @@ export function resolveSessionFromPath(
 ): string | null {
   if (!parsed.project) return null
 
+  // PROTO (3.0): an id-addressed URL (`~id`) names the session outright; the
+  // project segment is presentation. A family member's canonical project is
+  // its root's and moves on promote/demote, so a URL minted before the move
+  // must still resolve — the store then rewrites it to the canonical form.
+  if (parsed.slug?.startsWith('~')) {
+    const id = parsed.slug.slice(1)
+    const exact = sessions.find(s => s.id === id)
+    if (exact && (!parsed.adapter || exact.adapter === parsed.adapter)) return exact.id
+  }
+
   // Sessions belonging to the addressed project (ADR 0002):
   //  - Peer-owned project: stamp matches `(peer, project_slug)`.
   //  - Local-owned project: stamp matches `("", project_slug)` *or*
@@ -263,22 +273,27 @@ export function viewToPath(
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null
       const presentation = familyRoot(sess, sessions)
+      // PROTO (3.0): family members are not in the roots-only world state, so
+      // a member URL must be resolvable from the id alone (a deep link
+      // fetches GET /v1/sessions/{id}); slugs would need the whole subtree.
+      const byId = presentation.id !== sess.id
+      const collide = (s: Session) => byId || hasSessionSlugCollision(s, sessions, projects)
       // Peer-owned project (ADR 0002): URL is peer-prefixed; a nested
       // session keeps its own adapter/slug but uses the root's project.
       if (presentation.project_slug && presentation.peer) {
-        return sessionPath(presentation.project_slug, sess, presentation.peer, hasSessionSlugCollision(sess, sessions, projects))
+        return sessionPath(presentation.project_slug, sess, presentation.peer, collide(sess))
       }
       // Local-claimed: project owner is the viewer. Use the same stamp-backed
       // catalog predicate as sidebar bucketing; an unknown stamp is not a
       // recoverable URL even if it looks serializable.
       const placedProject = sidebarProjectForSession(presentation, projects)
       if (placedProject) {
-        return sessionPath(placedProject.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+        return sessionPath(placedProject.slug, sess, undefined, collide(sess))
       }
       // Disclaimed: viewer's match rules decide the local folder.
       const project = matchSession(presentation, projects)
       if (!project) return null
-      return sessionPath(project.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+      return sessionPath(project.slug, sess, undefined, collide(sess))
     }
   }
 }

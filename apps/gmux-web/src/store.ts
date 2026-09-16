@@ -29,7 +29,7 @@ import {
 } from './reconcile'
 import { referencePresence, removeHostReferenceItems, removeReferenceItems, type UnresolvedHost, unresolvedReferences } from './references'
 import type { View } from './routing'
-import { resolveViewFromPath, viewToPath } from './routing'
+import { parseSessionPath, resolveViewFromPath, viewToPath } from './routing'
 import { relaunchDirectoryNotice } from './session-actions'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { createSSESupervisor, type SSESource } from './sse-supervisor'
@@ -222,9 +222,40 @@ async function optimistic(m: PendingMutation, action: () => Promise<boolean>): P
 // Components import these by name; they don't know about `_rawWorld`.
 // Everything is `computed`, so writes go through the raw signals only.
 
+/** PROTO (3.0): rows loaded on demand (children pages, deep-linked members)
+ *  that are NOT in the roots-only world state. Presentation state owned by
+ *  children.ts; merged into `sessions` so the family index, routing and the
+ *  terminal work on them unchanged. */
+export const _hydrated = signal<ReadonlyMap<string, Session>>(new Map())
+
+/** Roots ∪ hydrated rows, ascending id (the daemon's order). Keeps the raw
+ *  array identity when nothing is hydrated, so the #518 identity fast paths
+ *  are untouched in the common case. */
+const mergedSessions = computed<Session[]>(() => {
+  const raw = _rawSessions.value
+  const extra = _hydrated.value
+  if (extra.size === 0) return raw
+  const ids = new Set(raw.map(s => s.id))
+  const out = [...raw]
+  for (const row of extra.values()) if (!ids.has(row.id)) out.push(row)
+  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return out
+})
+
 export const sessions = computed<Session[]>(() =>
-  applyPending(_rawSessions.value, _pendingMutations.value),
+  applyPending(mergedSessions.value, _pendingMutations.value),
 )
+
+/** Hooks children.ts installs at load (avoids a module cycle): the stream
+ *  handlers below call them for scope events and reconnects. */
+export const scopeHooks = {
+  onHello: (): void => {},
+  onScopeDelta: (_scope: string, _from: number, _epoch: number, _total: number | undefined, _upsert: ProtocolSession[], _remove: string[]): boolean => false,
+  onScopeReset: (_scope: string): void => {},
+  onCommit: (_prev: readonly Session[], _next: readonly Session[]): void => {},
+  ensureMember: (_id: string): Promise<boolean> => Promise.resolve(false),
+  keepMemberLive: (_parentId: string): void => {},
+}
 export const projects = computed<ProjectItem[]>(() => _rawWorld.value.projects)
 
 /** Conversation files that are live in more than one runner (session → file
@@ -1076,6 +1107,24 @@ export const localHostLabel = computed<string | undefined>(() => {
  * URL would otherwise mis-resolve to home. After loading, always
  * returns a concrete View (home/project/session).
  */
+/** PROTO (3.0): deep links to family members name an id (`~id`) that is not
+ *  in the roots-only world state. `view` stays null (loading) while the row
+ *  is fetched; a miss resolves to home like any unknown session. */
+export const memberLookups = signal<ReadonlyMap<string, 'loading' | 'missing'>>(new Map())
+
+export function _noteMemberLookup(id: string, state: 'loading' | 'missing' | null): void {
+  const next = new Map(memberLookups.value)
+  if (state === null) next.delete(id)
+  else next.set(id, state)
+  memberLookups.value = next
+}
+
+/** The `~id` a session URL names, when it does. */
+export function urlMemberId(path: string): string | null {
+  const parsed = parseSessionPath(path)
+  return parsed.slug?.startsWith('~') ? parsed.slug.slice(1) : null
+}
+
 export const view = computed((): View | null => {
   if (!sessionsLoaded.value || !worldLoaded.value) return null
   // Filter-blind: routing addresses session *identity*, which the tab's
@@ -1083,7 +1132,15 @@ export const view = computed((): View | null => {
   // would let a narrowing filter evict the currently-open terminal back
   // to the hub. Filtering is a sidebar-presentation concern only (see
   // `sidebarSessions`).
-  return resolveViewFromPath(urlPath.value, projects.value, sessions.value)
+  const resolved = resolveViewFromPath(urlPath.value, projects.value, sessions.value)
+  if (resolved.kind === 'home') {
+    // An id-addressed URL that does not resolve is a member outside the
+    // world state until the lookup says otherwise; stay in "loading" so the
+    // URL-normalization effect does not rewrite it to `/` first.
+    const id = urlMemberId(urlPath.value)
+    if (id && memberLookups.value.get(id) !== 'missing') return null
+  }
+  return resolved
 })
 
 /** Currently selected session ID, if the view is a session view. */
@@ -1145,8 +1202,14 @@ function unreadCountWith(index: FamilyIndex, folderList: Folder[]): number {
     // completion is not agent attention and must not light the family's row.
     if (s.id === sel || !s.unread || isProcessSession(s) || !index.childIds.has(s.id)) continue
     const rootId = index.rootById.get(s.id)?.id
-    if (rootId) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
+    // PROTO (3.0): a root that carries descendant_counts is authoritative for
+    // its subtree; hydrated children must not be counted a second time.
+    if (rootId && !index.byId.get(rootId)?.descendant_counts) childUnread.set(rootId, (childUnread.get(rootId) ?? 0) + 1)
   }
+  // Selected member: its own attention is muted ("you're looking at it").
+  const selRow = sel ? index.byId.get(sel) : undefined
+  const selMutes = selRow && selRow.unread && !isProcessSession(selRow) && index.childIds.has(selRow.id)
+    ? index.rootById.get(selRow.id)?.id : undefined
   let n = 0
   for (const f of folderList) {
     for (const s of f.sessions) {
@@ -1155,6 +1218,7 @@ function unreadCountWith(index: FamilyIndex, folderList: Folder[]): number {
       // behind a family root and are excluded by `childUnread` above.
       if (s.id !== sel && s.unread) n++
       n += childUnread.get(s.id) ?? 0
+      if (s.descendant_counts) n += Math.max(0, s.descendant_counts.unread - (selMutes === s.id ? 1 : 0))
     }
   }
   return n
@@ -1189,16 +1253,28 @@ export const familyDotById = computed<ReadonlyMap<string, DotState>>(() => {
   const am = activityMap.value
   const index = familyIndex(sessions.value)
   const map = new Map<string, DotState>()
+  const bump = (rootId: string, own: DotState) => {
+    const prev = map.get(rootId)
+    if (prev === undefined || AGGREGATE_DOT_RANK[own] > AGGREGATE_DOT_RANK[prev]) map.set(rootId, own)
+  }
   for (const s of sessions.value) {
     const rootId = index.rootById.get(s.id)?.id ?? s.id
     // A process child contributes through the separate running `$` summary,
     // never through the agent-style aggregate dot. Standalone processes keep
     // their own row state because no family root stands in for them.
     if (isProcessSession(s) && rootId !== s.id) continue
+    // PROTO (3.0): hydrated members of a root that carries counts are
+    // summarized by the counts below, not enumerated here.
+    if (rootId !== s.id && index.byId.get(rootId)?.descendant_counts) continue
     let own = sessionDotState(s, am)
     if (s.id === sel && isWaitingPresentation(sessionPresentationState(s))) own = 'none'
-    const prev = map.get(rootId)
-    if (prev === undefined || AGGREGATE_DOT_RANK[own] > AGGREGATE_DOT_RANK[prev]) map.set(rootId, own)
+    bump(rootId, own)
+    if (rootId === s.id && s.descendant_counts) {
+      const c = s.descendant_counts
+      if (c.error > 0) bump(s.id, 'error')
+      if (c.active > 0) bump(s.id, 'working')
+      if (c.waiting > 0) bump(s.id, 'unread')
+    }
   }
   return map
 })
@@ -1281,9 +1357,18 @@ export const familyActivityById = computed<ReadonlyMap<string, FamilyActivity>>(
   const index = familyIndex(sessions.value)
   const map = new Map<string, { error: number; waiting: number; active: number; running: number }>()
   for (const s of sessions.value) {
-    if (!index.childIds.has(s.id)) continue
+    // PROTO (3.0): a root's descendant_counts are the daemon's summary of the
+    // whole subtree — including members this client has not loaded. They
+    // replace the client-side tally for that root.
+    if (!index.childIds.has(s.id)) {
+      const c = s.descendant_counts
+      if (c && (c.error || c.waiting || c.active || c.running)) {
+        map.set(s.id, { error: c.error, waiting: c.waiting, active: c.active, running: c.running })
+      }
+      continue
+    }
     const rootId = index.rootById.get(s.id)?.id
-    if (!rootId || rootId === s.id) continue
+    if (!rootId || rootId === s.id || index.byId.get(rootId)?.descendant_counts) continue
     const state = familyStateOf(s)
     if (!state) continue
     const entry = map.get(rootId) ?? { error: 0, waiting: 0, active: 0, running: 0 }
@@ -1487,6 +1572,7 @@ export function toUISession(s: ProtocolSession): Session {
     // is load-bearing rather than incidental.
     project_slug: s.project_slug || undefined,
     project_index: s.project_index,
+    descendant_counts: s.descendant_counts ?? undefined,
   }
 }
 
@@ -1529,14 +1615,37 @@ export function sessionStaleness(
 function selectedSlugRewrite(prev: Session[], next: Session[]): string | null {
   const id = selectedId.value
   if (!id) return null
-  const old = prev.find(s => s.id === id)
+  // PROTO (3.0): the selected row may be a hydrated member (not in the
+  // roots-only raw list) that is being promoted INTO the list, or a root
+  // being demoted out of it (handled by re-hydration). Resolve against the
+  // merged view either way.
+  const hydrated = _hydrated.peek()
+  const old = prev.find(s => s.id === id) ?? hydrated.get(id)
   const cur = next.find(s => s.id === id)
   if (!old || !cur) return null
+  let merged = next
+  if (hydrated.size > 0) {
+    const ids = new Set(next.map(s => s.id))
+    merged = [...next]
+    for (const row of hydrated.values()) if (!ids.has(row.id)) merged.push(row)
+  }
   // Recompute canonical serialization even when this row's slug did not
   // change: arrival of a duplicate can make the old slug route ambiguous,
   // in which case viewToPath switches the selected row to its full ID.
-  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.value, next)
+  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.value, merged)
   return canonical && canonical !== urlPath.value ? canonical : null
+}
+
+/** PROTO (3.0): after a member is (re)hydrated, the selected session's
+ *  canonical URL may have changed (a demoted row now routes through its
+ *  family root's project). Rewrite in place when it did. */
+export function syncSelectedURL(): void {
+  const id = selectedId.peek()
+  if (!id) return
+  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.peek(), sessions.peek())
+  if (!canonical || canonical === urlPath.peek()) return
+  urlPath.value = canonical
+  navigate(canonical + currentHash(), true)
 }
 
 /**
@@ -1611,11 +1720,13 @@ let lastSessionEpoch = 0
  */
 let streamBootID: string | null = null
 let resumeEpoch = 0
+let streamConn: string | null = null
 
 /** Query string for a session-stream subscription, including the resume hint
- * when one is available. Exported for tests. */
+ * when one is available. Exported for tests. PROTO (3.0): `view=roots` — the
+ * world state is roots only; children load on demand (children.ts). */
 export function sessionStreamURL(): string {
-  const base = '/v1/events?session_stream=3&delta=1'
+  const base = '/v1/events?session_stream=3&view=roots&delta=1'
   if (streamBootID && resumeEpoch > 0) {
     return `${base}&since=${resumeEpoch}&boot=${encodeURIComponent(streamBootID)}`
   }
@@ -1623,10 +1734,17 @@ export function sessionStreamURL(): string {
 }
 
 /** `stream.hello` is the daemon's answer to `delta=1`: it names the boot the
- * epochs belong to. A different boot invalidates any resume point we hold. */
-export function noteStreamHello(bootID: string): void {
+ * epochs belong to (a different boot invalidates any resume point we hold)
+ * and the connection id scopes are registered under. */
+export function noteStreamHello(bootID: string, connID?: string): void {
   if (streamBootID !== null && streamBootID !== bootID) resumeEpoch = 0
   streamBootID = bootID
+  streamConn = connID ?? null
+}
+
+/** The current stream connection id (null before hello / after a drop). */
+export function streamConnID(): string | null {
+  return streamConn
 }
 
 export function _deltaResumeState(): { bootID: string | null, epoch: number } {
@@ -1636,6 +1754,7 @@ export function _deltaResumeState(): { bootID: string | null, epoch: number } {
 export function _resetDeltaResumeState(): void {
   streamBootID = null
   resumeEpoch = 0
+  streamConn = null
 }
 
 /**
@@ -1651,14 +1770,42 @@ export function _resetDeltaResumeState(): void {
  * the order the daemon emits snapshots in (wire.Converter sorts by id), so a
  * delta-fed store and a snapshot-fed store are positionally identical.
  */
+/** One scope's payload inside a folded delta (PROTO 3.0 round 2). */
+export interface ScopePayload {
+  from_epoch?: number
+  total?: number
+  upsert?: ProtocolSession[]
+  remove?: string[]
+  reset?: boolean
+}
+
 export function applySessionsDelta(
   bootID: string, fromEpoch: number, epoch: number,
   upsert: ProtocolSession[], remove: string[],
+  scopes?: Record<string, ScopePayload>,
 ): boolean {
   if (sessionStreamMode === 'legacy') return false
   if (!Number.isSafeInteger(epoch) || epoch <= 0 || !Number.isSafeInteger(fromEpoch)) return false
   if (streamBootID !== null && bootID !== streamBootID) return false
   if (resumeEpoch === 0 || fromEpoch !== resumeEpoch || epoch < fromEpoch) return false
+  // One epoch, one transaction: the world rows and every scope payload
+  // commit inside one signals batch, so a root's descendant_counts and its
+  // open children rows are never observed at different epochs (round-2 D1).
+  const resets: string[] = []
+  batch(() => {
+    applyWorldDelta(epoch, upsert, remove)
+    for (const scope of Object.keys(scopes ?? {}).sort()) {
+      const p = scopes![scope]
+      if (p.reset) { resets.push(scope); continue }
+      if (!scopeHooks.onScopeDelta(scope, p.from_epoch ?? fromEpoch, epoch, p.total, p.upsert ?? [], p.remove ?? [])) resets.push(scope)
+    }
+  })
+  // Reloads are async fetches; they start after the atomic commit.
+  for (const scope of resets) scopeHooks.onScopeReset(scope)
+  return true
+}
+
+function applyWorldDelta(epoch: number, upsert: ProtocolSession[], remove: string[]): void {
   const prev = _rawSessions.peek()
   const removed = new Set(remove)
   const pending = new Map<string, Session>()
@@ -1677,7 +1824,6 @@ export function applySessionsDelta(
   // A delta supersedes any transaction still staging for an older epoch.
   if (sessionsBootstrap && sessionsBootstrap.epoch <= epoch) sessionsBootstrap = null
   applySessionsSnapshot(out)
-  return true
 }
 
 /** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
@@ -1782,8 +1928,10 @@ export function applySessionsSnapshot(list: Session[]): void {
   // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
   // soon as the daemon publishes it. Computed before we commit the new
   // array so the launch navigation runs against the new state.
-  const prevIds = new Set(_rawSessions.value.map(s => s.id))
+  const prevRows = _rawSessions.value
+  const prevIds = new Set(prevRows.map(s => s.id))
   const newIds = list.filter(s => !prevIds.has(s.id)).map(s => s.id)
+  scopeHooks.onCommit(prevRows, list)
 
   const rewritten = commitWithSlugRewrite(list, () => {
     sessionsLoaded.value = true
@@ -1797,6 +1945,14 @@ export function applySessionsSnapshot(list: Session[]): void {
       connState.value = 'connected'
       reconcilePromotionPending(list)
     })
+  }
+
+  // PROTO (3.0): rows that left the roots view but the user is still holding
+  // on to — the selected session, or one with a promotion in flight — are
+  // members now; re-hydrate them by id so selection and announcements land.
+  const nextIds = new Set(list.map(s => s.id))
+  for (const id of new Set([selectedId.peek(), ...promotionPending.peek().keys()])) {
+    if (id && prevIds.has(id) && !nextIds.has(id) && !_hydrated.peek().has(id)) void scopeHooks.ensureMember(id)
   }
 
   if (newIds.length > 0 && consumePendingLaunch()) {
@@ -2317,6 +2473,10 @@ export function reconcilePromotionPending(nextSessions: readonly Session[]): voi
   for (const [id, entry] of pending) {
     const session = byId.get(id)
     if (!session) {
+      // PROTO (3.0): a demoted row LEAVES the roots-only world state (it is a
+      // member now) and comes back hydrated a moment later; keep the pending
+      // entry so the arrival can announce. The TTL still bounds a real loss.
+      if (entry.kind === 'demote') continue
       nextPending.delete(id)
       clearPromotionTimer(id)
       const old = nextAnnouncements.get(id)
@@ -2481,7 +2641,18 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
     projects.value,
     sessions.value,
   )
-  if (!path) return false
+  if (!path) {
+    // PROTO (3.0): a family member outside the roots-only world state has no
+    // row yet. Fetch it (with its spine); callers that poll this function
+    // succeed once the row is hydrated, deep-link style.
+    // ('missing' is retried here: a just-registered member can be a beat
+    // ahead of the daemon's published snapshot.)
+    if (!sessions.value.some(s => s.id === sessionId) && memberLookups.value.get(sessionId) !== 'loading') {
+      _noteMemberLookup(sessionId, 'loading')
+      scopeHooks.ensureMember(sessionId).then(found => { _noteMemberLookup(sessionId, found ? null : 'missing') })
+    }
+    return false
+  }
   // navigate() carries the tab-identity params (?filter=, ?sidebar=),
   // so programmatic navigation doesn't un-pin a narrowed tab.
   navigate(path, replace)
@@ -2502,6 +2673,26 @@ export function retrySSE(): void {
 
 export function initStore(): () => void {
   const cleanups: (() => void)[] = []
+
+  // PROTO (3.0): a member deep link (`~id`) names a row outside the roots-only
+  // world state. Fetch it (with its spine) once the world is loaded; `view`
+  // stays null meanwhile so the terminal does not flash home.
+  cleanups.push(effect(() => {
+    if (!sessionsLoaded.value || !worldLoaded.value) return
+    const id = urlMemberId(urlPath.value)
+    if (!id || memberLookups.value.has(id)) return
+    if (sessions.value.some(s => s.id === id)) return
+    _noteMemberLookup(id, 'loading')
+    scopeHooks.ensureMember(id).then(found => {
+      _noteMemberLookup(id, found ? null : 'missing')
+    })
+  }))
+  // Keep the selected family member live: its parent's children scope is
+  // what delivers its updates.
+  cleanups.push(effect(() => {
+    const s = selected.value
+    if (s?.parent_session_id && _hydrated.value.has(s.id)) scopeHooks.keepMemberLive(s.parent_session_id)
+  }))
 
   // Sidebar-mode repair: the URL mirrors the `sidebarMode` signal, but
   // history entries snapshot the query string at push time, so Back can
@@ -2666,8 +2857,10 @@ export function initStore(): () => void {
   // unchanged.
   addSourceListener('stream.hello', (e) => {
     try {
-      const { boot_id: bootID } = JSON.parse(e.data) as { boot_id?: string }
-      if (typeof bootID === 'string' && bootID) noteStreamHello(bootID)
+      const { boot_id: bootID, conn_id: connID } = JSON.parse(e.data) as { boot_id?: string, conn_id?: string }
+      if (typeof bootID === 'string' && bootID) noteStreamHello(bootID, typeof connID === 'string' ? connID : undefined)
+      // A new connection holds no scopes: re-register every open family.
+      scopeHooks.onHello()
     } catch (err) {
       console.warn('stream.hello: bad event', err)
     }
@@ -2678,8 +2871,9 @@ export function initStore(): () => void {
       const d = JSON.parse(e.data) as {
         boot_id: string, epoch: number, from_epoch: number
         upsert?: ProtocolSession[], remove?: string[]
+        scopes?: Record<string, ScopePayload>
       }
-      if (applySessionsDelta(d.boot_id, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [])) return
+      if (applySessionsDelta(d.boot_id, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [], d.scopes)) return
       // The chain broke (bug, or a daemon that answered a resume we cannot
       // apply). Drop the resume point and take a full bootstrap.
       console.warn('snapshot.sessions.delta: chain broken, re-bootstrapping')

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,61 +50,301 @@ type sseFanout struct {
 	world    *wire.WorldPayload
 	subs     map[chan fanoutMessage]struct{}
 
-	// SPIKE (R5/R6). bootID makes epochs comparable across daemon restarts:
-	// epochs restart at 1 on every boot, so a resume request is only honored
-	// when the boot id matches too. ring/ownedFilter power deltas + resume.
+	// PROTO (3.0). bootID makes epochs comparable across daemon restarts;
+	// ring tracks per-view changesets; current is the memo of the state the
+	// last broadcast left behind (what a new subscriber or a scope baseline
+	// starts from); conns holds per-connection scope registrations, keyed by
+	// the connection id handed out in stream.hello.
 	bootID      string
 	ring        *deltaRing
 	ownedFilter func(string) bool
+	current     *sessionEncodeMemo
+	conns       map[string]*connScopes
+}
+
+// connScopes is one SSE connection's registered scopes. Per client-facing
+// scope it records the ring key (scope + window cursor) and `since`, the
+// epoch the scope was baselined on: the folded delta diffs a scope from
+// max(connection's last sent epoch, since).
+type connScopes struct {
+	scopes map[string]connScope
+}
+
+type connScope struct {
+	ringKey string
+	since   uint64
+}
+
+// maxScopesPerConn bounds what one connection can ask the daemon to track
+// (round-2 D3/M3): a deep `ls tree` expansion is ~one scope per expanded node.
+const maxScopesPerConn = 64
+
+// ScopeAdd is one entry of POST /v1/events/scopes `add`.
+type ScopeAdd struct {
+	Scope  string `json:"scope"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// ScopeWindow is what the registration reply says about one scope: how many
+// rows of the client's held pages are live (the viewport cap may be smaller
+// than what it holds).
+type ScopeWindow struct {
+	Rows  int `json:"rows"`
+	Total int `json:"total"`
 }
 
 // sessionEncodeMemo encodes one broadcast sessions payload at most once per
-// (filter class × protocol) and shares the result across every SSE
-// subscriber. Before this, encode ran per subscriber per snapshot — the
-// dominant storm cost at O(N × rate × subscribers).
+// (view × protocol) and shares the result across every SSE subscriber.
 //
-// Safe because BroadcastFrames fans the identical *wire.SessionsPayload out
-// to every subscriber and no consumer mutates it (the fanout caches its own
-// deep copy; peer subscribers narrow via FilterOwned, which allocates).
-// The protocol-3 epoch is drawn eagerly under the fanout mutex, so any two
-// broadcasts observed by one connection carry strictly increasing epochs
-// regardless of which subscriber triggers encoding first.
+// The memo owns an ANNOTATED copy of the payload (descendant counts stamped,
+// family index built) computed once per broadcast; every view — full or roots,
+// browser or peer — and every scope's rows are cut from that one copy, so a
+// root's counts, its children page and a scoped delta all describe the same
+// epoch.
 type sessionEncodeMemo struct {
 	epoch   uint64
 	payload *wire.SessionsPayload
 
-	mu           sync.Mutex
-	peerFiltered *wire.SessionsPayload
-	proto2       map[bool][]byte                // peer-filtered? -> marshaled payload
-	proto3       map[bool][]sessionstream.Event // peer-filtered? -> transaction events
-	index        map[bool]map[string]int        // SPIKE: peer-filtered? -> id -> row position
+	mu        sync.Mutex
+	annotated []wire.Session
+	family    *wire.FamilyIndex
+	views     map[int]*wire.SessionsPayload
+	index     map[int]map[string]int
+	proto2    map[int][]byte
+	proto3    map[int][]sessionstream.Event
+	// children memoizes each parent's sorted direct-children listing: every
+	// page and every scope window of that parent (from any connection) is a
+	// slice of it, so the sort runs once per epoch (round-2 M4).
+	children map[string][]wire.Session
+	// scopeRows memoizes a ring scope's row set and index for this epoch,
+	// shared by the ring diff and by every connection's fold.
+	scopeRows map[string]*scopeRowsMemo
+	// hashes memoizes the ring's per-row fingerprint for this epoch (see
+	// rowHasher): views and scopes share rows, the marshal runs once.
+	hashes map[string]uint64
+	// isLocalPeer is captured at first use: it is the same predicate for
+	// every subscriber of one daemon.
+	isLocalPeer func(string) bool
 }
 
-// SPIKE (R5): DeltaRows resolves touched ids against this broadcast's payload
-// for one audience. Present ids come back as upserts carrying the row's value
-// AT THIS EPOCH; absent ids come back as removals — which is how a row that
-// was filtered out (ownership flip, dismissal) reaches the client as a
-// removal rather than going stale.
-func (m *sessionEncodeMemo) DeltaRows(peer bool, isLocalPeer func(string) bool, touched []string) ([]wire.Session, []string) {
+func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionEncodeMemo {
+	if payload == nil {
+		return nil
+	}
+	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}, hashes: map[string]uint64{}, children: map[string][]wire.Session{}, scopeRows: map[string]*scopeRowsMemo{}}
+}
+
+type scopeRowsMemo struct {
+	rows  []wire.Session
+	index map[string]int
+	total int
+}
+
+// RowHash implements rowHasher: one marshal per row per epoch. Every view is
+// cut from the memo's one annotated copy, so a row differs between views in
+// exactly one field: project_index, which the roots views re-rank
+// (wire.RootsView). The key carries it so the two values never share a hash.
+//
+// INVARIANT: ids are unique within one payload (local ids are store-unique,
+// peer ids are namespaced `id@peer`). A payload with two rows of one id
+// would make the second alias the first's hash and its changes invisible to
+// the ring; the converter never produces one, and the delta tests' fixtures
+// must not either.
+func (m *sessionEncodeMemo) RowHash(s wire.Session) uint64 {
+	key := s.ID
+	if s.ProjectIndex != 0 {
+		key += "#" + strconv.Itoa(s.ProjectIndex)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	p := m.payloadForLocked(peer, isLocalPeer)
-	idx, ok := m.index[peer]
+	if h, ok := m.hashes[key]; ok {
+		return h
+	}
+	h := hashSession(s)
+	m.hashes[key] = h
+	return h
+}
+
+// SetLocalPeer installs the ownership predicate used by the peer views.
+func (m *sessionEncodeMemo) SetLocalPeer(isLocalPeer func(string) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.isLocalPeer == nil {
+		m.isLocalPeer = isLocalPeer
+	}
+}
+
+func (m *sessionEncodeMemo) annotateLocked() {
+	if m.annotated != nil {
+		return
+	}
+	rows := make([]wire.Session, len(m.payload.Sessions))
+	copy(rows, m.payload.Sessions)
+	m.family = wire.AnnotateDescendantCounts(rows)
+	m.annotated = rows
+}
+
+// Annotated returns the full payload with descendant counts stamped, and its
+// family index. Callers must not mutate either.
+func (m *sessionEncodeMemo) Annotated() ([]wire.Session, *wire.FamilyIndex) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.annotateLocked()
+	return m.annotated, m.family
+}
+
+func (m *sessionEncodeMemo) viewLocked(class int) *wire.SessionsPayload {
+	if p, ok := m.views[class]; ok {
+		return p
+	}
+	m.annotateLocked()
+	rows := m.annotated
+	family := m.family
+	switch class {
+	case deltaClassOwned, deltaClassRootsOwned:
+		rows = wire.SessionsPayload{Sessions: rows}.FilterOwned(m.isLocalPeer).Sessions
+		// Round-2 M6: roots are decided against the rows THIS audience sees.
+		// A row whose family parent is outside the audience is a root here,
+		// not a child of something the receiver will never get. (Its
+		// descendant_counts still describe the full payload's subtree.)
+		family = wire.IndexFamilies(rows)
+	}
+	switch class {
+	case deltaClassRoots, deltaClassRootsOwned:
+		rows = wire.RootsView(rows, family)
+	}
+	p := &wire.SessionsPayload{Sessions: rows}
+	m.views[class] = p
+	return p
+}
+
+// ViewRows is the row list one view class sees at this epoch.
+func (m *sessionEncodeMemo) ViewRows(class int) []wire.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.viewLocked(class).Sessions
+}
+
+// childrenLocked is the memoized sorted direct-children listing of id.
+func (m *sessionEncodeMemo) childrenLocked(id string) ([]wire.Session, bool) {
+	m.annotateLocked()
+	if all, ok := m.children[id]; ok {
+		return all, all != nil
+	}
+	all, ok := wire.SortedChildren(m.annotated, m.family, id, false)
+	if !ok {
+		m.children[id] = nil
+		return nil, false
+	}
+	if all == nil {
+		all = []wire.Session{}
+	}
+	m.children[id] = all
+	return all, true
+}
+
+// ChildrenPage cuts one page of id's direct children from the memoized
+// listing (the descendants=1 flattening is not memoized; it is rare).
+func (m *sessionEncodeMemo) ChildrenPage(id string, descendants bool, cursor string, limit int) (wire.ChildrenPage, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if descendants {
+		m.annotateLocked()
+		return wire.ListChildren(m.annotated, m.family, id, true, cursor, limit)
+	}
+	all, ok := m.childrenLocked(id)
+	if !ok {
+		return wire.ChildrenPage{}, false
+	}
+	return wire.PageOf(all, id, false, cursor, limit), true
+}
+
+func (m *sessionEncodeMemo) scopeLocked(key string) *scopeRowsMemo {
+	if sm, ok := m.scopeRows[key]; ok {
+		return sm
+	}
+	m.annotateLocked()
+	sm := &scopeRowsMemo{}
+	scope, cursor := splitScopeRingKey(key)
+	switch {
+	case strings.HasPrefix(scope, scopeChildrenPrefix):
+		id := scope[len(scopeChildrenPrefix):]
+		if all, ok := m.childrenLocked(id); ok {
+			sm.rows = wire.Window(all, cursor, scopeWindowMax)
+			sm.total = len(all)
+		}
+	case strings.HasPrefix(scope, scopeSessionPrefix):
+		id := scope[len(scopeSessionPrefix):]
+		for i := range m.annotated {
+			if m.annotated[i].ID == id {
+				sm.rows = m.annotated[i : i+1]
+				sm.total = 1
+				break
+			}
+		}
+	}
+	sm.index = make(map[string]int, len(sm.rows))
+	for i, s := range sm.rows {
+		sm.index[s.ID] = i
+	}
+	m.scopeRows[key] = sm
+	return sm
+}
+
+// ScopeRows is the row list a ring scope sees at this epoch: a children
+// scope's viewport (wire.Window of the parent's listing) or one session.
+func (m *sessionEncodeMemo) ScopeRows(key string) []wire.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.scopeLocked(key).rows
+}
+
+// ScopeTotal is the size of the whole listing a children scope windows.
+func (m *sessionEncodeMemo) ScopeTotal(key string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.scopeLocked(key).total
+}
+
+func (m *sessionEncodeMemo) indexLocked(class int) (*wire.SessionsPayload, map[string]int) {
+	p := m.viewLocked(class)
+	idx, ok := m.index[class]
 	if !ok {
 		idx = make(map[string]int, len(p.Sessions))
 		for i, s := range p.Sessions {
 			idx[s.ID] = i
 		}
-		if m.index == nil {
-			m.index = map[bool]map[string]int{}
-		}
-		m.index[peer] = idx
+		m.index[class] = idx
 	}
+	return p, idx
+}
+
+// DeltaRows resolves touched ids against this broadcast's view for one class.
+// Present ids come back as upserts carrying the row's value AT THIS EPOCH;
+// absent ids come back as removals — which is how a row that was filtered out
+// (ownership flip, dismissal, became a child) reaches the client as a
+// removal rather than going stale.
+func (m *sessionEncodeMemo) DeltaRows(class int, touched []string) ([]wire.Session, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, idx := m.indexLocked(class)
+	return resolveTouched(p.Sessions, idx, touched)
+}
+
+// ScopeDeltaRows is DeltaRows for a dynamic scope (memoized rows + index).
+func (m *sessionEncodeMemo) ScopeDeltaRows(key string, touched []string) ([]wire.Session, []string) {
+	m.mu.Lock()
+	sm := m.scopeLocked(key)
+	m.mu.Unlock()
+	return resolveTouched(sm.rows, sm.index, touched)
+}
+
+func resolveTouched(rows []wire.Session, idx map[string]int, touched []string) ([]wire.Session, []string) {
 	upsert := make([]wire.Session, 0, len(touched))
 	remove := make([]string, 0, 8)
 	for _, id := range touched {
 		if i, present := idx[id]; present {
-			upsert = append(upsert, p.Sessions[i])
+			upsert = append(upsert, rows[i])
 			continue
 		}
 		remove = append(remove, id)
@@ -110,59 +352,41 @@ func (m *sessionEncodeMemo) DeltaRows(peer bool, isLocalPeer func(string) bool, 
 	return upsert, remove
 }
 
-func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionEncodeMemo {
-	if payload == nil {
-		return nil
-	}
-	return &sessionEncodeMemo{epoch: epoch, payload: payload, proto2: map[bool][]byte{}, proto3: map[bool][]sessionstream.Event{}}
-}
-
-func (m *sessionEncodeMemo) payloadForLocked(peer bool, isLocalPeer func(string) bool) *wire.SessionsPayload {
-	if !peer {
-		return m.payload
-	}
-	if m.peerFiltered == nil {
-		filtered := m.payload.FilterOwned(isLocalPeer)
-		m.peerFiltered = &filtered
-	}
-	return m.peerFiltered
-}
-
 // Proto2 returns the marshaled snapshot.sessions body for the subscriber's
-// filter class, encoding it on first use.
-func (m *sessionEncodeMemo) Proto2(peer bool, isLocalPeer func(string) bool) ([]byte, error) {
+// view class, encoding it on first use.
+func (m *sessionEncodeMemo) Proto2(class int) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if data, ok := m.proto2[peer]; ok {
+	if data, ok := m.proto2[class]; ok {
 		return data, nil
 	}
-	data, err := json.Marshal(m.payloadForLocked(peer, isLocalPeer))
+	data, err := json.Marshal(m.viewLocked(class))
 	if err != nil {
 		return nil, err
 	}
-	m.proto2[peer] = data
+	m.proto2[class] = data
 	return data, nil
 }
 
 // Proto3 returns the protocol-3 transaction events for the subscriber's
-// filter class, encoding them on first use.
-func (m *sessionEncodeMemo) Proto3(peer bool, isLocalPeer func(string) bool) ([]sessionstream.Event, error) {
+// view class, encoding them on first use.
+func (m *sessionEncodeMemo) Proto3(class int) ([]sessionstream.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if events, ok := m.proto3[peer]; ok {
+	if events, ok := m.proto3[class]; ok {
 		return events, nil
 	}
-	p := m.payloadForLocked(peer, isLocalPeer)
+	p := m.viewLocked(class)
 	events, err := sessionstream.Encode(m.epoch, p.Sessions, func(s wire.Session) string { return s.ID })
 	if err != nil {
 		return nil, err
 	}
-	m.proto3[peer] = events
+	m.proto3[class] = events
 	return events, nil
 }
 
 func newSSEFanout() *sseFanout {
-	return &sseFanout{subs: make(map[chan fanoutMessage]struct{}), bootID: newBootID(), ring: newDeltaRing()}
+	return &sseFanout{subs: make(map[chan fanoutMessage]struct{}), bootID: newBootID(), ring: newDeltaRing(), conns: map[string]*connScopes{}}
 }
 
 func newBootID() string {
@@ -173,9 +397,8 @@ func newBootID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// SetOwnershipFilter installs the ?as=peer membership predicate so the ring
-// can track the peer audience's changesets. Called once at startup, before
-// any broadcast.
+// SetOwnershipFilter installs the ?as=peer membership predicate so the peer
+// views can be cut. Called once at startup, before any broadcast.
 func (f *sseFanout) SetOwnershipFilter(isLocalPeer func(string) bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -184,7 +407,23 @@ func (f *sseFanout) SetOwnershipFilter(isLocalPeer func(string) bool) {
 
 func (f *sseFanout) BootID() string { return f.bootID }
 
-// TouchedSince is the delta chain lookup (see deltaRing).
+// Epoch is the current fanout epoch.
+func (f *sseFanout) Epoch() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.epoch
+}
+
+// CurrentMemo is the memo of the state the last broadcast left behind (nil
+// before the first sessions broadcast). Read paths that must agree with what
+// subscribers were told at this epoch (children pages) cut from it.
+func (f *sseFanout) CurrentMemo() (*sessionEncodeMemo, uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.current, f.epoch
+}
+
+// TouchedSince is the delta chain lookup for a view class (see deltaRing).
 func (f *sseFanout) TouchedSince(from, to uint64, class int) ([]string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -192,6 +431,153 @@ func (f *sseFanout) TouchedSince(from, to uint64, class int) ([]string, bool) {
 		return nil, false
 	}
 	return f.ring.TouchedSince(from, to, class)
+}
+
+// ScopeTouchedSince is the delta chain lookup for a dynamic scope.
+func (f *sseFanout) ScopeTouchedSince(from, to uint64, key string) ([]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ring == nil {
+		return nil, false
+	}
+	return f.ring.ScopeTouchedSince(from, to, key)
+}
+
+// DemandClass starts tracking a view class's changesets (idempotent, sticky).
+func (f *sseFanout) DemandClass(class int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ring == nil {
+		return
+	}
+	f.ring.DemandClass(class, f.current)
+}
+
+// RegisterConn hands a delta-capable connection its id. The returned release
+// drops every scope the connection still holds.
+func (f *sseFanout) RegisterConn() (string, func()) {
+	id := newBootID()
+	f.mu.Lock()
+	f.conns[id] = &connScopes{scopes: map[string]connScope{}}
+	f.mu.Unlock()
+	return id, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		cs, ok := f.conns[id]
+		if !ok {
+			return
+		}
+		if f.ring != nil {
+			for _, sc := range cs.scopes {
+				f.ring.ReleaseScope(sc.ringKey)
+			}
+		}
+		delete(f.conns, id)
+	}
+}
+
+// ScopesTracked is the number of distinct viewports the ring diffs per
+// broadcast (metric; round-2 D3).
+func (f *sseFanout) ScopesTracked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ring == nil {
+		return 0
+	}
+	return f.ring.ScopeCount()
+}
+
+// errTooManyScopes is returned when a connection would exceed maxScopesPerConn.
+var errTooManyScopes = errors.New("too many scopes for one connection")
+
+// UpdateScopes applies one POST /v1/events/scopes request. Re-adding a scope
+// the connection already holds REPLACES its window (the client paged deeper or
+// reloaded). The returned epoch is the chain start of the added scopes: the
+// epoch of the state their baseline was taken from (f.current), which is what
+// a page cut from the current memo carries. windows reports, per added scope,
+// how many held rows are live under the viewport cap and the listing total.
+func (f *sseFanout) UpdateScopes(conn string, add []ScopeAdd, remove []string) (epoch uint64, windows map[string]ScopeWindow, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cs, known := f.conns[conn]
+	if !known {
+		return 0, nil, errUnknownConn
+	}
+	for _, key := range remove {
+		sc, held := cs.scopes[key]
+		if !held {
+			continue
+		}
+		delete(cs.scopes, key)
+		if f.ring != nil {
+			f.ring.ReleaseScope(sc.ringKey)
+		}
+	}
+	base := f.epoch
+	if f.current != nil {
+		base = f.current.epoch
+	}
+	windows = map[string]ScopeWindow{}
+	for _, a := range add {
+		if !validScopeKey(a.Scope) {
+			continue
+		}
+		if _, _, ok := wire.DecodeCursor(a.Cursor); !ok {
+			continue
+		}
+		ringKey := scopeRingKey(a.Scope, a.Cursor)
+		if prev, held := cs.scopes[a.Scope]; held {
+			if prev.ringKey == ringKey {
+				windows[a.Scope] = f.windowLocked(ringKey)
+				continue
+			}
+			delete(cs.scopes, a.Scope)
+			if f.ring != nil {
+				f.ring.ReleaseScope(prev.ringKey)
+			}
+		} else if len(cs.scopes) >= maxScopesPerConn {
+			return base, windows, errTooManyScopes
+		}
+		cs.scopes[a.Scope] = connScope{ringKey: ringKey, since: base}
+		if f.ring != nil {
+			f.ring.AddScope(ringKey, f.current)
+		}
+		windows[a.Scope] = f.windowLocked(ringKey)
+	}
+	return base, windows, nil
+}
+
+var errUnknownConn = errors.New("unknown stream connection")
+
+func (f *sseFanout) windowLocked(ringKey string) ScopeWindow {
+	if f.current == nil {
+		return ScopeWindow{}
+	}
+	return ScopeWindow{Rows: len(f.current.ScopeRows(ringKey)), Total: f.current.ScopeTotal(ringKey)}
+}
+
+// connScopeView is one registered scope as the fold sees it.
+type connScopeView struct {
+	scope   string
+	ringKey string
+	since   uint64
+}
+
+// ScopesOf snapshots a connection's scopes, sorted by scope key so the folded
+// payload is deterministic (round-2 L5).
+func (f *sseFanout) ScopesOf(conn string) []connScopeView {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cs, ok := f.conns[conn]
+	if !ok {
+		return nil
+	}
+	out := make([]connScopeView, 0, len(cs.scopes))
+	for k, v := range cs.scopes {
+		out = append(out, connScopeView{scope: k, ringKey: v.ringKey, since: v.since})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].scope < out[j].scope })
+	return out
 }
 
 // DisableDeltas is the kill switch: without a ring no chain can be offered,
@@ -242,6 +628,14 @@ func (f *sseFanout) currentLocked() wire.Frames {
 	return out
 }
 
+func (f *sseFanout) newMemoLocked(epoch uint64, payload *wire.SessionsPayload) *sessionEncodeMemo {
+	m := newSessionEncodeMemo(epoch, payload)
+	if m != nil {
+		m.isLocalPeer = f.ownedFilter
+	}
+	return m
+}
+
 func (f *sseFanout) Subscribe() (fanoutMessage, <-chan fanoutMessage, func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -252,8 +646,16 @@ func (f *sseFanout) Subscribe() (fanoutMessage, <-chan fanoutMessage, func()) {
 	// A subscribe epoch is NOT a broadcast: it publishes the state the last
 	// broadcast left behind, so it appends no ring entry. Resuming from it is
 	// still well defined — the union of entries strictly newer than it is
-	// exactly what the subscriber missed.
-	initial := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions)}
+	// exactly what the subscriber missed. The initial memo shares the current
+	// memo's annotation work when there is one.
+	memo := f.newMemoLocked(f.epoch, frames.Sessions)
+	if memo != nil && f.current != nil {
+		memo.annotated, memo.family = f.current.annotated, f.current.family
+		for k, v := range f.current.views {
+			memo.views[k] = v
+		}
+	}
+	initial := fanoutMessage{Frames: frames, SessionsEncode: memo}
 	cancel := func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -298,10 +700,19 @@ func (f *sseFanout) BroadcastFrames(frames wire.Frames) {
 		f.world = &copy
 	}
 	f.epoch++
-	if f.ring != nil && frames.Sessions != nil {
-		f.ring.Record(f.epoch, frames.Sessions, f.ownedFilter)
+	var memo *sessionEncodeMemo
+	if frames.Sessions != nil {
+		memo = f.newMemoLocked(f.epoch, frames.Sessions)
+		if f.ring != nil {
+			f.ring.Record(f.epoch, memo)
+		}
+		f.current = memo
+	} else if f.current != nil {
+		// A world-only broadcast leaves the sessions view where it was; the
+		// current memo simply advances its epoch label.
+		// (Subscribers receive no sessions frame and keep their chain.)
 	}
-	msg := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions), ProjectsUpdate: frames.World != nil}
+	msg := fanoutMessage{Frames: frames, SessionsEncode: memo, ProjectsUpdate: frames.World != nil}
 	for ch := range f.subs {
 		fanoutEnqueue(ch, msg)
 	}

@@ -36,6 +36,7 @@ type WireSession = {
   title?: string
   adapter?: string
   parent_session_id?: string
+  descendant_counts?: { total: number }
   launched_from_session_id?: string
   semantic_agent?: boolean
 }
@@ -195,9 +196,15 @@ test.beforeAll(async () => {
     ],
   })).status).toBe(200)
 
-  // Wait for the hub's projection: namespaced ids, namespaced family edges.
+  // Wait for the hub's projection. PROTO (3.0): the hub<->spoke link carries
+  // ROOTS + descendant_counts; a peer child is reachable through the
+  // forwarded detail route (namespaced ids, namespaced family edges), not in
+  // the hub's /v1/sessions list.
   await pollUntil(async () => {
-    const row = (await hubSessions()).find(s => s.id === `${childId}@${peerName}`)
+    const root = (await hubSessions()).find(s => s.id === `${parentId}@${peerName}`)
+    if (!root || (root.descendant_counts?.total ?? 0) < 1) return false
+    const { body } = await request(hub(), 'GET', `/v1/sessions/${childId}@${peerName}`)
+    const row = body?.data?.session as WireSession | undefined
     return row?.parent_session_id === `${parentId}@${peerName}`
       && row?.launched_from_session_id === `${parentId}@${peerName}`
   }, { timeoutMs: 20_000, description: 'hub projects the peer family with namespaced edges' })

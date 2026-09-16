@@ -133,7 +133,13 @@ func (c *Client) Events() *sseclient.Client {
 	// parameter and continue sending snapshot.sessions, which this client
 	// still accepts; new daemons use the absence of the marker to serve old
 	// peers their legacy fallback.
-	return sseclient.New(c.baseURL+"/v1/events?as=peer&session_stream=3", opts...)
+	// PROTO (3.0): `view=roots` asks a 3.0 spoke for its roots-only feed
+	// (each root carrying descendant_counts; children are fetched on demand
+	// through the forwarded /children route) and `delta=1` for epoch-chained
+	// deltas instead of a full transaction per mutation. A 2.1 spoke ignores
+	// both and ships full transactions, which this client still accepts —
+	// the hub then computes the counts itself (mixed-version degrade).
+	return sseclient.New(c.baseURL+"/v1/events?as=peer&session_stream=3&view=roots&delta=1", opts...)
 }
 
 // GetHealth fetches GET /v1/health and returns the Data field of the
@@ -474,4 +480,28 @@ func (c *Client) pipeWS(parent context.Context, clientConn, spokeConn *websocket
 	clientConn.Close(websocket.StatusNormalClosure, "")
 	spokeConn.Close(websocket.StatusNormalClosure, "")
 	log.Printf("apiclient ProxyWS: %s disconnected", sessionID)
+}
+
+// GetJSON performs one authenticated GET against the spoke and returns the
+// raw body and status. PROTO (3.0): used by the hub to fetch a spoke's
+// children pages and single rows, which it re-namespaces before answering
+// the browser (a plain proxy would leak the spoke's bare ids).
+func (c *Client) GetJSON(ctx context.Context, path string) ([]byte, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, httpActionTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("apiclient GetJSON: %w", err)
+	}
+	c.setAuth(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("apiclient GetJSON: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("apiclient GetJSON: read: %w", err)
+	}
+	return body, resp.StatusCode, nil
 }

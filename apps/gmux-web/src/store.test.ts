@@ -833,8 +833,15 @@ describe('promote/demote pending request ownership', () => {
     const deletedSeq = beginPromotion('child', 'demote', 'root')
     reconcilePromotionPending([root])
     expect(deletedSeq).toBeTypeOf('number')
-    expect(promotionPending.value.has('child')).toBe(false)
+    // PROTO (3.0): a demoting row that vanishes from the list is the normal
+    // case — it left the roots-only world state and returns hydrated. The
+    // request stays pending (TTL-bounded) and announces on arrival.
+    expect(promotionPending.value.has('child')).toBe(true)
     expect(promotionAnnouncements.value.has('child')).toBe(false)
+    reconcilePromotionPending([root, { ...child, parent_session_id: 'root' }])
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq: deletedSeq, kind: 'demote', message: 'Returned to family.' })
+    promotionAnnouncements.value = new Map()
 
     _rawSessions.value = [root, child]
     const terminalSeq = beginPromotion('child', 'demote', 'root')
@@ -960,9 +967,11 @@ describe('promotion snapshots preserve the selected session\u2019s routing', () 
 
     applySessionsSnapshot([rootSession(), childSession(false)])
 
-    expect(urlPath.value).toBe('/alpha/pi/worker')
+    // PROTO (3.0): a member URL is id-addressed (it is fetched by id on a
+    // deep link), so rejoining the family rewrites to the `~id` form.
+    expect(urlPath.value).toBe('/alpha/pi/~1bbbbbbb')
     expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
-    expect(navCalls).toContainEqual(['/alpha/pi/worker', true])
+    expect(navCalls).toContainEqual(['/alpha/pi/~1bbbbbbb', true])
   })
 
   it('promoting a NON-selected session never touches the URL', () => {

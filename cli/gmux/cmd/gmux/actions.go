@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gmuxapp/gmux/packages/paths"
 	"io"
 	"net/http"
 	"net/url"
@@ -132,6 +133,14 @@ func resolveSessionContext(ctx context.Context, ref string) (cliSession, error) 
 		if err == nil {
 			return sess, nil
 		}
+		// PROTO (3.0): the list holds ROOTS (a hub's list holds a peer's
+		// roots only). An exact id — a family member, or `id@peer` — is
+		// still resolvable one-shot through GET /v1/sessions/{id}.
+		if isNoMatchError(err) {
+			if exact, ok := fetchSessionByIDContext(ctx, ref); ok {
+				return exact, nil
+			}
+		}
 		// Only retry on a clean miss ("no session matches"). Ambiguous
 		// refs, empty refs, and peer-hint misses are not transient.
 		if attempt >= maxRetries || !isNoMatchError(err) {
@@ -145,6 +154,44 @@ func resolveSessionContext(ctx context.Context, ref string) (cliSession, error) 
 		case <-timer.C:
 		}
 	}
+}
+
+// fetchSessionByIDContext resolves one exact session id (optionally
+// `id@peer`) through the single-row route. ok is false on any miss or error;
+// the caller falls back to the list-based matching and its retry.
+func fetchSessionByIDContext(ctx context.Context, ref string) (cliSession, bool) {
+	// Only exact ids (optionally `id@peer`) take this door; prefixes, slugs
+	// and titles keep going through the list.
+	id, peer, _ := strings.Cut(ref, "@")
+	if !paths.IsValidSessionID(id) || (peer != "" && !validPeerName.MatchString(peer)) {
+		return cliSession{}, false
+	}
+	client := gmuxdClient()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gmuxdBaseURL()+"/v1/sessions/"+url.PathEscape(ref), nil)
+	if err != nil {
+		return cliSession{}, false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return cliSession{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return cliSession{}, false
+	}
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Session cliSession `json:"session"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK || envelope.Data.Session.ID == "" {
+		return cliSession{}, false
+	}
+	if envelope.Data.Session.Peer != "" && !validPeerName.MatchString(envelope.Data.Session.Peer) {
+		return cliSession{}, false
+	}
+	return envelope.Data.Session, true
 }
 
 // isNoMatchError returns true when the error is the specific "no

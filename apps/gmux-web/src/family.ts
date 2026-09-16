@@ -179,6 +179,9 @@ export function familyRootId(id: string | null, source: FamilySource): string | 
  * roots and therefore do not get family controls. */
 export function hasFamily(session: Session, source: FamilySource): boolean {
   const index = indexFor(source)
+  // PROTO (3.0): in the roots-only world state a root's family is known by
+  // its counts before any member is loaded.
+  if ((session.descendant_counts?.total ?? 0) > 0) return true
   return index.childIds.has(session.id) || (index.childrenByParent.get(session.id)?.length ?? 0) > 0
 }
 

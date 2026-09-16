@@ -31,7 +31,7 @@
  * behavior and epoch handling are untouched.
  */
 
-import type { Session, SessionStatus } from './types'
+import type { DescendantCounts, Session, SessionStatus } from './types'
 
 // ── Field inventory ──────────────────────────────────────────────────────────
 //
@@ -48,7 +48,7 @@ const SESSION_SCALAR_KEYS = [
   'runner_version', 'binary_hash', 'project_slug', 'project_index',
 ] as const satisfies readonly (keyof Session)[]
 
-const SESSION_NESTED_KEYS = ['command', 'remotes', 'status'] as const satisfies readonly (keyof Session)[]
+const SESSION_NESTED_KEYS = ['command', 'remotes', 'status', 'descendant_counts'] as const satisfies readonly (keyof Session)[]
 
 type CoveredKey = typeof SESSION_SCALAR_KEYS[number] | typeof SESSION_NESTED_KEYS[number]
 // Compile-time exhaustiveness: if `Session` gains a field the comparator
@@ -89,6 +89,18 @@ function remotesEquals(a: Record<string, string> | undefined, b: Record<string, 
   return true
 }
 
+const COUNT_KEYS = ['total', 'alive', 'unread', 'error', 'waiting', 'active', 'running', 'children'] as const satisfies readonly (keyof DescendantCounts)[]
+type MissingCountKey = Exclude<keyof DescendantCounts, typeof COUNT_KEYS[number]>
+const _countKeysExhaustive: MissingCountKey extends never ? true : never = true
+void _countKeysExhaustive
+
+function countsEquals(a: DescendantCounts | undefined, b: DescendantCounts | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  for (const k of COUNT_KEYS) if (a[k] !== b[k]) return false
+  return true
+}
+
 /** Deep structural equality over the closed UI Session shape. */
 export function sessionRowEquals(a: Session, b: Session): boolean {
   if (a === b) return true
@@ -96,6 +108,7 @@ export function sessionRowEquals(a: Session, b: Session): boolean {
   return commandEquals(a.command, b.command)
     && remotesEquals(a.remotes, b.remotes)
     && statusEquals(a.status, b.status)
+    && countsEquals(a.descendant_counts, b.descendant_counts)
 }
 
 // ── Snapshot reconciliation ──────────────────────────────────────────────────

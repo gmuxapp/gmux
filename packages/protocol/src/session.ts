@@ -8,6 +8,21 @@ export const SessionStatusSchema = z.object({
   interrupted: z.boolean().optional().default(false),
 }).nullable()
 
+// PROTO (3.0): additive subtree summary carried by rows that have family
+// descendants. In the roots-only world state (`view=roots`) it is the only
+// thing the sidebar knows about a root's children; the rows themselves are
+// fetched on demand (GET /v1/sessions/{id}/children).
+export const DescendantCountsSchema = z.object({
+  total: z.number().int().nonnegative().default(0),
+  alive: z.number().int().nonnegative().default(0),
+  unread: z.number().int().nonnegative().default(0),
+  error: z.number().int().nonnegative().default(0),
+  waiting: z.number().int().nonnegative().default(0),
+  active: z.number().int().nonnegative().default(0),
+  running: z.number().int().nonnegative().default(0),
+  children: z.number().int().nonnegative().default(0),
+})
+
 export const SessionSchema = z.object({
   id: z.string().min(1),
   peer: z.string().optional(),
@@ -84,6 +99,7 @@ export const SessionSchema = z.object({
   // is the session's authoritative position inside that project.
   project_slug: z.string().optional(),
   project_index: z.number().int().nonnegative().optional(),
+  descendant_counts: DescendantCountsSchema.optional(),
 })
 
 export const AttachResponseSchema = z.object({
@@ -95,5 +111,6 @@ export const AttachResponseSchema = z.object({
 export const SessionSummarySchema = SessionSchema
 export type SessionSummary = z.infer<typeof SessionSchema>
 export type Session = z.infer<typeof SessionSchema>
+export type DescendantCounts = z.infer<typeof DescendantCountsSchema>
 export type SessionStatus = z.infer<typeof SessionStatusSchema>
 export type AttachResponse = z.infer<typeof AttachResponseSchema>

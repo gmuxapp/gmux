@@ -55,6 +55,13 @@ type Peer struct {
 	// snapshot; retained across disconnects, matching the retained rows.
 	sessionsOmitted      int
 	sessionsOmittedCodes map[string]int
+	// lastRows is the spoke's last committed row set, in the spoke's own
+	// namespace, kept so a PROTO (3.0) snapshot.sessions.delta can be applied
+	// on top of it. Reset on every full transaction.
+	lastRows []SessionProjection
+	// streamCancel tears down the current SSE stream (a delta that does not
+	// chain must force a clean re-bootstrap).
+	streamCancel context.CancelFunc
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -470,6 +477,11 @@ func (p *Peer) run(ctx context.Context) {
 // connection, allowing the caller to track whether the connection was
 // established (used to decide whether to reset backoff).
 func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	p.mu.Lock()
+	p.streamCancel = cancel
+	p.mu.Unlock()
 	sse := p.api.Events()
 	// Staging belongs to one transport connection. If it disconnects before
 	// ready, this local value disappears and no partial projection is visible.
@@ -649,6 +661,29 @@ func (p *Peer) handleStreamEvent(ctx context.Context, eventType string, data []b
 		// remote list is incomplete instead of losing it in a log line.
 		p.setSessionOmissions(omittedTotal, omittedCodes)
 		return
+	case sessionstream.EventDelta:
+		// PROTO (3.0): an epoch-chained delta on top of the last committed
+		// transaction. The spoke only emits one when it knows our last epoch;
+		// anything that does not chain is a protocol fault and we reconnect
+		// (the disconnect prunes the projection; the next connect re-bootstraps).
+		if staging.mode == sessionStreamLegacy {
+			return
+		}
+		var delta sessionstream.Delta[SessionProjection]
+		if err := json.Unmarshal(data, &delta); err != nil || delta.Version != sessionstream.ProtocolVersion {
+			log.Printf("peering: %s: bad session delta", p.Config.Name)
+			return
+		}
+		if staging.lastEpoch == 0 || delta.FromEpoch != staging.lastEpoch || delta.Epoch < delta.FromEpoch {
+			log.Printf("peering: %s: session delta %d->%d does not chain onto %d; forcing reconnect", p.Config.Name, delta.FromEpoch, delta.Epoch, staging.lastEpoch)
+			staging.abandon()
+			staging.lastEpoch = 0
+			p.forceReconnect()
+			return
+		}
+		staging.lastEpoch = delta.Epoch
+		p.applySessionsDelta(delta.Upsert, delta.Remove)
+		return
 	case sessionstream.EventError:
 		// Diagnostics quarantine individual rows; they do not invalidate the
 		// transaction or prevent the remaining rows from reaching ready.
@@ -785,6 +820,66 @@ func (p *Peer) applySessionsSnapshot(input any) {
 		b, _ := json.Marshal(rows)
 		_ = json.Unmarshal(b, &remote)
 	}
+	p.mu.Lock()
+	p.lastRows = make([]SessionProjection, len(remote))
+	copy(p.lastRows, remote)
+	p.mu.Unlock()
+	p.publishRows(remote)
+}
+
+// applySessionsDelta merges a PROTO (3.0) delta into the last committed row
+// set and republishes the whole projection (the sink's no-op gate and the
+// namespacing below are unchanged: a delta is just a cheaper way to arrive at
+// the next full row set).
+func (p *Peer) applySessionsDelta(upsert []SessionProjection, remove []string) {
+	p.mu.Lock()
+	byID := make(map[string]int, len(p.lastRows))
+	for i := range p.lastRows {
+		byID[p.lastRows[i].ID] = i
+	}
+	removed := make(map[string]bool, len(remove))
+	for _, id := range remove {
+		removed[id] = true
+	}
+	next := make([]SessionProjection, 0, len(p.lastRows)+len(upsert))
+	pending := make(map[string]SessionProjection, len(upsert))
+	for _, row := range upsert {
+		pending[row.ID] = row
+	}
+	for _, row := range p.lastRows {
+		if removed[row.ID] {
+			continue
+		}
+		if repl, ok := pending[row.ID]; ok {
+			next = append(next, repl)
+			delete(pending, row.ID)
+			continue
+		}
+		next = append(next, row)
+	}
+	for _, row := range pending {
+		next = append(next, row)
+	}
+	p.lastRows = next
+	rows := make([]SessionProjection, len(next))
+	copy(rows, next)
+	p.mu.Unlock()
+	p.publishRows(rows)
+}
+
+// forceReconnect is set by subscribe to tear down the current stream.
+func (p *Peer) forceReconnect() {
+	p.mu.RLock()
+	cancel := p.streamCancel
+	p.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// publishRows namespaces the spoke's rows into the viewer namespace and
+// hands them to the sink.
+func (p *Peer) publishRows(remote []SessionProjection) {
 	out := make([]SessionProjection, 0, len(remote))
 	for i := range remote {
 		sess := cloneProjection(remote[i])
@@ -843,4 +938,30 @@ func categorizeError(err error) string {
 	default:
 		return "connection failed"
 	}
+}
+
+// FetchJSON performs one GET against the spoke and returns body + status.
+func (p *Peer) FetchJSON(ctx context.Context, path string) ([]byte, int, error) {
+	return p.api.GetJSON(ctx, path)
+}
+
+// NamespaceProjection rewrites one row received from this peer into the
+// viewer's namespace exactly as the session stream does (applySessionsSnapshot):
+// id, bare parent/launch references, peer stamp, socket cleared.
+func (p *Peer) NamespaceProjection(sess SessionProjection) SessionProjection {
+	sess = cloneProjection(sess)
+	sess.ID = NamespaceID(sess.ID, p.Config.Name)
+	if sess.ParentSessionID != "" {
+		if _, parentPeer := ParseID(sess.ParentSessionID); parentPeer == "" {
+			sess.ParentSessionID = NamespaceID(sess.ParentSessionID, p.Config.Name)
+		}
+	}
+	if sess.LaunchedFromSessionID != "" {
+		if _, fromPeer := ParseID(sess.LaunchedFromSessionID); fromPeer == "" {
+			sess.LaunchedFromSessionID = NamespaceID(sess.LaunchedFromSessionID, p.Config.Name)
+		}
+	}
+	sess.Peer = p.Config.Name
+	sess.SocketPath = ""
+	return sess
 }

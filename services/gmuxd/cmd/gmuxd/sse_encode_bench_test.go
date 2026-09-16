@@ -44,7 +44,7 @@ func BenchmarkSSEBroadcastEncode(b *testing.B) {
 					epoch++
 					memo := newSessionEncodeMemo(epoch, payload)
 					for s := 0; s < subs; s++ {
-						if _, err := memo.Proto2(false, nil); err != nil {
+						if _, err := memo.Proto2(deltaClassAll); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -57,7 +57,7 @@ func BenchmarkSSEBroadcastEncode(b *testing.B) {
 					epoch++
 					memo := newSessionEncodeMemo(epoch, payload)
 					for s := 0; s < subs; s++ {
-						if _, err := memo.Proto3(false, nil); err != nil {
+						if _, err := memo.Proto3(deltaClassAll); err != nil {
 							b.Fatal(err)
 						}
 					}
