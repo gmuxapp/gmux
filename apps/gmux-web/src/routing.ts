@@ -263,22 +263,27 @@ export function viewToPath(
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null
       const presentation = familyRoot(sess, sessions)
+      // PROTO (3.0): family members are not in the roots-only world state, so
+      // a member URL must be resolvable from the id alone (a deep link
+      // fetches GET /v1/sessions/{id}); slugs would need the whole subtree.
+      const byId = presentation.id !== sess.id
+      const collide = (s: Session) => byId || hasSessionSlugCollision(s, sessions, projects)
       // Peer-owned project (ADR 0002): URL is peer-prefixed; a nested
       // session keeps its own adapter/slug but uses the root's project.
       if (presentation.project_slug && presentation.peer) {
-        return sessionPath(presentation.project_slug, sess, presentation.peer, hasSessionSlugCollision(sess, sessions, projects))
+        return sessionPath(presentation.project_slug, sess, presentation.peer, collide(sess))
       }
       // Local-claimed: project owner is the viewer. Use the same stamp-backed
       // catalog predicate as sidebar bucketing; an unknown stamp is not a
       // recoverable URL even if it looks serializable.
       const placedProject = sidebarProjectForSession(presentation, projects)
       if (placedProject) {
-        return sessionPath(placedProject.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+        return sessionPath(placedProject.slug, sess, undefined, collide(sess))
       }
       // Disclaimed: viewer's match rules decide the local folder.
       const project = matchSession(presentation, projects)
       if (!project) return null
-      return sessionPath(project.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
+      return sessionPath(project.slug, sess, undefined, collide(sess))
     }
   }
 }

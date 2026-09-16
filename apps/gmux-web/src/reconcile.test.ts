@@ -30,6 +30,7 @@ function fullRow(id: string): Session {
     parent_session_id: 'parent-1',
     launched_from_session_id: 'launcher-1',
     semantic_agent: true,
+    descendant_counts: { total: 3, alive: 1, unread: 0, error: 0, waiting: 1, active: 1, running: 0, children: 2 },
     alive: true,
     pid: 42,
     exit_code: null,
@@ -78,6 +79,7 @@ function mutate(base: Session, key: keyof Session): Session {
       if (key === 'command') changed = [...base.command, 'extra']
       else if (key === 'remotes') changed = { ...base.remotes, upstream: 'new' }
       else if (key === 'status') changed = { ...base.status!, active: !base.status!.active }
+      else if (key === 'descendant_counts') changed = { ...base.descendant_counts!, total: base.descendant_counts!.total + 1 }
       else if (v === null || v === undefined) {
         // Nullable scalar: give it a value of the field's type.
         changed = key === 'pid' || key === 'exit_code' ? 7 : '2026-02-02T00:00:00Z'

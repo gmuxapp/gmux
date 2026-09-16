@@ -960,9 +960,11 @@ describe('promotion snapshots preserve the selected session\u2019s routing', () 
 
     applySessionsSnapshot([rootSession(), childSession(false)])
 
-    expect(urlPath.value).toBe('/alpha/pi/worker')
+    // PROTO (3.0): a member URL is id-addressed (it is fetched by id on a
+    // deep link), so rejoining the family rewrites to the `~id` form.
+    expect(urlPath.value).toBe('/alpha/pi/~1bbbbbbb')
     expect(view.value).toEqual({ kind: 'session', sessionId: '1bbbbbbb' })
-    expect(navCalls).toContainEqual(['/alpha/pi/worker', true])
+    expect(navCalls).toContainEqual(['/alpha/pi/~1bbbbbbb', true])
   })
 
   it('promoting a NON-selected session never touches the URL', () => {

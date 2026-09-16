@@ -4,7 +4,7 @@ import {
   beginSessionsBootstrap, folders,noteStreamHello, readySessionsBootstrap,
   resetSessionsTransport, sessionStreamURL, sessionsLoaded, sidebarSessions, 
 } from './store'
-import type { ProtocolSession } from './types'
+import type { Session as ProtocolSession } from '@gmux/protocol'
 
 /* SPIKE (R5/R6) — delta application on the frontend.
  *
@@ -122,9 +122,9 @@ describe('delta application', () => {
 describe('subscription URL', () => {
   it('opts in to deltas and carries the resume point once one exists', () => {
     _resetDeltaResumeState()
-    expect(sessionStreamURL()).toBe('/v1/events?session_stream=3&delta=1')
+    expect(sessionStreamURL()).toBe('/v1/events?session_stream=3&view=roots&delta=1')
     noteStreamHello('boot-a')
     bootstrap(42, [row('a')])
-    expect(sessionStreamURL()).toBe('/v1/events?session_stream=3&delta=1&since=42&boot=boot-a')
+    expect(sessionStreamURL()).toBe('/v1/events?session_stream=3&view=roots&delta=1&since=42&boot=boot-a')
   })
 })

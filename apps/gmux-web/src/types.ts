@@ -13,6 +13,20 @@ export interface SessionStatus {
   interrupted?: boolean
 }
 
+/** PROTO (3.0): what a root knows about the subtree it stands in for. All
+ *  fields describe descendants (any depth), the root excluded; `children` is
+ *  the number of direct children one page-through of /children enumerates. */
+export interface DescendantCounts {
+  total: number
+  alive: number
+  unread: number
+  error: number
+  waiting: number
+  active: number
+  running: number
+  children: number
+}
+
 export interface Session {
   id: string
   /** Display name of the peer this session runs on. Absent = local. */
@@ -97,6 +111,9 @@ export interface Session {
    */
   project_slug?: string
   project_index?: number
+  /** Present on rows with family descendants (roots in the 3.0 world state,
+   *  intermediate nodes in children pages). Absent means "no descendants". */
+  descendant_counts?: DescendantCounts
 }
 
 export interface Folder {

@@ -278,8 +278,9 @@ describe('task-family project routing', () => {
   const root = makeSession({ id: 'root', cwd: '/root', adapter: 'pi', slug: 'root', project_slug: 'root-project', semantic_agent: true })
   const child = makeSession({ id: 'child', cwd: '/child', adapter: 'pi', slug: 'child', parent_session_id: 'root', semantic_agent: true, project_slug: 'child-project' })
 
-  it('serializes and resolves an unpromoted child in its root project', () => {
-    expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, child])).toBe('/root-project/pi/child')
+  it('serializes an unpromoted child in its root project by id (PROTO 3.0: members are fetched by id), and resolves both forms', () => {
+    expect(viewToPath({ kind: 'session', sessionId: 'child' }, projects, [root, child])).toBe('/root-project/pi/~child')
+    expect(resolveViewFromPath('/root-project/pi/~child', projects, [root, child])).toEqual({ kind: 'session', sessionId: 'child' })
     expect(resolveViewFromPath('/root-project/pi/child', projects, [root, child])).toEqual({ kind: 'session', sessionId: 'child' })
   })
 

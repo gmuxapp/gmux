@@ -239,17 +239,21 @@ function SessionItem({
  *  member row beside it. */
 function FamilyOpenButton({
   activity,
+  total = 0,
   rootId,
   rootHref,
   onClick,
 }: {
   activity: FamilyActivity | undefined
+  /** Descendants at any depth; shown as the expander's number when the
+   *  family has nothing live to report. */
+  total?: number
   rootId: string
   rootHref: string
   onClick?: () => void
 }) {
   const segments = activity ? familySegments(activity) : []
-  const label = activity ? familyActivityLabel(activity) : 'Session family'
+  const label = activity ? familyActivityLabel(activity) : total > 0 ? `${total} in this family` : 'Session family'
   return (
     <button
       type="button"
@@ -296,6 +300,9 @@ function FamilyOpenButton({
           ))}
         </span>
       )}
+      {segments.length === 0 && total > 0 && (
+        <span class="family-activity-glyphs family-total" aria-hidden="true">{total}</span>
+      )}
       <span class="sr-only">{label}</span>
     </button>
   )
@@ -334,6 +341,7 @@ function FamilyEntry({
   slotHref,
   slotTrail,
   activity,
+  total = 0,
   onClick,
   onDragOver,
   onDragEnd,
@@ -348,6 +356,8 @@ function FamilyEntry({
   /** Root › … › member trail, for the member row's hover title. */
   slotTrail?: string
   activity: FamilyActivity | undefined
+  /** PROTO (3.0): descendants at any depth, from the root's counts. */
+  total?: number
   onClick?: () => void
   /** Reorder drop target for the whole group, not just the root row. */
   onDragOver?: () => void
@@ -392,7 +402,7 @@ function FamilyEntry({
       onDrop={onDragEnd && ((e) => { e.preventDefault(); onDragEnd() })}
     >
       {children}
-      {(member || activity) && (
+      {(member || activity || total > 0) && (
         <div class="family-sub">
           {/* The static head of the row: same button in both states, so
             * the panel's entry point never teleports. Only the content
@@ -400,6 +410,7 @@ function FamilyEntry({
             * row beside it. */}
           <FamilyOpenButton
             activity={member ? undefined : activity}
+            total={member ? 0 : total}
             rootId={rootId}
             rootHref={rootHref}
             onClick={onClick}
@@ -597,7 +608,10 @@ function FolderGroup({
             />
           )
           // No member to name and nothing else to count: one plain row.
-          if (!slot && !activity) return item
+          // PROTO (3.0): a root with descendants (known from its counts even
+          // before any member is loaded) always gets its family entry.
+          const total = s.descendant_counts?.total ?? 0
+          if (!slot && !activity && total === 0) return item
           return (
             <FamilyEntry
               key={s.id}
@@ -610,6 +624,7 @@ function FolderGroup({
               slotHref={slot && sessionHref(slot.session)}
               slotTrail={slot && childTrailTitle(s, slot.ancestors, slot.session)}
               activity={activity}
+              total={total}
               onClick={onClick}
             >
               {item}

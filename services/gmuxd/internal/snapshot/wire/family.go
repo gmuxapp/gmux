@@ -69,7 +69,9 @@ func contribution(s Session) DescendantCounts {
 	if s.Alive {
 		c.Alive = 1
 	}
-	active := s.Status != nil && s.Status.Active
+	// Current activity, as the UI derives it: a dead row's durable
+	// active-at-death fact (kept for gmux wait) is not live work.
+	active := s.Alive && s.Status != nil && s.Status.Active
 	if !s.SemanticAgent {
 		if s.Alive && active {
 			c.Running = 1
