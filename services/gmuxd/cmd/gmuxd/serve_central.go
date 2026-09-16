@@ -1025,7 +1025,17 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						continue
 					}
 					sup, srm := memo.ScopeDeltaRows(sc.ringKey, stouched)
-					scopes[sc.scope] = sessionstream.ScopePayload[wire.Session]{FromEpoch: from, Total: memo.ScopeTotal(sc.ringKey), Upsert: sup, Remove: srm}
+					// The ring is queried from `from`; the client is told the epoch
+					// of the STATE its pages can be at. lastSentEpoch may be the
+					// subscribe epoch (no broadcast, no state change), which is
+					// larger than the epoch a page cut from f.current carries; a
+					// client comparing from_epoch to its page epoch would wrongly
+					// think it missed a step and reload (seen as a 6 ms late row).
+					reported := from
+					if sc.since < reported {
+						reported = sc.since
+					}
+					scopes[sc.scope] = sessionstream.ScopePayload[wire.Session]{FromEpoch: reported, Total: memo.ScopeTotal(sc.ringKey), Upsert: sup, Remove: srm}
 				}
 				if !force && len(touched) == 0 && len(scopes) == 0 {
 					return false, true, nil
