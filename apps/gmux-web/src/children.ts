@@ -1,29 +1,32 @@
-/** PROTO (3.0 world split): children of a root, loaded on demand and kept
- * live while viewed.
+/** PROTO (3.0, round 2): children of a root, loaded on demand and kept live
+ * while viewed.
  *
  * The world state the sidebar renders from holds ROOTS only; each root
  * carries `descendant_counts`. Opening a family loads the root's direct
  * children page by page (`GET /v1/sessions/{id}/children`, newest first,
  * keyset cursor) and registers a `children:<id>` scope on the one SSE
- * connection (`POST /v1/events/scopes`). From then on the daemon sends
- * `snapshot.scope.delta` for that subtree at the same epoch as the world-state
- * delta, so the root's counts and the open view never disagree.
+ * connection (`POST /v1/events/scopes`). The scope names the VIEWPORT: the
+ * cursor of the last page held, so the daemon diffs exactly the rows this tab
+ * shows (capped server-side; `liveRows` says how many of the held rows are
+ * live). Scope payloads ride INSIDE `snapshot.sessions.delta`, so a root's
+ * counts and its open rows change in one store transaction.
  *
  * Loaded rows are HYDRATED into the store's session list (`_hydrated` in
  * store.ts): the existing family index, drawer tree, routing and terminal
  * selection then work on them unchanged. Hydration is presentation state:
  * it is dropped when the family is closed (except the selected member and
- * its spine), and it never counts toward a root's summary — the root's
- * `descendant_counts` are authoritative.
+ * its spine) and when a reload no longer covers a row, and it never counts
+ * toward a root's summary — the root's `descendant_counts` are authoritative,
+ * and the page/scope `total` is authoritative for the drawer's own count.
  *
  * Peer-owned subtrees: the hub forwards /children to the owning daemon and
  * re-namespaces the rows, but this prototype does not relay scopes across
- * the peer link. For those, the view marks itself `stale` whenever the
+ * the peer link. For those, the view marks itself `stale` whenever any of the
  * root's counts change and offers a refresh (count-triggered refetch).
  */
 import type { Session as ProtocolSession } from '@gmux/protocol'
-import { signal } from '@preact/signals'
-import { _hydrated, _rawSessions, reconcilePromotionPending, scopeHooks, sessions, streamConnID, syncSelectedURL, toUISession } from './store'
+import { batch, signal } from '@preact/signals'
+import { _hydrated, _rawSessions, reconcilePromotionPending, scopeHooks, selectedId, sessions, streamConnID, syncSelectedURL, toUISession } from './store'
 import type { Session } from './types'
 
 export const CHILDREN_PAGE_SIZE = 50
@@ -33,16 +36,20 @@ export interface ChildrenView {
   /** Newest first, in listing order. Row objects are the hydrated ones. */
   readonly rows: readonly Session[]
   readonly nextCursor: string | null
+  /** Listing total as the daemon last reported it (page or scope payload). */
   readonly total: number
   /** Fanout epoch the loaded pages describe (0 = nothing loaded yet). */
   readonly epoch: number
   readonly loading: boolean
   readonly error: string | null
-  /** True when the daemon told us to refetch (scope reset) or, for a peer
-   *  subtree without a live scope, when the root's counts changed. */
+  /** True when the view must be refetched (peer subtree whose counts moved,
+   *  or an error path). A daemon-side reset reloads automatically. */
   readonly stale: boolean
   /** True while a `children:<rootId>` scope is registered on the stream. */
   readonly scoped: boolean
+  /** How many of `rows` (from the head) the daemon keeps live; the rest are
+   *  pull-only (viewport cap). Equal to rows.length in the common case. */
+  readonly liveRows: number
 }
 
 export const childrenViews = signal<ReadonlyMap<string, ChildrenView>>(new Map())
@@ -57,9 +64,17 @@ interface ChildrenPageWire {
   peer?: string
 }
 
+interface ScopeAdd { scope: string, cursor?: string }
+interface ScopesReply { epoch: number, scopes?: Record<string, { rows: number, total: number }> }
+
 function scopeKey(rootId: string): string {
   return `children:${rootId}`
 }
+
+/** Bumped by closeChildren so an open/reload still in flight can tell it
+ *  lost the race and must release anything it registered (M3). */
+const generation = new Map<string, number>()
+const genOf = (rootId: string) => generation.get(rootId) ?? 0
 
 function patchView(rootId: string, patch: Partial<ChildrenView>): void {
   const prev = childrenViews.value.get(rootId) ?? emptyView(rootId)
@@ -69,7 +84,7 @@ function patchView(rootId: string, patch: Partial<ChildrenView>): void {
 }
 
 function emptyView(rootId: string): ChildrenView {
-  return { rootId, rows: [], nextCursor: null, total: 0, epoch: 0, loading: false, error: null, stale: false, scoped: false }
+  return { rootId, rows: [], nextCursor: null, total: 0, epoch: 0, loading: false, error: null, stale: false, scoped: false, liveRows: 0 }
 }
 
 /** Merge rows into the hydration map (replacing same-id rows). */
@@ -102,8 +117,9 @@ async function fetchPage(rootId: string, cursor: string | null): Promise<Childre
 }
 
 /** Register / release scopes on the current stream connection. Resolves to
- * the epoch the scopes chain from, or null when there is no connection. */
-export async function updateScopes(add: string[], remove: string[]): Promise<number | null> {
+ * the reply (epoch the scopes chain from + per-scope live window), or null
+ * when there is no connection or the daemon refused. */
+export async function updateScopes(add: ScopeAdd[], remove: string[]): Promise<ScopesReply | null> {
   const conn = streamConnID()
   if (!conn) return null
   try {
@@ -112,11 +128,71 @@ export async function updateScopes(add: string[], remove: string[]): Promise<num
       body: JSON.stringify({ conn, add, remove }),
     })
     if (!res.ok) return null
-    const body = await res.json() as { ok: boolean; data?: { epoch: number } }
-    return body.ok && body.data ? body.data.epoch : null
+    const body = await res.json() as { ok: boolean; data?: ScopesReply }
+    return body.ok && body.data ? body.data : null
   } catch {
     return null
   }
+}
+
+const isPeerRoot = (rootId: string, page?: ChildrenPageWire) => !!page?.peer || rootId.includes('@')
+
+/** The window a view holds: the cursor of its last page ('' = all of it). */
+const windowCursor = (view: ChildrenView) => view.nextCursor ?? ''
+
+/** (Re)register this view's viewport. Returns false when the view was closed
+ *  meanwhile (and releases what it just registered). */
+async function registerWindow(rootId: string, gen: number): Promise<boolean> {
+  const view = childrenViews.value.get(rootId)
+  if (!view || gen !== genOf(rootId)) return false
+  const key = scopeKey(rootId)
+  const reply = await updateScopes([{ scope: key, cursor: windowCursor(view) }], [])
+  if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) {
+    // Closed while the POST was in flight: release, do not leak (M3).
+    if (reply) void updateScopes([], [key])
+    return false
+  }
+  if (!reply) { patchView(rootId, { scoped: false }); return true }
+  const live = reply.scopes?.[key]?.rows
+  const cur = childrenViews.value.get(rootId)!
+  patchView(rootId, { scoped: true, liveRows: Math.min(live ?? cur.rows.length, cur.rows.length) })
+  // The scope chains from `reply.epoch`; pages cut before it may have missed
+  // a mutation in between. Reload once so the view is at or past the chain
+  // start (rare: the daemon baselines on the same state a page names).
+  if (cur.epoch < reply.epoch) await reloadHeldPages(rootId, gen, { register: false })
+  return true
+}
+
+/** Fetch pages from the head until at least `want` rows (or the listing is
+ *  exhausted). Rows previously held but no longer covered are dehydrated
+ *  (H1): the drawer never shows a row the daemon does not maintain. */
+async function reloadHeldPages(rootId: string, gen: number, opts: { register: boolean, want?: number }): Promise<void> {
+  const before = childrenViews.value.get(rootId)
+  if (!before) return
+  const want = Math.max(opts.want ?? before.rows.length, 1)
+  const rows: Session[] = []
+  let cursor: string | null = null
+  let total = before.total
+  let epoch = before.epoch
+  let peer = false
+  do {
+    const page: ChildrenPageWire = await fetchPage(rootId, cursor)
+    if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) return
+    rows.push(...page.rows.map(toUISession))
+    cursor = page.next_cursor ?? null
+    total = page.total
+    epoch = page.epoch ?? epoch
+    peer = peer || !!page.peer
+  } while (cursor && rows.length < want)
+  const keep = keepSetFor(selectedId.peek())
+  const covered = new Set(rows.map(r => r.id))
+  const dropped = before.rows.filter(r => !covered.has(r.id) && !keep.has(r.id)).map(r => r.id)
+  batch(() => {
+    hydrateRows(rows)
+    dehydrate(dropped)
+    patchView(rootId, { rows, nextCursor: cursor, total, epoch, loading: false, stale: false, error: null, liveRows: Math.min(rows.length, childrenViews.value.get(rootId)?.liveRows || rows.length) })
+  })
+  if (opts.register && !isPeerRoot(rootId) && !peer) await registerWindow(rootId, gen)
 }
 
 /** Open (or reload) a root's children: page 1 + live scope. Idempotent
@@ -125,53 +201,52 @@ export async function openChildren(rootId: string, opts?: { force?: boolean }): 
   const existing = childrenViews.value.get(rootId)
   if (existing && existing.epoch > 0 && existing.scoped && !existing.stale && !opts?.force) return
   if (existing?.loading) return
+  const gen = genOf(rootId)
   patchView(rootId, { loading: true, error: null })
   try {
-    const page = await fetchPage(rootId, null)
-    const rows = page.rows.map(toUISession)
-    hydrateRows(rows)
-    patchView(rootId, {
-      rows, nextCursor: page.next_cursor ?? null, total: page.total,
-      epoch: page.epoch ?? 0, loading: false, stale: false,
-    })
-    // Peer subtrees get no live scope in this prototype (see header).
-    if (page.peer || rootId.includes('@')) {
-      patchView(rootId, { scoped: false })
+    if (existing && existing.epoch > 0) {
+      await reloadHeldPages(rootId, gen, { register: true })
       return
     }
-    const epoch = await updateScopes([scopeKey(rootId)], [])
-    if (epoch === null) return
-    patchView(rootId, { scoped: true })
-    // The scope chains from `epoch`; a page cut before it may have missed a
-    // mutation in between. Refetch once so the view is at or past the chain
-    // start (rare: the window is one round trip).
-    if ((page.epoch ?? 0) < epoch) {
-      const again = await fetchPage(rootId, null)
-      const rows2 = again.rows.map(toUISession)
-      hydrateRows(rows2)
-      patchView(rootId, { rows: rows2, nextCursor: again.next_cursor ?? null, total: again.total, epoch: again.epoch ?? epoch })
-    }
+    const page = await fetchPage(rootId, null)
+    if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) return
+    const rows = page.rows.map(toUISession)
+    batch(() => {
+      hydrateRows(rows)
+      patchView(rootId, {
+        rows, nextCursor: page.next_cursor ?? null, total: page.total,
+        epoch: page.epoch ?? 0, loading: false, stale: false, liveRows: rows.length,
+      })
+    })
+    // Peer subtrees get no live scope in this prototype (see header).
+    if (isPeerRoot(rootId, page)) { patchView(rootId, { scoped: false }); return }
+    await registerWindow(rootId, gen)
   } catch (err) {
+    if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) return
     patchView(rootId, { loading: false, error: err instanceof Error ? err.message : String(err) })
   }
 }
 
-/** Append the next page. */
+/** Append the next page and widen the live viewport to include it. */
 export async function loadMoreChildren(rootId: string): Promise<void> {
   const view = childrenViews.value.get(rootId)
   if (!view || !view.nextCursor || view.loading) return
+  const gen = genOf(rootId)
   patchView(rootId, { loading: true, error: null })
   try {
     const page = await fetchPage(rootId, view.nextCursor)
+    if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) return
     const rows = page.rows.map(toUISession)
-    hydrateRows(rows)
-    const have = new Set(view.rows.map(r => r.id))
+    const current = childrenViews.value.get(rootId) ?? view
+    const have = new Set(current.rows.map(r => r.id))
     const appended = rows.filter(r => !have.has(r.id))
-    patchView(rootId, {
-      rows: [...(childrenViews.value.get(rootId)?.rows ?? view.rows), ...appended],
-      nextCursor: page.next_cursor ?? null, total: page.total, loading: false,
+    batch(() => {
+      hydrateRows(rows)
+      patchView(rootId, { rows: [...current.rows, ...appended], nextCursor: page.next_cursor ?? null, total: page.total, loading: false })
     })
+    if (current.scoped) await registerWindow(rootId, gen) // widen the window
   } catch (err) {
+    if (gen !== genOf(rootId) || !childrenViews.value.has(rootId)) return
     patchView(rootId, { loading: false, error: err instanceof Error ? err.message : String(err) })
   }
 }
@@ -181,6 +256,7 @@ export async function loadMoreChildren(rootId: string): Promise<void> {
 export function closeChildren(rootId: string, keep: ReadonlySet<string> = new Set()): void {
   const view = childrenViews.value.get(rootId)
   if (!view) return
+  generation.set(rootId, genOf(rootId) + 1)
   if (view.scoped) void updateScopes([], [scopeKey(rootId)])
   const next = new Map(childrenViews.value)
   next.delete(rootId)
@@ -188,12 +264,33 @@ export function closeChildren(rootId: string, keep: ReadonlySet<string> = new Se
   dehydrate(view.rows.map(r => r.id).filter(id => !keep.has(id)))
 }
 
-/** Every open view, for re-registration after a reconnect. */
+/** Every open view, for re-registration after a reconnect: reload each view's
+ * held pages, then register all viewports in ONE request (L7). */
 export function reopenAllChildren(): void {
-  for (const view of childrenViews.value.values()) {
-    patchView(view.rootId, { scoped: false })
-    void openChildren(view.rootId, { force: true })
-  }
+  const views = [...childrenViews.value.values()]
+  if (views.length === 0) return
+  void (async () => {
+    const gens = new Map(views.map(v => [v.rootId, genOf(v.rootId)]))
+    await Promise.all(views.map(async v => {
+      patchView(v.rootId, { scoped: false, loading: true })
+      try { await reloadHeldPages(v.rootId, gens.get(v.rootId)!, { register: false }) } catch { patchView(v.rootId, { loading: false, stale: true }) }
+    }))
+    const adds: ScopeAdd[] = []
+    for (const v of views) {
+      const cur = childrenViews.value.get(v.rootId)
+      if (!cur || gens.get(v.rootId) !== genOf(v.rootId) || isPeerRoot(v.rootId)) continue
+      adds.push({ scope: scopeKey(v.rootId), cursor: windowCursor(cur) })
+    }
+    if (adds.length === 0) return
+    const reply = await updateScopes(adds, [])
+    if (!reply) return
+    for (const a of adds) {
+      const rootId = a.scope.slice('children:'.length)
+      const cur = childrenViews.value.get(rootId)
+      if (!cur || gens.get(rootId) !== genOf(rootId)) { void updateScopes([], [a.scope]); continue }
+      patchView(rootId, { scoped: true, liveRows: Math.min(reply.scopes?.[a.scope]?.rows ?? cur.rows.length, cur.rows.length) })
+    }
+  })()
 }
 
 function newestFirst(a: Session, b: Session): number {
@@ -201,20 +298,21 @@ function newestFirst(a: Session, b: Session): number {
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0
 }
 
-/** Apply one `snapshot.scope.delta` for a children scope. Returns false when
- * it does not chain onto what we hold (the caller then refetches). */
+/** Apply one scope payload from a folded `snapshot.sessions.delta`. Called
+ * inside the store's delta batch, so the root's counts and these rows commit
+ * together. Returns false when it does not chain onto what we hold (the
+ * caller then reloads the held pages). */
 export function applyChildrenDelta(
-  scope: string, fromEpoch: number, epoch: number,
+  scope: string, fromEpoch: number, epoch: number, total: number | undefined,
   upsert: ProtocolSession[], remove: string[],
 ): boolean {
   if (!scope.startsWith('children:')) return false
   const rootId = scope.slice('children:'.length)
   const view = childrenViews.value.get(rootId)
   if (!view || view.epoch === 0) return false
-  // The chain is per connection and starts at scope registration; our page
-  // was cut at or after that. A delta that ends at or before the page's
-  // epoch carries values the page already reflects (skip it); one that
-  // starts after the page's epoch means we missed a step (refetch).
+  // A payload that ends at or before the page's epoch carries values the
+  // page already reflects (skip); one that starts after it means we missed
+  // a step (reload).
   if (epoch <= view.epoch) return true
   if (fromEpoch > view.epoch) return false
   const removed = new Set(remove)
@@ -226,30 +324,30 @@ export function applyChildrenDelta(
     const next = incoming.get(row.id)
     if (next) { incoming.delete(row.id); rows.push(next) } else rows.push(row)
   }
-  // New children: newest-first pages mean anything newer than our oldest
-  // loaded row belongs in the loaded window; older rows live in the unloaded
-  // tail and will page in.
-  const oldest = view.rows.length > 0 ? view.rows[view.rows.length - 1] : null
-  let hiddenNew = 0
-  for (const row of incoming.values()) {
-    if (!oldest || view.nextCursor === null || newestFirst(row, oldest) <= 0) rows.push(row)
-    else hiddenNew++
-  }
+  // Anything else the daemon upserted is inside our viewport by definition
+  // (a spawn at the head, or a row reparented into the held range).
+  for (const row of incoming.values()) rows.push(row)
   rows.sort(newestFirst)
-  hydrateRows([...rows])
-  dehydrate(remove)
-  const total = Math.max(0, view.total + incoming.size + hiddenNew - remove.length)
-  patchView(rootId, { rows, epoch, total })
+  batch(() => {
+    hydrateRows(rows)
+    dehydrate(remove)
+    patchView(rootId, { rows, epoch, total: total ?? view.total })
+  })
   return true
 }
 
-/** The daemon could not honor the scope chain: refetch page 1. */
+/** The daemon could not honor the scope chain (or we could not apply it):
+ *  reload the pages we hold. */
 export function resetChildren(scope: string): void {
   if (!scope.startsWith('children:')) return
   const rootId = scope.slice('children:'.length)
-  if (!childrenViews.value.has(rootId)) return
-  patchView(rootId, { stale: true })
-  void openChildren(rootId, { force: true })
+  const view = childrenViews.value.get(rootId)
+  if (!view || view.loading) return
+  const gen = genOf(rootId)
+  patchView(rootId, { loading: true })
+  void reloadHeldPages(rootId, gen, { register: true }).catch(() => {
+    if (gen === genOf(rootId) && childrenViews.value.has(rootId)) patchView(rootId, { loading: false, stale: true })
+  })
 }
 
 /** Count-triggered invalidation for views without a live scope (peer
@@ -285,11 +383,11 @@ export function isHydrated(id: string): boolean {
 }
 
 /** Drawer helper: the spine + selected id that must survive a close. */
-export function keepSetFor(selectedId: string | null): Set<string> {
+export function keepSetFor(selected: string | null): Set<string> {
   const keep = new Set<string>()
-  if (!selectedId) return keep
-  const byId = new Map(sessions.value.map(s => [s.id, s]))
-  let cur = byId.get(selectedId)
+  if (!selected) return keep
+  const byId = new Map(sessions.peek().map(s => [s.id, s]))
+  let cur = byId.get(selected)
   while (cur && !keep.has(cur.id)) {
     keep.add(cur.id)
     cur = cur.parent_session_id ? byId.get(cur.parent_session_id) : undefined
@@ -298,7 +396,8 @@ export function keepSetFor(selectedId: string | null): Set<string> {
 }
 
 /** Roots whose counts changed between two committed world states, limited to
- * the families currently open (peer subtrees have no live scope). */
+ * the families currently open without a live scope (peer subtrees). Any
+ * count field counts (L4). */
 function noteCommit(prev: readonly Session[], next: readonly Session[]): void {
   const views = childrenViews.value
   if (views.size === 0) return
@@ -309,8 +408,7 @@ function noteCommit(prev: readonly Session[], next: readonly Session[]): void {
     const before = prevById.get(row.id)?.descendant_counts
     const after = row.descendant_counts
     if (before === after) continue
-    if (before && after && before.total === after.total && before.alive === after.alive
-      && before.unread === after.unread && before.active === after.active) continue
+    if (before && after && (Object.keys(after) as (keyof typeof after)[]).every(k => before[k] === after[k])) continue
     noteRootCountsChanged(row.id)
   }
 }

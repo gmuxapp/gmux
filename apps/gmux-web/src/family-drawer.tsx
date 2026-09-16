@@ -584,7 +584,7 @@ export function FamilyDrawer({ selected, onClose, triggerRef }: {
               {rootView && rootView.epoch > 0 && (
                 <li class="family-page-status" aria-live="polite">
                   {rootView.rows.length} of {rootView.total} direct children loaded
-                  {rootView.scoped ? ' · live' : ''}
+                  {rootView.scoped ? (rootView.liveRows < rootView.rows.length ? ` · first ${rootView.liveRows} live` : ' · live') : ''}
                 </li>
               )}
             </ul>

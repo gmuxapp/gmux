@@ -250,7 +250,7 @@ export const sessions = computed<Session[]>(() =>
  *  handlers below call them for scope events and reconnects. */
 export const scopeHooks = {
   onHello: (): void => {},
-  onScopeDelta: (_scope: string, _from: number, _epoch: number, _upsert: ProtocolSession[], _remove: string[]): boolean => false,
+  onScopeDelta: (_scope: string, _from: number, _epoch: number, _total: number | undefined, _upsert: ProtocolSession[], _remove: string[]): boolean => false,
   onScopeReset: (_scope: string): void => {},
   onCommit: (_prev: readonly Session[], _next: readonly Session[]): void => {},
   ensureMember: (_id: string): Promise<boolean> => Promise.resolve(false),
@@ -1770,14 +1770,42 @@ export function _resetDeltaResumeState(): void {
  * the order the daemon emits snapshots in (wire.Converter sorts by id), so a
  * delta-fed store and a snapshot-fed store are positionally identical.
  */
+/** One scope's payload inside a folded delta (PROTO 3.0 round 2). */
+export interface ScopePayload {
+  from_epoch?: number
+  total?: number
+  upsert?: ProtocolSession[]
+  remove?: string[]
+  reset?: boolean
+}
+
 export function applySessionsDelta(
   bootID: string, fromEpoch: number, epoch: number,
   upsert: ProtocolSession[], remove: string[],
+  scopes?: Record<string, ScopePayload>,
 ): boolean {
   if (sessionStreamMode === 'legacy') return false
   if (!Number.isSafeInteger(epoch) || epoch <= 0 || !Number.isSafeInteger(fromEpoch)) return false
   if (streamBootID !== null && bootID !== streamBootID) return false
   if (resumeEpoch === 0 || fromEpoch !== resumeEpoch || epoch < fromEpoch) return false
+  // One epoch, one transaction: the world rows and every scope payload
+  // commit inside one signals batch, so a root's descendant_counts and its
+  // open children rows are never observed at different epochs (round-2 D1).
+  const resets: string[] = []
+  batch(() => {
+    applyWorldDelta(epoch, upsert, remove)
+    for (const scope of Object.keys(scopes ?? {}).sort()) {
+      const p = scopes![scope]
+      if (p.reset) { resets.push(scope); continue }
+      if (!scopeHooks.onScopeDelta(scope, p.from_epoch ?? fromEpoch, epoch, p.total, p.upsert ?? [], p.remove ?? [])) resets.push(scope)
+    }
+  })
+  // Reloads are async fetches; they start after the atomic commit.
+  for (const scope of resets) scopeHooks.onScopeReset(scope)
+  return true
+}
+
+function applyWorldDelta(epoch: number, upsert: ProtocolSession[], remove: string[]): void {
   const prev = _rawSessions.peek()
   const removed = new Set(remove)
   const pending = new Map<string, Session>()
@@ -1796,7 +1824,6 @@ export function applySessionsDelta(
   // A delta supersedes any transaction still staging for an older epoch.
   if (sessionsBootstrap && sessionsBootstrap.epoch <= epoch) sessionsBootstrap = null
   applySessionsSnapshot(out)
-  return true
 }
 
 /** Protocol-3 bootstrap helpers are exported for deterministic reconnect and
@@ -2839,37 +2866,14 @@ export function initStore(): () => void {
     }
   })
 
-  // PROTO (3.0): scoped deltas for open families, same epoch as the world
-  // delta that preceded them.
-  addSourceListener('snapshot.scope.delta', (e) => {
-    try {
-      const d = JSON.parse(e.data) as {
-        scope: string, epoch: number, from_epoch: number
-        upsert?: ProtocolSession[], remove?: string[]
-      }
-      if (!scopeHooks.onScopeDelta(d.scope, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [])) {
-        scopeHooks.onScopeReset(d.scope)
-      }
-    } catch (err) {
-      console.warn('snapshot.scope.delta: bad event', err)
-    }
-  })
-  addSourceListener('snapshot.scope.reset', (e) => {
-    try {
-      const { scope } = JSON.parse(e.data) as { scope: string }
-      scopeHooks.onScopeReset(scope)
-    } catch (err) {
-      console.warn('snapshot.scope.reset: bad event', err)
-    }
-  })
-
   addSourceListener('snapshot.sessions.delta', (e) => {
     try {
       const d = JSON.parse(e.data) as {
         boot_id: string, epoch: number, from_epoch: number
         upsert?: ProtocolSession[], remove?: string[]
+        scopes?: Record<string, ScopePayload>
       }
-      if (applySessionsDelta(d.boot_id, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [])) return
+      if (applySessionsDelta(d.boot_id, d.from_epoch, d.epoch, d.upsert ?? [], d.remove ?? [], d.scopes)) return
       // The chain broke (bug, or a daemon that answered a resume we cannot
       // apply). Drop the resume point and take a full bootstrap.
       console.warn('snapshot.sessions.delta: chain broken, re-bootstrapping')
