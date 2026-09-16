@@ -49,7 +49,7 @@ func TestDeltaReplayEqualsSnapshots(t *testing.T) {
 	conn, release := fanout.RegisterConn()
 	defer release()
 	const scope = scopeChildrenPrefix + "s00" // s00 is a same-peer agent root
-	if _, ok := fanout.UpdateScopes(conn, []string{scope}, nil); !ok {
+	if _, _, err := fanout.UpdateScopes(conn, []ScopeAdd{{Scope: scope}}, nil); err != nil {
 		t.Fatal("scope registration failed")
 	}
 
@@ -221,7 +221,8 @@ func TestPromotionMovesRowBetweenScopeAndRoots(t *testing.T) {
 		return &wire.SessionsPayload{Sessions: []wire.Session{{ID: "root", SemanticAgent: true, Alive: true}, child}}
 	}
 	fanout.BroadcastFrames(wire.Frames{Sessions: rows(false)})
-	e1, ok := fanout.UpdateScopes(conn, []string{"children:root"}, nil)
+	e1, _, regErr := fanout.UpdateScopes(conn, []ScopeAdd{{Scope: "children:root"}}, nil)
+	ok := regErr == nil
 	if !ok {
 		t.Fatal("scope")
 	}
@@ -329,7 +330,7 @@ func TestScopeChainStartsAtRegistration(t *testing.T) {
 	_, _, cancel := fanout.Subscribe()
 	defer cancel()
 	pageMemo, _ := fanout.CurrentMemo()
-	reg, _ := fanout.UpdateScopes(conn, []string{"children:r"}, nil)
+	reg, _, _ := fanout.UpdateScopes(conn, []ScopeAdd{{Scope: "children:r"}}, nil)
 	if reg != pageMemo.epoch {
 		t.Fatalf("scope chains from %d, but a page cut now carries epoch %d", reg, pageMemo.epoch)
 	}
@@ -367,7 +368,32 @@ func TestDeltaOversizedFallsBack(t *testing.T) {
 	if err != nil || !fits {
 		t.Fatalf("small delta: fits=%v err=%v", fits, err)
 	}
-	if _, fits, _ := sessionstream.EncodeScopeDelta("boot", "children:x", 1, 2, big, nil); fits {
-		t.Fatal("oversized scope delta must report !fits so the sender resets")
+	// Round 2: scopes ride inside the delta. An oversized scope payload is
+	// downgraded to {reset:true} in the SAME event; the world part still
+	// goes out and the client still applies everything at one epoch.
+	scopes := map[string]sessionstream.ScopePayload[wire.Session]{
+		"children:big":   {FromEpoch: 1, Total: 200, Upsert: big},
+		"children:small": {FromEpoch: 1, Total: 1, Upsert: big[:1]},
+	}
+	ev, fits, resets, err := sessionstream.EncodeDeltaWithScopes("boot", 1, 2, big[:2], nil, scopes)
+	if err != nil || !fits {
+		t.Fatalf("fold: fits=%v err=%v", fits, err)
+	}
+	if len(resets) != 1 || resets[0] != "children:big" {
+		t.Fatalf("resets = %v, want the oversized scope only", resets)
+	}
+	var decoded struct {
+		Upsert []wire.Session                                 `json:"upsert"`
+		Scopes map[string]sessionstream.ScopePayload[wire.Session] `json:"scopes"`
+	}
+	if err := json.Unmarshal(ev.Data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Upsert) != 2 || !decoded.Scopes["children:big"].Reset || len(decoded.Scopes["children:small"].Upsert) != 1 {
+		t.Fatalf("fold payload = %+v", decoded.Scopes)
+	}
+	// World part alone too big: no fit, transaction fallback.
+	if _, fits, _, _ := sessionstream.EncodeDeltaWithScopes("boot", 1, 2, big, nil, nil); fits {
+		t.Fatal("oversized world part must not fit")
 	}
 }

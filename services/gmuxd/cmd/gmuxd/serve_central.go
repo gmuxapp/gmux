@@ -340,7 +340,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	// with exactly FilterOwned's rule, so it needs the same predicate the
 	// handlers use. Installed before the composer can broadcast.
 	fanout.SetOwnershipFilter(func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
-	if err := reconcileManualPeers(context.Background(), storeHandle, peerManager); err != nil {
+	if noPeers {
+		log.Printf("peering: disabled (--no-peers); stored peers are not dialed")
+	} else if err := reconcileManualPeers(context.Background(), storeHandle, peerManager); err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
 	}
@@ -918,25 +920,32 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				writeError(w, http.StatusBadRequest, "bad_request", "read error")
 				return
 			}
+			// Round 2: `add` entries name the scope AND the window the client
+			// holds (the next_cursor of its last page; empty = everything it
+			// has). Re-adding a held scope replaces its window.
 			var req struct {
-				Conn   string   `json:"conn"`
-				Add    []string `json:"add"`
-				Remove []string `json:"remove"`
+				Conn   string     `json:"conn"`
+				Add    []ScopeAdd `json:"add"`
+				Remove []string   `json:"remove"`
 			}
 			if err := json.Unmarshal(body, &req); err != nil || req.Conn == "" {
 				writeError(w, http.StatusBadRequest, "bad_request", "conn is required")
 				return
 			}
-			if len(req.Add) > 256 {
-				writeError(w, http.StatusBadRequest, "bad_request", "too many scopes")
+			if len(req.Add) > maxScopesPerConn {
+				writeError(w, http.StatusBadRequest, "too_many_scopes", fmt.Sprintf("at most %d scopes per connection", maxScopesPerConn))
 				return
 			}
-			epoch, ok := fanout.UpdateScopes(req.Conn, req.Add, req.Remove)
-			if !ok {
+			epoch, windows, err := fanout.UpdateScopes(req.Conn, req.Add, req.Remove)
+			switch {
+			case errors.Is(err, errUnknownConn):
 				writeError(w, http.StatusNotFound, "not_found", "unknown stream connection")
 				return
+			case errors.Is(err, errTooManyScopes):
+				writeError(w, http.StatusConflict, "too_many_scopes", fmt.Sprintf("at most %d scopes per connection; release one first", maxScopesPerConn))
+				return
 			}
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"epoch": epoch, "boot_id": fanout.BootID()}})
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"epoch": epoch, "boot_id": fanout.BootID(), "scopes": windows}})
 		})
 		mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -983,69 +992,60 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			// lastSentEpoch is the only per-connection state deltas add: the
 			// epoch whose value this connection has already published.
 			lastSentEpoch := uint64(0)
-			sendDelta := func(memo *sessionEncodeMemo) (bool, error) {
+			// sendDelta folds the world delta and every registered scope's
+			// payload into ONE event (round-2 D1): one epoch, one apply. It
+			// returns sent=false, chainOK=true when there was nothing to send
+			// (round-2 L3: no empty envelopes; `force` sends one anyway, for
+			// the resume acknowledgement) and chainOK=false when the world
+			// chain cannot be honored (caller falls back to a transaction).
+			sendDelta := func(memo *sessionEncodeMemo, force bool) (sent bool, chainOK bool, err error) {
 				if !wantDelta || lastSentEpoch == 0 || memo == nil {
-					return false, nil
+					return false, false, nil
 				}
 				touched, ok := fanout.TouchedSince(lastSentEpoch, memo.epoch, class)
 				if !ok {
-					return false, nil
+					return false, false, nil
 				}
 				upsert, remove := memo.DeltaRows(class, touched)
-				event, fits, err := sessionstream.EncodeDelta(fanout.BootID(), lastSentEpoch, memo.epoch, upsert, remove)
-				if err != nil || !fits {
-					return false, nil // oversized or unencodable: fall back to the transaction
-				}
-				if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
-					return true, err
-				}
-				lastSentEpoch = memo.epoch
-				return true, nil
-			}
-			// sendScopes emits one snapshot.scope.delta per registered scope
-			// whose rows changed since the connection last saw it, at the same
-			// epoch as the world-state delta that preceded it — so a root's
-			// counts and its open children view never disagree.
-			sendScopes := func(memo *sessionEncodeMemo) error {
-				if connID == "" || memo == nil {
-					return nil
-				}
-				for key, last := range fanout.ScopesOf(connID) {
-					if last == 0 || last >= memo.epoch {
+				scopes := map[string]sessionstream.ScopePayload[wire.Session]{}
+				for _, sc := range fanout.ScopesOf(connID) {
+					from := lastSentEpoch
+					if sc.since > from {
+						from = sc.since
+					}
+					if from >= memo.epoch {
+						continue // baselined on this very state; nothing can have changed
+					}
+					stouched, sok := fanout.ScopeTouchedSince(from, memo.epoch, sc.ringKey)
+					if !sok {
+						scopes[sc.scope] = sessionstream.ScopePayload[wire.Session]{Reset: true}
 						continue
 					}
-					touched, ok := fanout.ScopeTouchedSince(last, memo.epoch, key)
-					var event sessionstream.Event
-					fits := false
-					if ok {
-						if len(touched) == 0 {
-							fanout.AdvanceScope(connID, key, memo.epoch)
-							continue
-						}
-						upsert, remove := memo.ScopeDeltaRows(key, touched)
-						var err error
-						event, fits, err = sessionstream.EncodeScopeDelta(fanout.BootID(), key, last, memo.epoch, upsert, remove)
-						if err != nil {
-							fits = false
-						}
+					if len(stouched) == 0 {
+						continue
 					}
-					if !fits {
-						// Chain broken or oversized: the client refetches the page.
-						event = sessionstream.ScopeReset(fanout.BootID(), key, memo.epoch)
-					}
-					if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
-						return err
-					}
-					fanout.AdvanceScope(connID, key, memo.epoch)
+					sup, srm := memo.ScopeDeltaRows(sc.ringKey, stouched)
+					scopes[sc.scope] = sessionstream.ScopePayload[wire.Session]{FromEpoch: from, Total: memo.ScopeTotal(sc.ringKey), Upsert: sup, Remove: srm}
 				}
-				return nil
+				if !force && len(touched) == 0 && len(scopes) == 0 {
+					return false, true, nil
+				}
+				event, fits, _, err := sessionstream.EncodeDeltaWithScopes(fanout.BootID(), lastSentEpoch, memo.epoch, upsert, remove, scopes)
+				if err != nil || !fits {
+					return false, false, nil // oversized or unencodable: fall back to the transaction
+				}
+				if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
+					return true, true, err
+				}
+				lastSentEpoch = memo.epoch
+				return true, true, nil
 			}
 			sendSessions := func(memo *sessionEncodeMemo) error {
 				if memo == nil {
 					return nil
 				}
 				memo.SetLocalPeer(isLocalPeer)
-				if sent, err := sendDelta(memo); sent {
+				if sent, chainOK, err := sendDelta(memo, false); sent || chainOK {
 					return err
 				}
 				if !semanticSessions {
@@ -1115,7 +1115,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				// too long (or an evicted epoch) silently falls through to the
 				// ordinary bootstrap below.
 				lastSentEpoch = sinceEpoch
-				sent, err := sendDelta(initial.SessionsEncode)
+				sent, _, err := sendDelta(initial.SessionsEncode, true)
 				if err != nil {
 					return
 				}
@@ -1172,9 +1172,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					}
 					if msg.SessionsEncode != nil {
 						lastMemo = msg.SessionsEncode
-						if err := sendScopes(msg.SessionsEncode); err != nil {
-							return
-						}
 					}
 					if asPeer {
 						if msg.ProjectsUpdate {

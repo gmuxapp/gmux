@@ -166,12 +166,15 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 					t.Fatalf("scope chain broke at %d", e)
 				}
 				up, rm := m.ScopeDeltaRows(key, touched)
-				ev, fits, _ := sessionstream.EncodeScopeDelta(fanout.BootID(), key, last, e, up, rm)
+				// Round 2: the scope rides inside the delta; count its marginal bytes.
+				payload := map[string]sessionstream.ScopePayload[wire.Session]{key: {FromEpoch: last, Total: m.ScopeTotal(key), Upsert: up, Remove: rm}}
+				wup, wrm := m.DeltaRows(deltaClassRoots, mustTouched(t, fanout, last, e))
+				bare, _, _ := sessionstream.EncodeDelta(fanout.BootID(), last, e, wup, wrm)
+				folded, fits, _, _ := sessionstream.EncodeDeltaWithScopes(fanout.BootID(), last, e, wup, wrm, payload)
 				if !fits {
-					t.Fatalf("scope delta did not fit")
+					t.Fatalf("folded delta did not fit")
 				}
-				scopeSum += sseBytes([]sessionstream.Event{ev})
-				events++
+				scopeSum += len(folded.Data) - len(bare.Data)
 			}
 			last = e
 		}
@@ -181,13 +184,13 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	t.Logf("BURST 8 child mutations, drawer CLOSED: roots-deltas %d B total (%d B/mutation); full-tx would be %d B", rClosed, rClosed/8, 8*fullBytes)
 
 	// --- same burst, drawer OPEN on DRIVER (scope registered) --------------
-	regEpoch, ok := fanout.UpdateScopes(conn, []string{scopeChildrenPrefix + rows[driver].ID}, nil)
-	if !ok || regEpoch != epoch3 {
-		t.Fatalf("scope registration epoch %d ok=%v (want %d)", regEpoch, ok, epoch3)
+	regEpoch, _, regErr := fanout.UpdateScopes(conn, []ScopeAdd{{Scope: scopeChildrenPrefix + rows[driver].ID}}, nil)
+	if regErr != nil || regEpoch != epoch3 {
+		t.Fatalf("scope registration epoch %d err=%v (want %d)", regEpoch, regErr, epoch3)
 	}
 	rOpen, sOpen, _, epoch4, cur := burst("open", cur, epoch3, true)
 	t.Logf("BURST 8 child mutations, drawer OPEN:   roots-deltas %d B + scope-deltas %d B = %d B total (%d B/mutation)", rOpen, sOpen, rOpen+sOpen, (rOpen+sOpen)/8)
-	_, _ = fanout.UpdateScopes(conn, nil, []string{scopeChildrenPrefix + rows[driver].ID})
+	_, _, _ = fanout.UpdateScopes(conn, nil, []string{scopeChildrenPrefix + rows[driver].ID})
 
 	// --- reconnect after a gap (roots view) --------------------------------
 	last := epoch4
@@ -292,12 +295,12 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	measure("ring, roots + 1 children scope (DRIVER)", func(f *sseFanout) {
 		f.DemandClass(deltaClassRoots)
 		c, _ := f.RegisterConn()
-		f.UpdateScopes(c, []string{scopeChildrenPrefix + rows[driver].ID}, nil)
+		f.UpdateScopes(c, []ScopeAdd{{Scope: scopeChildrenPrefix + rows[driver].ID}}, nil)
 	})
 	measure("ring, roots + club-3090 scope (686 direct children)", func(f *sseFanout) {
 		f.DemandClass(deltaClassRoots)
 		c, _ := f.RegisterConn()
-		f.UpdateScopes(c, []string{scopeChildrenPrefix + rows[club].ID}, nil)
+		f.UpdateScopes(c, []ScopeAdd{{Scope: scopeChildrenPrefix + rows[club].ID}}, nil)
 	})
 	measure("ring, full class (spike's cost)", func(f *sseFanout) { f.DemandClass(deltaClassAll) })
 	measure("ring, roots + roots-owned (hub with a 3.0 spoke attached)", func(f *sseFanout) {
@@ -308,6 +311,84 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 		f.DemandClass(deltaClassRoots)
 		f.DemandClass(deltaClassAll)
 	})
+	// --- round-2 M4: scopes × connections, including each connection's fold --
+	// A deep `ls tree` expansion is one scope per expanded node; parents with
+	// children in the corpus stand in for expanded nodes (any depth).
+	{
+		annotated, family := memo.Annotated()
+		var parents []string
+		for _, s := range annotated {
+			if len(family.Children(s.ID)) > 0 {
+				parents = append(parents, s.ID)
+			}
+		}
+		measureFold := func(nScopes, nConns int) {
+			f := newSSEFanout()
+			f.SetOwnershipFilter(func(string) bool { return false })
+			f.DemandClass(deltaClassRoots)
+			l := clone(rows)
+			f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l}})
+			if nScopes > len(parents) {
+				nScopes = len(parents)
+			}
+			conns := make([]string, nConns)
+			for c := range conns {
+				conns[c], _ = f.RegisterConn()
+				adds := make([]ScopeAdd, 0, nScopes)
+				for i := 0; i < nScopes; i++ {
+					adds = append(adds, ScopeAdd{Scope: scopeChildrenPrefix + parents[i]})
+				}
+				// maxScopesPerConn bounds one connection; spread the rest over
+				// extra connections the way extra tabs would.
+				for len(adds) > 0 {
+					n := len(adds)
+					if n > maxScopesPerConn {
+						n = maxScopesPerConn
+					}
+					if _, _, err := f.UpdateScopes(conns[c], adds[:n], nil); err != nil {
+						t.Fatal(err)
+					}
+					adds = adds[n:]
+					if len(adds) > 0 {
+						extra, _ := f.RegisterConn()
+						conns = append(conns, extra)
+						c = len(conns) - 1
+					}
+				}
+			}
+			_, last := f.CurrentMemo()
+			runtime.GC()
+			const iters = 20
+			start := time.Now()
+			for i := 0; i < iters; i++ {
+				l2 := clone(l)
+				l2[(i*37)%len(l2)].Title = fmt.Sprintf("fold-%d", i) // a child somewhere
+				f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l2}})
+				m, e := f.CurrentMemo()
+				for _, conn := range conns {
+					touched, _ := f.TouchedSince(last, e, deltaClassRoots)
+					up, rm := m.DeltaRows(deltaClassRoots, touched)
+					scopes := map[string]sessionstream.ScopePayload[wire.Session]{}
+					for _, sc := range f.ScopesOf(conn) {
+						st, ok := f.ScopeTouchedSince(last, e, sc.ringKey)
+						if !ok || len(st) == 0 {
+							continue
+						}
+						su, sr := m.ScopeDeltaRows(sc.ringKey, st)
+						scopes[sc.scope] = sessionstream.ScopePayload[wire.Session]{FromEpoch: last, Total: m.ScopeTotal(sc.ringKey), Upsert: su, Remove: sr}
+					}
+					_, _, _, _ = sessionstream.EncodeDeltaWithScopes(f.BootID(), last, e, up, rm, scopes)
+				}
+				last = e
+			}
+			t.Logf("CPU/broadcast+fold at N=%d, %d scopes (%d distinct viewports) x %d conns: %v", len(rows), nScopes, f.ScopesTracked(), len(conns), time.Since(start)/iters)
+		}
+		t.Logf("  (corpus has %d parents with children)", len(parents))
+		measureFold(1, 1)
+		measureFold(50, 1)
+		measureFold(150, 1)
+		measureFold(150, 4)
+	}
 	// encode costs
 	{
 		m := newSessionEncodeMemo(1, &wire.SessionsPayload{Sessions: clone(rows)})
@@ -328,4 +409,12 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	entries, ids, bytes := len(fanout.ring.entries), fanout.ring.ids, fanout.ring.approxBytes()
 	fanout.mu.Unlock()
 	t.Logf("RING after %d epochs: %d entries, %d retained ids, ~%d B", entries, entries, ids, bytes)
+}
+
+func mustTouched(t *testing.T, f *sseFanout, from, to uint64) []string {
+	touched, ok := f.TouchedSince(from, to, deltaClassRoots)
+	if !ok {
+		t.Fatalf("ring did not cover %d..%d", from, to)
+	}
+	return touched
 }

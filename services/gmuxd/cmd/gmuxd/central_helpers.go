@@ -62,10 +62,35 @@ type sseFanout struct {
 	conns       map[string]*connScopes
 }
 
-// connScopes is one SSE connection's registered scopes and, per scope, the
-// epoch whose value the connection already holds.
+// connScopes is one SSE connection's registered scopes. Per client-facing
+// scope it records the ring key (scope + window cursor) and `since`, the
+// epoch the scope was baselined on: the folded delta diffs a scope from
+// max(connection's last sent epoch, since).
 type connScopes struct {
-	lastSent map[string]uint64
+	scopes map[string]connScope
+}
+
+type connScope struct {
+	ringKey string
+	since   uint64
+}
+
+// maxScopesPerConn bounds what one connection can ask the daemon to track
+// (round-2 D3/M3): a deep `ls tree` expansion is ~one scope per expanded node.
+const maxScopesPerConn = 64
+
+// ScopeAdd is one entry of POST /v1/events/scopes `add`.
+type ScopeAdd struct {
+	Scope  string `json:"scope"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// ScopeWindow is what the registration reply says about one scope: how many
+// rows of the client's held pages are live (the viewport cap may be smaller
+// than what it holds).
+type ScopeWindow struct {
+	Rows  int `json:"rows"`
+	Total int `json:"total"`
 }
 
 // sessionEncodeMemo encodes one broadcast sessions payload at most once per
@@ -87,6 +112,13 @@ type sessionEncodeMemo struct {
 	index     map[int]map[string]int
 	proto2    map[int][]byte
 	proto3    map[int][]sessionstream.Event
+	// children memoizes each parent's sorted direct-children listing: every
+	// page and every scope window of that parent (from any connection) is a
+	// slice of it, so the sort runs once per epoch (round-2 M4).
+	children map[string][]wire.Session
+	// scopeRows memoizes a ring scope's row set and index for this epoch,
+	// shared by the ring diff and by every connection's fold.
+	scopeRows map[string]*scopeRowsMemo
 	// hashes memoizes the ring's per-row fingerprint for this epoch (see
 	// rowHasher): views and scopes share rows, the marshal runs once.
 	hashes map[string]uint64
@@ -99,7 +131,13 @@ func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionE
 	if payload == nil {
 		return nil
 	}
-	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}, hashes: map[string]uint64{}}
+	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}, hashes: map[string]uint64{}, children: map[string][]wire.Session{}, scopeRows: map[string]*scopeRowsMemo{}}
+}
+
+type scopeRowsMemo struct {
+	rows  []wire.Session
+	index map[string]int
+	total int
 }
 
 // RowHash implements rowHasher: one marshal per row per epoch. Every view is
@@ -161,13 +199,19 @@ func (m *sessionEncodeMemo) viewLocked(class int) *wire.SessionsPayload {
 	}
 	m.annotateLocked()
 	rows := m.annotated
+	family := m.family
 	switch class {
 	case deltaClassOwned, deltaClassRootsOwned:
 		rows = wire.SessionsPayload{Sessions: rows}.FilterOwned(m.isLocalPeer).Sessions
+		// Round-2 M6: roots are decided against the rows THIS audience sees.
+		// A row whose family parent is outside the audience is a root here,
+		// not a child of something the receiver will never get. (Its
+		// descendant_counts still describe the full payload's subtree.)
+		family = wire.IndexFamilies(rows)
 	}
 	switch class {
 	case deltaClassRoots, deltaClassRootsOwned:
-		rows = wire.RootsView(rows, m.family)
+		rows = wire.RootsView(rows, family)
 	}
 	p := &wire.SessionsPayload{Sessions: rows}
 	m.views[class] = p
@@ -181,35 +225,85 @@ func (m *sessionEncodeMemo) ViewRows(class int) []wire.Session {
 	return m.viewLocked(class).Sessions
 }
 
-// ScopeRows is the row list a dynamic scope sees at this epoch: the direct
-// family children of a session, or one session.
-func (m *sessionEncodeMemo) ScopeRows(key string) []wire.Session {
+// childrenLocked is the memoized sorted direct-children listing of id.
+func (m *sessionEncodeMemo) childrenLocked(id string) ([]wire.Session, bool) {
+	m.annotateLocked()
+	if all, ok := m.children[id]; ok {
+		return all, all != nil
+	}
+	all, ok := wire.SortedChildren(m.annotated, m.family, id, false)
+	if !ok {
+		m.children[id] = nil
+		return nil, false
+	}
+	if all == nil {
+		all = []wire.Session{}
+	}
+	m.children[id] = all
+	return all, true
+}
+
+// ChildrenPage cuts one page of id's direct children from the memoized
+// listing (the descendants=1 flattening is not memoized; it is rare).
+func (m *sessionEncodeMemo) ChildrenPage(id string, descendants bool, cursor string, limit int) (wire.ChildrenPage, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if descendants {
+		m.annotateLocked()
+		return wire.ListChildren(m.annotated, m.family, id, true, cursor, limit)
+	}
+	all, ok := m.childrenLocked(id)
+	if !ok {
+		return wire.ChildrenPage{}, false
+	}
+	return wire.PageOf(all, id, false, cursor, limit), true
+}
+
+func (m *sessionEncodeMemo) scopeLocked(key string) *scopeRowsMemo {
+	if sm, ok := m.scopeRows[key]; ok {
+		return sm
+	}
 	m.annotateLocked()
+	sm := &scopeRowsMemo{}
+	scope, cursor := splitScopeRingKey(key)
 	switch {
-	case strings.HasPrefix(key, scopeChildrenPrefix):
-		id := key[len(scopeChildrenPrefix):]
-		page, ok := wire.ListChildren(m.annotated, m.family, id, false, "", 200)
-		if !ok {
-			return nil
+	case strings.HasPrefix(scope, scopeChildrenPrefix):
+		id := scope[len(scopeChildrenPrefix):]
+		if all, ok := m.childrenLocked(id); ok {
+			sm.rows = wire.Window(all, cursor, scopeWindowMax)
+			sm.total = len(all)
 		}
-		// ListChildren pages; a scope wants every direct child. Walk pages.
-		rows := append([]wire.Session(nil), page.Rows...)
-		for page.NextCursor != "" {
-			page, _ = wire.ListChildren(m.annotated, m.family, id, false, page.NextCursor, 200)
-			rows = append(rows, page.Rows...)
-		}
-		return rows
-	case strings.HasPrefix(key, scopeSessionPrefix):
-		id := key[len(scopeSessionPrefix):]
+	case strings.HasPrefix(scope, scopeSessionPrefix):
+		id := scope[len(scopeSessionPrefix):]
 		for i := range m.annotated {
 			if m.annotated[i].ID == id {
-				return m.annotated[i : i+1]
+				sm.rows = m.annotated[i : i+1]
+				sm.total = 1
+				break
 			}
 		}
 	}
-	return nil
+	sm.index = make(map[string]int, len(sm.rows))
+	for i, s := range sm.rows {
+		sm.index[s.ID] = i
+	}
+	m.scopeRows[key] = sm
+	return sm
+}
+
+// ScopeRows is the row list a ring scope sees at this epoch: a children
+// scope's viewport (wire.Window of the parent's listing) or one session.
+func (m *sessionEncodeMemo) ScopeRows(key string) []wire.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.scopeLocked(key).rows
+}
+
+// ScopeTotal is the size of the whole listing a children scope windows.
+func (m *sessionEncodeMemo) ScopeTotal(key string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.scopeLocked(key).total
 }
 
 func (m *sessionEncodeMemo) indexLocked(class int) (*wire.SessionsPayload, map[string]int) {
@@ -237,14 +331,12 @@ func (m *sessionEncodeMemo) DeltaRows(class int, touched []string) ([]wire.Sessi
 	return resolveTouched(p.Sessions, idx, touched)
 }
 
-// ScopeDeltaRows is DeltaRows for a dynamic scope.
+// ScopeDeltaRows is DeltaRows for a dynamic scope (memoized rows + index).
 func (m *sessionEncodeMemo) ScopeDeltaRows(key string, touched []string) ([]wire.Session, []string) {
-	rows := m.ScopeRows(key)
-	idx := make(map[string]int, len(rows))
-	for i, s := range rows {
-		idx[s.ID] = i
-	}
-	return resolveTouched(rows, idx, touched)
+	m.mu.Lock()
+	sm := m.scopeLocked(key)
+	m.mu.Unlock()
+	return resolveTouched(sm.rows, sm.index, touched)
 }
 
 func resolveTouched(rows []wire.Session, idx map[string]int, touched []string) ([]wire.Session, []string) {
@@ -366,7 +458,7 @@ func (f *sseFanout) DemandClass(class int) {
 func (f *sseFanout) RegisterConn() (string, func()) {
 	id := newBootID()
 	f.mu.Lock()
-	f.conns[id] = &connScopes{lastSent: map[string]uint64{}}
+	f.conns[id] = &connScopes{scopes: map[string]connScope{}}
 	f.mu.Unlock()
 	return id, func() {
 		f.mu.Lock()
@@ -376,82 +468,116 @@ func (f *sseFanout) RegisterConn() (string, func()) {
 			return
 		}
 		if f.ring != nil {
-			for key := range cs.lastSent {
-				f.ring.ReleaseScope(key)
+			for _, sc := range cs.scopes {
+				f.ring.ReleaseScope(sc.ringKey)
 			}
 		}
 		delete(f.conns, id)
 	}
 }
 
-// UpdateScopes applies one POST /v1/events/scopes request. The returned epoch
-// is the fanout epoch the new scopes chain from: a client holding a page cut
-// at an older epoch must refetch it. ok is false for an unknown connection.
-func (f *sseFanout) UpdateScopes(conn string, add, remove []string) (epoch uint64, ok bool) {
+// ScopesTracked is the number of distinct viewports the ring diffs per
+// broadcast (metric; round-2 D3).
+func (f *sseFanout) ScopesTracked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ring == nil {
+		return 0
+	}
+	return f.ring.ScopeCount()
+}
+
+// errTooManyScopes is returned when a connection would exceed maxScopesPerConn.
+var errTooManyScopes = errors.New("too many scopes for one connection")
+
+// UpdateScopes applies one POST /v1/events/scopes request. Re-adding a scope
+// the connection already holds REPLACES its window (the client paged deeper or
+// reloaded). The returned epoch is the chain start of the added scopes: the
+// epoch of the state their baseline was taken from (f.current), which is what
+// a page cut from the current memo carries. windows reports, per added scope,
+// how many held rows are live under the viewport cap and the listing total.
+func (f *sseFanout) UpdateScopes(conn string, add []ScopeAdd, remove []string) (epoch uint64, windows map[string]ScopeWindow, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cs, known := f.conns[conn]
 	if !known {
-		return 0, false
+		return 0, nil, errUnknownConn
 	}
 	for _, key := range remove {
-		if _, held := cs.lastSent[key]; !held {
+		sc, held := cs.scopes[key]
+		if !held {
 			continue
 		}
-		delete(cs.lastSent, key)
+		delete(cs.scopes, key)
 		if f.ring != nil {
-			f.ring.ReleaseScope(key)
+			f.ring.ReleaseScope(sc.ringKey)
 		}
 	}
-	// The chain starts at the STATE the baseline is taken from: f.current's
-	// epoch, not f.epoch. Subscribe bumps f.epoch without a broadcast, so the
-	// two differ whenever a client connected since the last mutation; a page
-	// cut from f.current (GET /children) then already reflects the chain
-	// start, and returning f.epoch made every drawer open refetch page 1.
 	base := f.epoch
 	if f.current != nil {
 		base = f.current.epoch
 	}
-	for _, key := range add {
-		if !validScopeKey(key) {
+	windows = map[string]ScopeWindow{}
+	for _, a := range add {
+		if !validScopeKey(a.Scope) {
 			continue
 		}
-		if _, held := cs.lastSent[key]; held {
+		if _, _, ok := wire.DecodeCursor(a.Cursor); !ok {
 			continue
 		}
-		cs.lastSent[key] = base
+		ringKey := scopeRingKey(a.Scope, a.Cursor)
+		if prev, held := cs.scopes[a.Scope]; held {
+			if prev.ringKey == ringKey {
+				windows[a.Scope] = f.windowLocked(ringKey)
+				continue
+			}
+			delete(cs.scopes, a.Scope)
+			if f.ring != nil {
+				f.ring.ReleaseScope(prev.ringKey)
+			}
+		} else if len(cs.scopes) >= maxScopesPerConn {
+			return base, windows, errTooManyScopes
+		}
+		cs.scopes[a.Scope] = connScope{ringKey: ringKey, since: base}
 		if f.ring != nil {
-			f.ring.AddScope(key, f.current)
+			f.ring.AddScope(ringKey, f.current)
 		}
+		windows[a.Scope] = f.windowLocked(ringKey)
 	}
-	return base, true
+	return base, windows, nil
 }
 
-// ScopesOf snapshots a connection's scopes and their last-sent epochs.
-func (f *sseFanout) ScopesOf(conn string) map[string]uint64 {
+var errUnknownConn = errors.New("unknown stream connection")
+
+func (f *sseFanout) windowLocked(ringKey string) ScopeWindow {
+	if f.current == nil {
+		return ScopeWindow{}
+	}
+	return ScopeWindow{Rows: len(f.current.ScopeRows(ringKey)), Total: f.current.ScopeTotal(ringKey)}
+}
+
+// connScopeView is one registered scope as the fold sees it.
+type connScopeView struct {
+	scope   string
+	ringKey string
+	since   uint64
+}
+
+// ScopesOf snapshots a connection's scopes, sorted by scope key so the folded
+// payload is deterministic (round-2 L5).
+func (f *sseFanout) ScopesOf(conn string) []connScopeView {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cs, ok := f.conns[conn]
 	if !ok {
 		return nil
 	}
-	out := make(map[string]uint64, len(cs.lastSent))
-	for k, v := range cs.lastSent {
-		out[k] = v
+	out := make([]connScopeView, 0, len(cs.scopes))
+	for k, v := range cs.scopes {
+		out = append(out, connScopeView{scope: k, ringKey: v.ringKey, since: v.since})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].scope < out[j].scope })
 	return out
-}
-
-// AdvanceScope records that a connection now holds `epoch` for one scope.
-// Ignored when the scope was released meanwhile.
-func (f *sseFanout) AdvanceScope(conn, key string, epoch uint64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if cs, ok := f.conns[conn]; ok {
-		if _, held := cs.lastSent[key]; held {
-			cs.lastSent[key] = epoch
-		}
-	}
 }
 
 // DisableDeltas is the kill switch: without a ring no chain can be offered,

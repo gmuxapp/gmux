@@ -256,10 +256,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		for _, arg := range args {
 			switch arg {
 			case "-h", "--help":
-				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd run [--replace]\n\nRuns the daemon in the foreground (for systemd, Docker, or debugging).\n\n  --replace   shut down a healthy same-version daemon instead of\n              exiting with \"already running\"\n")
+				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd run [--replace] [--no-peers]\n\nRuns the daemon in the foreground (for systemd, Docker, or debugging).\n\n  --replace   shut down a healthy same-version daemon instead of\n              exiting with \"already running\"\n  --no-peers  do not dial the peers stored in state.db (GMUXD_NO_PEERS=1);\n              for disposable daemons running on a copy of a live database\n")
 				return 0
 			case "--replace":
 				replace = true
+			case "--no-peers":
+				noPeers = true
 			default:
 				_, _ = fmt.Fprintf(stderr, "gmuxd run: unknown option %q\n", arg)
 				return 2
@@ -385,6 +387,11 @@ func startBackground(stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// noPeers disables dialing stored peers (PROTO round 2: `gmuxd run
+// --no-peers` or GMUXD_NO_PEERS=1). A disposable daemon started on a copy of
+// a live state.db must not subscribe to the operator's real spokes.
+var noPeers = os.Getenv("GMUXD_NO_PEERS") == "1"
 
 func serve(stderr io.Writer, replace bool) int {
 	return serveCentral(stderr, replace)

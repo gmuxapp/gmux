@@ -128,10 +128,14 @@ func (idx *FamilyIndex) Children(id string) []string { return idx.children[id] }
 
 // AnnotateDescendantCounts stamps DescendantCounts on every row that has
 // descendants in rows (and leaves rows without any untouched, so 99 % of the
-// full payload is byte-identical to today). Counts already present on a row
-// are preserved and added to: that is how a hub composes a 3.0 spoke's
-// roots-only feed with its own full view. Cycles (which the store rejects at
-// registration, but a peer could ship) are cut by a visited set.
+// full payload is byte-identical to today). A row that arrives with counts
+// but no visible children (a 3.0 spoke's root on a hub) keeps them; a row
+// with visible children gets counts computed from them, REPLACING whatever it
+// carried — so annotating twice is idempotent (round-2 L1). Cross-peer
+// parentage is refused at registration, so "foreign counts plus local
+// children" cannot occur; if it ever did, the local truth wins. Cycles (which
+// the store rejects at registration, but a peer could ship) are cut by a
+// visited set.
 func AnnotateDescendantCounts(rows []Session) *FamilyIndex {
 	idx := IndexFamilies(rows)
 	memo := make(map[string]DescendantCounts, len(idx.children))
@@ -165,9 +169,6 @@ func AnnotateDescendantCounts(rows []Session) *FamilyIndex {
 			continue
 		}
 		c := subtree(id)
-		if rows[i].DescendantCounts != nil {
-			c = c.add(*rows[i].DescendantCounts)
-		}
 		if !c.isZero() {
 			cc := c
 			rows[i].DescendantCounts = &cc
@@ -269,11 +270,22 @@ type ChildrenPage struct {
 }
 
 // childOrder is the listing order: newest first by created_at (RFC 3339,
-// fixed width, so string order is time order), then id descending. A
-// concurrent insert always lands at or before the first page's head, never
-// inside a page a client already holds, which is what makes the cursor
-// stable: the keyset (created_at,id) of the last row seen names an exact
-// position that inserts cannot shift.
+// fixed width, so string order is time order), then id descending.
+//
+// Cursor contract (round-2 M2, stated exactly):
+//   - Cursors are opaque; clients echo next_cursor, never mint one from a row
+//     (a hub re-namespaces rows but forwards the spoke's cursor as is).
+//   - A keyset position is immutable, so paging never returns a row twice.
+//   - A SPAWN is newer than every held row: it lands at the head and is never
+//     skipped by later pages.
+//   - A REPARENT/DEMOTE keeps the row's created_at and can land inside a range
+//     already returned; later pages will not return it. A client with a live
+//     scope over that range receives it as a window upsert; a client without
+//     one (peer subtree, raw API) must refetch when the parent's
+//     descendant_counts.children changes. No other skip exists.
+//   - A dismissal inside a held range shortens the listing; nothing shifts.
+func ChildOrder(a, b Session) bool { return childOrder(a, b) }
+
 func childOrder(a, b Session) bool {
 	if a.CreatedAt != b.CreatedAt {
 		return a.CreatedAt > b.CreatedAt
@@ -301,18 +313,14 @@ func DecodeCursor(cursor string) (createdAt, id string, ok bool) {
 	return createdAt, id, true
 }
 
-// ListChildren cuts one page of id's children out of an annotated payload.
-// limit is clamped to [1, 200]. ok is false when id is not in the payload.
-func ListChildren(rows []Session, idx *FamilyIndex, id string, descendants bool, cursor string, limit int) (ChildrenPage, bool) {
+// SortedChildren returns id's direct children (or, with descendants, its
+// whole subtree) in listing order. ok is false when id is not in the payload.
+// Every page and every scope window of one parent is cut from this one list,
+// so callers that serve many of them per epoch should memoize it (the memo in
+// cmd/gmuxd does).
+func SortedChildren(rows []Session, idx *FamilyIndex, id string, descendants bool) ([]Session, bool) {
 	if _, present := idx.byID[id]; !present {
-		return ChildrenPage{}, false
-	}
-	if limit < 1 || limit > 200 {
-		if limit > 200 {
-			limit = 200
-		} else {
-			limit = 100
-		}
+		return nil, false
 	}
 	var ids []string
 	if descendants {
@@ -336,13 +344,62 @@ func ListChildren(rows []Session, idx *FamilyIndex, id string, descendants bool,
 		all = append(all, rows[idx.byID[kid]])
 	}
 	sort.Slice(all, func(i, j int) bool { return childOrder(all[i], all[j]) })
-	page := ChildrenPage{SessionID: id, Rows: []Session{}, Total: len(all), Descendants: descendants}
-	start := 0
-	if cAt, cID, ok := DecodeCursor(cursor); ok && cursor != "" {
-		anchor := Session{CreatedAt: cAt, ID: cID}
-		// First row strictly AFTER the anchor in listing order.
-		start = sort.Search(len(all), func(i int) bool { return childOrder(anchor, all[i]) })
+	return all, true
+}
+
+// cursorStart is the index of the first row strictly AFTER the cursor's
+// position in a sorted listing (0 for an empty cursor).
+func cursorStart(all []Session, cursor string) int {
+	cAt, cID, ok := DecodeCursor(cursor)
+	if !ok || cursor == "" {
+		return 0
 	}
+	anchor := Session{CreatedAt: cAt, ID: cID}
+	return sort.Search(len(all), func(i int) bool { return childOrder(anchor, all[i]) })
+}
+
+// Window is a scope's VIEWPORT (round-2 D2): the rows of a sorted listing
+// from the head up to and including the cursor's position — exactly the
+// pages a client that echoed next_cursor holds — capped at max rows. An
+// empty cursor means "everything I have", still capped. Rows past the cap
+// are pull-only for that client. A spawn (newer than the head) is inside
+// every window; a row moving into the window by reparent is inside it; a row
+// older than the bound is outside and is reported only through the total.
+func Window(all []Session, cursor string, max int) []Session {
+	if max < 1 {
+		max = 1
+	}
+	end := len(all)
+	if cursor != "" {
+		end = cursorStart(all, cursor)
+	}
+	if end > max {
+		end = max
+	}
+	return all[:end]
+}
+
+// ListChildren cuts one page of id's children out of an annotated payload.
+// limit is clamped to [1, 200]. ok is false when id is not in the payload.
+func ListChildren(rows []Session, idx *FamilyIndex, id string, descendants bool, cursor string, limit int) (ChildrenPage, bool) {
+	all, ok := SortedChildren(rows, idx, id, descendants)
+	if !ok {
+		return ChildrenPage{}, false
+	}
+	return PageOf(all, id, descendants, cursor, limit), true
+}
+
+// PageOf cuts one page out of an already sorted listing.
+func PageOf(all []Session, id string, descendants bool, cursor string, limit int) ChildrenPage {
+	if limit < 1 || limit > 200 {
+		if limit > 200 {
+			limit = 200
+		} else {
+			limit = 100
+		}
+	}
+	page := ChildrenPage{SessionID: id, Rows: []Session{}, Total: len(all), Descendants: descendants}
+	start := cursorStart(all, cursor)
 	end := start + limit
 	if end > len(all) {
 		end = len(all)
@@ -353,7 +410,7 @@ func ListChildren(rows []Session, idx *FamilyIndex, id string, descendants bool,
 	if end < len(all) {
 		page.NextCursor = encodeCursor(all[end-1])
 	}
-	return page, true
+	return page
 }
 
 // Ancestors returns id's family spine, root first, nearest parent last

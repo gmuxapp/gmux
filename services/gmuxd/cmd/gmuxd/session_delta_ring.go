@@ -27,17 +27,23 @@ import (
 //     undemanded class costs nothing per broadcast. The browser's roots
 //     class is ~5 % of the rows of the full class, which is where the
 //     spike's +12 ms/broadcast went.
-//   - dynamic SCOPES (`children:<id>`, `session:<id>`), refcounted by the
-//     connections that registered them and dropped at zero. A scope is
-//     hashed only while someone is looking at it, so an idle daemon pays
-//     for the sidebar only.
+//   - dynamic SCOPES (`children:<id>|<cursor>`, `session:<id>`), refcounted
+//     by the connections that registered them and dropped at zero. A scope
+//     is hashed only while someone is looking at it, so an idle daemon pays
+//     for the sidebar only. A children scope is a VIEWPORT (round-2 D2): the
+//     rows from the listing head to the cursor the client last echoed,
+//     capped at scopeWindowMax — bounded by what is on screen the way the
+//     world state is bounded by roots.
 //
 // Membership matters as much as content: a row that leaves a view (ownership
 // flip, dismissal, promotion out of a subtree) is recorded as touched, and the
 // sender — finding it absent from the current view — emits it as a removal.
 //
-// Bounds: entries and total retained ids are both capped; eviction advances
-// `base`, and any subscriber older than `base` gets today's full bootstrap.
+// Bounds: entries and retained ids are capped, with SEPARATE id budgets for
+// the view classes and for scopes (round-2 M5): the world chain's horizon
+// (`base`) is only ever shortened by world churn. Scope churn trims scope
+// entries from the oldest epoch forward (`scopeBase`); a scope subscriber
+// older than that gets a reset for that scope, never a full bootstrap.
 
 const (
 	deltaClassAll        = 0 // browser, full payload (2.x shape)
@@ -48,10 +54,33 @@ const (
 
 	defaultMaxRingEntries = 1024
 	defaultMaxRingIDs     = 64 * 1024
+	defaultMaxScopeIDs    = 32 * 1024
 
 	scopeChildrenPrefix = "children:"
 	scopeSessionPrefix  = "session:"
+	// scopeWindowMax caps a children scope's viewport. Pages a client holds
+	// beyond it are pull-only (the registration reply says how many rows are
+	// live). Chosen so a burst over a full window still has a chance to fit
+	// one event next to the world delta; the fold marks the scope reset when
+	// it does not.
+	scopeWindowMax = 200
 )
+
+// scopeRingKey names one distinct viewport: the client-facing scope plus the
+// cursor bound. Two tabs holding different depths of one family are two ring
+// scopes; two tabs at the same depth share one.
+func scopeRingKey(scope, cursor string) string {
+	if cursor == "" {
+		return scope
+	}
+	return scope + "|" + cursor
+}
+
+// splitScopeRingKey undoes scopeRingKey.
+func splitScopeRingKey(key string) (scope, cursor string) {
+	scope, cursor, _ = strings.Cut(key, "|")
+	return scope, cursor
+}
 
 func deltaClassFor(peer, roots bool) int {
 	switch {
@@ -97,20 +126,26 @@ type deltaRingEntry struct {
 }
 
 type deltaRing struct {
-	maxEntries int
-	maxIDs     int
+	maxEntries  int
+	maxIDs      int
+	maxScopeIDs int
 
-	base    uint64
-	entries []deltaRingEntry
-	ids     int
+	base      uint64
+	scopeBase uint64
+	entries   []deltaRingEntry
+	ids       int
+	scopeIDs  int
 
 	classes [deltaClassCount]*viewState
 	scopes  map[string]*scopeState
 }
 
 func newDeltaRing() *deltaRing {
-	return &deltaRing{maxEntries: defaultMaxRingEntries, maxIDs: defaultMaxRingIDs, scopes: map[string]*scopeState{}}
+	return &deltaRing{maxEntries: defaultMaxRingEntries, maxIDs: defaultMaxRingIDs, maxScopeIDs: defaultMaxScopeIDs, scopes: map[string]*scopeState{}}
 }
+
+// ScopeCount is the number of distinct viewports being tracked (metric).
+func (r *deltaRing) ScopeCount() int { return len(r.scopes) }
 
 // hashSession fingerprints a row's wire value (including its descendant
 // counts, so a root whose subtree changed is touched). PROTO shortcut kept
@@ -232,7 +267,7 @@ func (r *deltaRing) Record(epoch uint64, memo *sessionEncodeMemo) {
 			var touched []string
 			touched, st.viewState = diffView(st.viewState, memo.ScopeRows(key), memo)
 			entry.scoped[key] = touched
-			r.ids += len(touched)
+			r.scopeIDs += len(touched)
 		}
 	}
 	r.entries = append(r.entries, entry)
@@ -246,10 +281,26 @@ func (r *deltaRing) evict() {
 			r.ids -= len(oldest.touched[c])
 		}
 		for _, ids := range oldest.scoped {
-			r.ids -= len(ids)
+			r.scopeIDs -= len(ids)
 		}
 		r.base = oldest.epoch
+		if oldest.epoch > r.scopeBase {
+			r.scopeBase = oldest.epoch
+		}
 		r.entries = r.entries[1:]
+	}
+	// Scope churn has its own budget: trim scope changesets from the oldest
+	// entries forward, leaving the world chain intact.
+	for i := 0; i < len(r.entries) && r.scopeIDs > r.maxScopeIDs; i++ {
+		e := &r.entries[i]
+		if e.scoped == nil {
+			continue
+		}
+		for _, ids := range e.scoped {
+			r.scopeIDs -= len(ids)
+		}
+		e.scoped = nil
+		r.scopeBase = e.epoch
 	}
 }
 
@@ -296,6 +347,9 @@ func (r *deltaRing) TouchedSince(from, to uint64, class int) ([]string, bool) {
 // the client must refetch.
 func (r *deltaRing) ScopeTouchedSince(from, to uint64, key string) ([]string, bool) {
 	if _, tracked := r.scopes[key]; !tracked {
+		return nil, false
+	}
+	if from < r.scopeBase {
 		return nil, false
 	}
 	return r.touchedSince(from, to, func(e deltaRingEntry) ([]string, bool) {

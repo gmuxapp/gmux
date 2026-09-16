@@ -85,8 +85,7 @@ func handleSessionChildren(w http.ResponseWriter, r *http.Request, fanout *sseFa
 		writeError(w, http.StatusServiceUnavailable, "unavailable", "no snapshot yet")
 		return
 	}
-	rows, family := memo.Annotated()
-	page, ok := wire.ListChildren(rows, family, sessionID, descendants, cursor, limit)
+	page, ok := memo.ChildrenPage(sessionID, descendants, cursor, limit)
 	if !ok {
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return

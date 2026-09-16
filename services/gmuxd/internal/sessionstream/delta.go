@@ -53,57 +53,75 @@ func EncodeDelta[T any](bootID string, fromEpoch, epoch uint64, upsert []T, remo
 	return Event{Type: EventDelta, Data: data}, true, nil
 }
 
-// PROTO (3.0): scoped deltas. A connection that registered interest in a
-// subtree (POST /v1/events/scopes) receives, at every broadcast that changed
-// rows inside it, one snapshot.scope.delta carrying the changed rows' current
-// values and the ids that left the scope — at the SAME epoch as the world-
-// state delta, so a root's descendant_counts and its open children view are
-// never observed at different epochs. When the chain cannot be honored
-// (evicted, oversized) the daemon sends snapshot.scope.reset and the client
-// refetches the page.
-const (
-	EventScopeDelta = "snapshot.scope.delta"
-	EventScopeReset = "snapshot.scope.reset"
-)
-
-type ScopeDelta[T any] struct {
-	Version   int      `json:"version"`
-	BootID    string   `json:"boot_id"`
-	Scope     string   `json:"scope"`
-	Epoch     uint64   `json:"epoch"`
-	FromEpoch uint64   `json:"from_epoch"`
-	Upsert    []T      `json:"upsert"`
-	Remove    []string `json:"remove"`
+// PROTO (3.0, round 2): scoped payloads ride INSIDE the delta event. One
+// epoch is one SSE event is one atomic apply on the client: a root's
+// descendant_counts (in upsert) and its open children window (in scopes)
+// change in the same store transaction, never one frame apart. Scopes are
+// keyed by the client-facing scope name, emitted in sorted order.
+//
+// A scope entry is either a payload (rows whose current value changed inside
+// the viewport + ids that left it, and the listing total) or {reset:true}: the
+// daemon could not honor that scope's chain (evicted, registered after the
+// connection's last delta but before its baseline, or it did not fit next to
+// the world delta) and the client must re-fetch the pages it holds. A world
+// delta that does not fit by itself still falls back to a full transaction.
+type ScopePayload[T any] struct {
+	FromEpoch uint64   `json:"from_epoch,omitempty"`
+	Total     int      `json:"total,omitempty"`
+	Upsert    []T      `json:"upsert,omitempty"`
+	Remove    []string `json:"remove,omitempty"`
+	Reset     bool     `json:"reset,omitempty"`
 }
 
-type ScopeResetEvent struct {
-	Version int    `json:"version"`
-	BootID  string `json:"boot_id"`
-	Scope   string `json:"scope"`
-	Epoch   uint64 `json:"epoch"`
+type deltaWithScopes[T any] struct {
+	Delta[T]
+	Scopes map[string]ScopePayload[T] `json:"scopes,omitempty"`
 }
 
-// EncodeScopeDelta marshals one scoped delta. ok is false when it does not
-// fit the per-event budget; the caller then sends a reset.
-func EncodeScopeDelta[T any](bootID, scope string, fromEpoch, epoch uint64, upsert []T, remove []string) (Event, bool, error) {
+// EncodeDeltaWithScopes marshals one delta carrying scope payloads. When the
+// whole event exceeds MaxEventPayload, scope payloads are downgraded to
+// {reset:true} largest-first until it fits; the returned resets names the
+// scopes that were downgraded. ok is false only when the world part alone
+// does not fit (the caller then sends a full transaction).
+func EncodeDeltaWithScopes[T any](bootID string, fromEpoch, epoch uint64, upsert []T, remove []string, scopes map[string]ScopePayload[T]) (event Event, ok bool, resets []string, err error) {
 	if upsert == nil {
 		upsert = []T{}
 	}
 	if remove == nil {
 		remove = []string{}
 	}
-	data, err := json.Marshal(ScopeDelta[T]{Version: ProtocolVersion, BootID: bootID, Scope: scope, Epoch: epoch, FromEpoch: fromEpoch, Upsert: upsert, Remove: remove})
+	body := deltaWithScopes[T]{Delta: Delta[T]{Version: ProtocolVersion, BootID: bootID, Epoch: epoch, FromEpoch: fromEpoch, Upsert: upsert, Remove: remove}}
+	if len(scopes) > 0 {
+		body.Scopes = make(map[string]ScopePayload[T], len(scopes))
+		for k, v := range scopes {
+			body.Scopes[k] = v
+		}
+	}
+	data, err := json.Marshal(body)
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, false, nil, err
 	}
-	if len(data) > MaxEventPayload {
-		return Event{}, false, nil
+	for len(data) > MaxEventPayload {
+		// Downgrade the largest non-reset scope; if none is left, the world
+		// part itself is too big.
+		largest, size := "", 0
+		for k, v := range body.Scopes {
+			if v.Reset {
+				continue
+			}
+			b, _ := json.Marshal(v)
+			if len(b) > size {
+				largest, size = k, len(b)
+			}
+		}
+		if largest == "" {
+			return Event{}, false, nil, nil
+		}
+		body.Scopes[largest] = ScopePayload[T]{Reset: true}
+		resets = append(resets, largest)
+		if data, err = json.Marshal(body); err != nil {
+			return Event{}, false, nil, err
+		}
 	}
-	return Event{Type: EventScopeDelta, Data: data}, true, nil
-}
-
-// ScopeReset tells a client its view of scope must be refetched.
-func ScopeReset(bootID, scope string, epoch uint64) Event {
-	data, _ := json.Marshal(ScopeResetEvent{Version: ProtocolVersion, BootID: bootID, Scope: scope, Epoch: epoch})
-	return Event{Type: EventScopeReset, Data: data}
+	return Event{Type: EventDelta, Data: data}, true, resets, nil
 }
