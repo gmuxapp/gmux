@@ -138,9 +138,9 @@ if [ "$skip_frontend" = false ]; then
   echo "→ Building frontend…"
   pnpm -C "$ROOT/apps/gmux-web" exec vite build
 
-  # Copy dist into the go:embed directory
-  rm -rf "$WEB_EMBED/assets" "$WEB_EMBED/favicon.svg" "$WEB_EMBED/manifest.json"
-  cp -r "$ROOT/apps/gmux-web/dist/"* "$WEB_EMBED/"
+  # Copy dist into the go:embed directory and precompress the bundle
+  # (shared with the goreleaser hook, see scripts/embed-web.sh).
+  "$ROOT/scripts/embed-web.sh"
   # Record what the embedded bundle reports as its version, so a later
   # --skip-frontend build can stamp the daemon to match it. Kept next to the
   # binaries, not inside the embed dir (which is embedded with `all:`).

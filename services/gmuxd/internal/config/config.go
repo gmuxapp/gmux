@@ -29,6 +29,7 @@ type Config struct {
 	Port int `toml:"port"`
 
 	Agent         AgentConfig         `toml:"agent"`
+	HTTP          HTTPConfig          `toml:"http"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
 	Discovery     DiscoveryConfig     `toml:"discovery"`
 	Sessions      SessionsConfig      `toml:"sessions"`
@@ -72,6 +73,17 @@ const (
 	SourceDevcontainer = "devcontainer" // auto-discovered Docker devcontainer
 	SourceManual       = "manual"       // added via state.db / POST /v1/peers
 )
+
+// HTTPConfig tunes the network HTTP listeners (TCP and tsnet). Nothing in
+// it changes the bytes served on the Unix socket the local CLI uses.
+type HTTPConfig struct {
+	// Compression gzips eligible network responses (the SSE session
+	// stream, scrollback replay, JSON, the web bundle) for clients that
+	// send Accept-Encoding: gzip. Default true. The GMUXD_HTTP_COMPRESS=0
+	// environment variable forces it off regardless of this key, so a
+	// misbehaving client can be worked around without editing the file.
+	Compression bool `toml:"compression"`
+}
 
 // DiscoveryConfig controls automatic peer discovery.
 type DiscoveryConfig struct {
@@ -454,6 +466,7 @@ func defaults() Config {
 				Values: []int{-1, 8},
 			},
 		},
+		HTTP: HTTPConfig{Compression: true},
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
 		},
@@ -468,6 +481,15 @@ func defaults() Config {
 			Timeout:   Duration(5 * time.Second),
 		}},
 	}
+}
+
+// CompressionEnabled reports whether network responses should be gzipped:
+// the [http] compression key, unless GMUXD_HTTP_COMPRESS=0 overrides it.
+func (cfg Config) CompressionEnabled() bool {
+	if os.Getenv("GMUXD_HTTP_COMPRESS") == "0" {
+		return false
+	}
+	return cfg.HTTP.Compression
 }
 
 // ListenAddr returns the effective TCP listen address (host:port).

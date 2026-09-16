@@ -36,6 +36,10 @@ devcontainers = true     # subscribe to Docker events, register gmux containers
 [sessions]
 scrollback_cache_mb = 256
 
+# Network HTTP listeners (TCP + Tailscale). Never affects the local Unix socket.
+[http]
+compression = true       # gzip the session stream, scrollback replay, JSON and the web bundle
+
 # Optional best-effort phone notifications via ntfy.
 # Use `chmod 600 ~/.config/gmux/host.toml` before enabling.
 [notifications.ntfy]
@@ -117,6 +121,38 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 
 Session values must be non-negative.
 
+### `[http]`
+
+**Experimental.** This key is new and may change incompatibly in a minor
+release; see [Interface stability](/reference/stability/#experimental).
+
+Tunes the network HTTP listeners (the TCP port and the Tailscale listener).
+Responses on the local Unix socket the `gmux` CLI uses are never compressed,
+whatever this key says.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `compression` | `boolean` | `true` | Serve gzip-encoded responses to clients that send `Accept-Encoding: gzip` — browsers, the `gmux` CLI over TCP, and peer daemons. |
+
+What is compressed: the session stream (`/v1/events`), dead-session scrollback
+replay, JSON responses, and the web bundle (precompressed at build time). What
+is not: the terminal WebSocket (it owns its own framing and deliberately runs
+without `permessage-deflate`, see [#279](https://github.com/gmuxapp/gmux/pull/279)),
+range requests, responses shorter than 512 bytes, and anything on the Unix
+socket. Compression is negotiated per response, so a client that does not ask
+for gzip is served exactly the bytes it received before. The decoded bytes are
+identical either way — no protocol or wire-shape change, so the
+[stability covenant](/reference/stability/) is unaffected.
+
+Every session-stream event is flushed through the compressor individually
+(`Z_SYNC_FLUSH`), so a browser's `EventSource` still receives events one at a
+time with no added latency. On a typical multi-session host the stream shrinks
+about 6× and scrollback replay 10–20×.
+
+To rule compression out when debugging a client, set `compression = false` and
+restart the daemon, or start it with `GMUXD_HTTP_COMPRESS=0` (the environment
+variable wins over the file).
+
 ### `[notifications.ntfy]`
 
 **Experimental.** These keys and their delivery semantics may change
@@ -185,6 +221,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
 - **`agent.max_subagents_by_depth` is `true`, is not an integer array or `false`, is empty, has over eight entries, has an entry above 1024, or uses `-1` after the first entry**
+- **`http.compression` is not a boolean**
 - **A session limit is negative**, or a retention/cache value is too large to convert safely to its runtime duration or byte count
 - **ntfy settings are unsafe or malformed** — including a missing/invalid topic, unsupported URL, mixed authentication modes, credentials over plaintext HTTP, priority/tag/timeout violations, or an enabled config file with group/other permissions
 - **A TOML integer is outside the supported integer range**, or other TOML syntax is invalid
