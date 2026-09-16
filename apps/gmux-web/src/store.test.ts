@@ -833,8 +833,15 @@ describe('promote/demote pending request ownership', () => {
     const deletedSeq = beginPromotion('child', 'demote', 'root')
     reconcilePromotionPending([root])
     expect(deletedSeq).toBeTypeOf('number')
-    expect(promotionPending.value.has('child')).toBe(false)
+    // PROTO (3.0): a demoting row that vanishes from the list is the normal
+    // case — it left the roots-only world state and returns hydrated. The
+    // request stays pending (TTL-bounded) and announces on arrival.
+    expect(promotionPending.value.has('child')).toBe(true)
     expect(promotionAnnouncements.value.has('child')).toBe(false)
+    reconcilePromotionPending([root, { ...child, parent_session_id: 'root' }])
+    expect(promotionPending.value.has('child')).toBe(false)
+    expect(promotionAnnouncements.value.get('child')).toMatchObject({ seq: deletedSeq, kind: 'demote', message: 'Returned to family.' })
+    promotionAnnouncements.value = new Map()
 
     _rawSessions.value = [root, child]
     const terminalSeq = beginPromotion('child', 'demote', 'root')

@@ -97,6 +97,16 @@ export function resolveSessionFromPath(
 ): string | null {
   if (!parsed.project) return null
 
+  // PROTO (3.0): an id-addressed URL (`~id`) names the session outright; the
+  // project segment is presentation. A family member's canonical project is
+  // its root's and moves on promote/demote, so a URL minted before the move
+  // must still resolve — the store then rewrites it to the canonical form.
+  if (parsed.slug?.startsWith('~')) {
+    const id = parsed.slug.slice(1)
+    const exact = sessions.find(s => s.id === id)
+    if (exact && (!parsed.adapter || exact.adapter === parsed.adapter)) return exact.id
+  }
+
   // Sessions belonging to the addressed project (ADR 0002):
   //  - Peer-owned project: stamp matches `(peer, project_slug)`.
   //  - Local-owned project: stamp matches `("", project_slug)` *or*

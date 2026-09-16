@@ -1134,8 +1134,11 @@ export const view = computed((): View | null => {
   // `sidebarSessions`).
   const resolved = resolveViewFromPath(urlPath.value, projects.value, sessions.value)
   if (resolved.kind === 'home') {
+    // An id-addressed URL that does not resolve is a member outside the
+    // world state until the lookup says otherwise; stay in "loading" so the
+    // URL-normalization effect does not rewrite it to `/` first.
     const id = urlMemberId(urlPath.value)
-    if (id && memberLookups.value.get(id) === 'loading') return null
+    if (id && memberLookups.value.get(id) !== 'missing') return null
   }
   return resolved
 })
@@ -1612,14 +1615,37 @@ export function sessionStaleness(
 function selectedSlugRewrite(prev: Session[], next: Session[]): string | null {
   const id = selectedId.value
   if (!id) return null
-  const old = prev.find(s => s.id === id)
+  // PROTO (3.0): the selected row may be a hydrated member (not in the
+  // roots-only raw list) that is being promoted INTO the list, or a root
+  // being demoted out of it (handled by re-hydration). Resolve against the
+  // merged view either way.
+  const hydrated = _hydrated.peek()
+  const old = prev.find(s => s.id === id) ?? hydrated.get(id)
   const cur = next.find(s => s.id === id)
   if (!old || !cur) return null
+  let merged = next
+  if (hydrated.size > 0) {
+    const ids = new Set(next.map(s => s.id))
+    merged = [...next]
+    for (const row of hydrated.values()) if (!ids.has(row.id)) merged.push(row)
+  }
   // Recompute canonical serialization even when this row's slug did not
   // change: arrival of a duplicate can make the old slug route ambiguous,
   // in which case viewToPath switches the selected row to its full ID.
-  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.value, next)
+  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.value, merged)
   return canonical && canonical !== urlPath.value ? canonical : null
+}
+
+/** PROTO (3.0): after a member is (re)hydrated, the selected session's
+ *  canonical URL may have changed (a demoted row now routes through its
+ *  family root's project). Rewrite in place when it did. */
+export function syncSelectedURL(): void {
+  const id = selectedId.peek()
+  if (!id) return
+  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.peek(), sessions.peek())
+  if (!canonical || canonical === urlPath.peek()) return
+  urlPath.value = canonical
+  navigate(canonical + currentHash(), true)
 }
 
 /**
@@ -1892,6 +1918,14 @@ export function applySessionsSnapshot(list: Session[]): void {
       connState.value = 'connected'
       reconcilePromotionPending(list)
     })
+  }
+
+  // PROTO (3.0): rows that left the roots view but the user is still holding
+  // on to — the selected session, or one with a promotion in flight — are
+  // members now; re-hydrate them by id so selection and announcements land.
+  const nextIds = new Set(list.map(s => s.id))
+  for (const id of new Set([selectedId.peek(), ...promotionPending.peek().keys()])) {
+    if (id && prevIds.has(id) && !nextIds.has(id) && !_hydrated.peek().has(id)) void scopeHooks.ensureMember(id)
   }
 
   if (newIds.length > 0 && consumePendingLaunch()) {
@@ -2412,6 +2446,10 @@ export function reconcilePromotionPending(nextSessions: readonly Session[]): voi
   for (const [id, entry] of pending) {
     const session = byId.get(id)
     if (!session) {
+      // PROTO (3.0): a demoted row LEAVES the roots-only world state (it is a
+      // member now) and comes back hydrated a moment later; keep the pending
+      // entry so the arrival can announce. The TTL still bounds a real loss.
+      if (entry.kind === 'demote') continue
       nextPending.delete(id)
       clearPromotionTimer(id)
       const old = nextAnnouncements.get(id)
@@ -2576,7 +2614,18 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
     projects.value,
     sessions.value,
   )
-  if (!path) return false
+  if (!path) {
+    // PROTO (3.0): a family member outside the roots-only world state has no
+    // row yet. Fetch it (with its spine); callers that poll this function
+    // succeed once the row is hydrated, deep-link style.
+    // ('missing' is retried here: a just-registered member can be a beat
+    // ahead of the daemon's published snapshot.)
+    if (!sessions.value.some(s => s.id === sessionId) && memberLookups.value.get(sessionId) !== 'loading') {
+      _noteMemberLookup(sessionId, 'loading')
+      scopeHooks.ensureMember(sessionId).then(found => { _noteMemberLookup(sessionId, found ? null : 'missing') })
+    }
+    return false
+  }
   // navigate() carries the tab-identity params (?filter=, ?sidebar=),
   // so programmatic navigation doesn't un-pin a narrowed tab.
   navigate(path, replace)

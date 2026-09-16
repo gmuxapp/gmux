@@ -23,7 +23,7 @@
  */
 import type { Session as ProtocolSession } from '@gmux/protocol'
 import { signal } from '@preact/signals'
-import { _hydrated, _rawSessions, scopeHooks, sessions, streamConnID, toUISession } from './store'
+import { _hydrated, _rawSessions, reconcilePromotionPending, scopeHooks, sessions, streamConnID, syncSelectedURL, toUISession } from './store'
 import type { Session } from './types'
 
 export const CHILDREN_PAGE_SIZE = 50
@@ -78,6 +78,10 @@ export function hydrateRows(rows: readonly Session[]): void {
   const next = new Map(_hydrated.value)
   for (const row of rows) next.set(row.id, row)
   _hydrated.value = next
+  // A member arriving by hydration can settle a pending demotion (the row
+  // left the roots view when it rejoined its family) and move the URL.
+  reconcilePromotionPending(sessions.value)
+  syncSelectedURL()
 }
 
 function dehydrate(ids: Iterable<string>): void {
