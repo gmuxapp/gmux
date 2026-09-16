@@ -20,8 +20,9 @@ func TestSessionEncodeMemoSharesIdenticalFrames(t *testing.T) {
 	}}
 	isLocalPeer := func(name string) bool { return name == "devbox" }
 	memo := newSessionEncodeMemo(7, payload)
+	memo.SetLocalPeer(isLocalPeer)
 
-	full, err := memo.Proto2(false, isLocalPeer)
+	full, err := memo.Proto2(deltaClassAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,12 +30,12 @@ func TestSessionEncodeMemoSharesIdenticalFrames(t *testing.T) {
 	if !bytes.Equal(full, want) {
 		t.Fatalf("proto2 browser bytes diverge from direct marshal:\n%s\n%s", full, want)
 	}
-	again, _ := memo.Proto2(false, isLocalPeer)
+	again, _ := memo.Proto2(deltaClassAll)
 	if &full[0] != &again[0] {
 		t.Fatal("proto2 browser frame re-encoded instead of shared")
 	}
 
-	peer, err := memo.Proto2(true, isLocalPeer)
+	peer, err := memo.Proto2(deltaClassOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,18 +47,18 @@ func TestSessionEncodeMemoSharesIdenticalFrames(t *testing.T) {
 		t.Fatalf("peer class must keep own + Local-peer rows only: %s", peer)
 	}
 
-	e1, err := memo.Proto3(false, isLocalPeer)
+	e1, err := memo.Proto3(deltaClassAll)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e2, _ := memo.Proto3(false, isLocalPeer)
+	e2, _ := memo.Proto3(deltaClassAll)
 	if len(e1) == 0 || len(e1) != len(e2) || &e1[0].Data[0] != &e2[0].Data[0] {
 		t.Fatal("proto3 events re-encoded instead of shared")
 	}
 	if !bytes.Contains(e1[0].Data, []byte(`"epoch":7`)) {
 		t.Fatalf("proto3 begin must carry the broadcast epoch: %s", e1[0].Data)
 	}
-	p3peer, err := memo.Proto3(true, isLocalPeer)
+	p3peer, err := memo.Proto3(deltaClassOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +98,9 @@ func TestFanoutEpochStrictlyIncreasingPerSubscriber(t *testing.T) {
 // consistent result (exercised with -race in CI).
 func TestSessionEncodeMemoConcurrentEncode(t *testing.T) {
 	payload := realisticSessionsPayload(200)
-	memo := newSessionEncodeMemo(1, payload)
 	isLocalPeer := func(string) bool { return false }
+	memo := newSessionEncodeMemo(1, payload)
+	memo.SetLocalPeer(isLocalPeer)
 	var wg sync.WaitGroup
 	errs := make(chan error, 40)
 	for i := 0; i < 40; i++ {
@@ -106,10 +108,10 @@ func TestSessionEncodeMemoConcurrentEncode(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := memo.Proto2(peer, isLocalPeer); err != nil {
+			if _, err := memo.Proto2(deltaClassFor(peer, false)); err != nil {
 				errs <- err
 			}
-			if _, err := memo.Proto3(peer, isLocalPeer); err != nil {
+			if _, err := memo.Proto3(deltaClassFor(peer, false)); err != nil {
 				errs <- err
 			}
 		}()

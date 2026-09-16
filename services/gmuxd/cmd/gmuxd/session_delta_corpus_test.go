@@ -12,12 +12,11 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
 
-// SPIKE measurement harness. Replays a real captured corpus (a read-only
+// PROTO measurement harness. Replays a real captured corpus (a read-only
 // protocol-3 bootstrap from the operator's daemon, parsed to a rows array)
-// through the fanout and reports wire bytes per mutation, per reconnect, ring
-// memory and diff CPU.
+// through the fanout and reports the numbers the world-split report needs.
 //
-//	GMUX_SPIKE_CORPUS=/tmp/spike/rows.json go test ./cmd/gmuxd -run TestSpikeCorpusMeasurements -v
+//	GMUX_SPIKE_CORPUS=/tmp/pws/rows.json go test ./cmd/gmuxd -run TestSpikeCorpusMeasurements -v
 func TestSpikeCorpusMeasurements(t *testing.T) {
 	path := os.Getenv("GMUX_SPIKE_CORPUS")
 	if path == "" {
@@ -39,8 +38,6 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	}
 	t.Logf("corpus: %d rows (%d alive), rows.json %d B", len(rows), alive, len(raw))
 
-	// sseBytes is what the client actually reads off the socket for a set of
-	// events: "event: <type>\ndata: <json>\n\n".
 	sseBytes := func(events []sessionstream.Event) int {
 		total := 0
 		for _, e := range events {
@@ -48,196 +45,279 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 		}
 		return total
 	}
-
 	clone := func(in []wire.Session) []wire.Session {
 		out := make([]wire.Session, len(in))
 		copy(out, in)
 		return out
 	}
+	findRoot := func(list []wire.Session, title string, peer string) int {
+		for i, s := range list {
+			if s.Title == title && s.Peer == peer && s.ParentSessionID == "" {
+				return i
+			}
+		}
+		return -1
+	}
 
 	fanout := newSSEFanout()
 	fanout.SetOwnershipFilter(func(string) bool { return false })
+	fanout.DemandClass(deltaClassRoots)
+	fanout.DemandClass(deltaClassAll)
+	conn, release := fanout.RegisterConn()
+	defer release()
 
 	broadcast := func(list []wire.Session) (uint64, *sessionEncodeMemo) {
-		payload := &wire.SessionsPayload{Sessions: list}
-		fanout.BroadcastFrames(wire.Frames{Sessions: payload})
-		fanout.mu.Lock()
-		epoch := fanout.epoch
-		fanout.mu.Unlock()
-		return epoch, newSessionEncodeMemo(epoch, payload)
+		fanout.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: list}})
+		memo, epoch := fanout.CurrentMemo()
+		return epoch, memo
 	}
 
-	// Baseline: today's full transaction for the whole corpus.
+	// --- bootstrap: full vs roots -----------------------------------------
 	epoch0, memo0 := broadcast(clone(rows))
-	full, err := memo0.Proto3(false, nil)
-	if err != nil {
-		t.Fatal(err)
+	full, _ := memo0.Proto3(deltaClassAll)
+	rootsTx, _ := memo0.Proto3(deltaClassRoots)
+	fullBytes, rootsBytes := sseBytes(full), sseBytes(rootsTx)
+	rootRows := memo0.ViewRows(deltaClassRoots)
+	t.Logf("BOOTSTRAP full: %d rows, %d events, %d B", len(rows), len(full), fullBytes)
+	t.Logf("BOOTSTRAP roots: %d rows, %d events, %d B (%.1fx smaller)", len(rootRows), len(rootsTx), rootsBytes, float64(fullBytes)/float64(rootsBytes))
+	withCounts := 0
+	for _, r := range rootRows {
+		if r.DescendantCounts != nil {
+			withCounts++
+		}
 	}
-	fullBytes := sseBytes(full)
-	t.Logf("BASELINE full transaction: %d events, %d B on the wire", len(full), fullBytes)
+	t.Logf("  roots carrying descendant_counts: %d", withCounts)
 
-	deltaBytesFor := func(from uint64, memo *sessionEncodeMemo) int {
-		touched, ok := fanout.TouchedSince(from, memo.epoch, deltaClassAll)
+	deltaBytes := func(from uint64, memo *sessionEncodeMemo, class int) (int, int) {
+		touched, ok := fanout.TouchedSince(from, memo.epoch, class)
 		if !ok {
 			t.Fatalf("ring did not cover %d..%d", from, memo.epoch)
 		}
-		upsert, remove := memo.DeltaRows(false, nil, touched)
+		upsert, remove := memo.DeltaRows(class, touched)
 		event, fits, err := sessionstream.EncodeDelta(fanout.BootID(), from, memo.epoch, upsert, remove)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !fits {
-			t.Logf("  (delta exceeded MaxEventPayload: falls back to the full transaction)")
-			return fullBytes
+			if class == deltaClassRoots {
+				return rootsBytes, len(touched)
+			}
+			return fullBytes, len(touched)
 		}
-		return sseBytes([]sessionstream.Event{event})
+		return sseBytes([]sessionstream.Event{event}), len(touched)
 	}
 
-	// --- one mutation: an agent's title changes -----------------------------
+	// --- one mutation on a ROOT (title) -----------------------------------
+	driver := findRoot(rows, "DRIVER", "")
+	club := findRoot(rows, "club-3090", "gmux-hs")
+	if driver < 0 || club < 0 {
+		t.Fatalf("corpus lacks DRIVER (%d) or club-3090 (%d)", driver, club)
+	}
 	next := clone(rows)
-	next[0].Title = next[0].Title + " (edited)"
+	next[driver].Title = "DRIVER (edited)"
 	epoch1, memo1 := broadcast(next)
-	t.Logf("MUTATION title change on 1 row: full %d B -> delta %d B (%.0f\u00d7)",
-		fullBytes, deltaBytesFor(epoch0, memo1), float64(fullBytes)/float64(deltaBytesFor(epoch0, memo1)))
+	fb, _ := deltaBytes(epoch0, memo1, deltaClassAll)
+	rb, _ := deltaBytes(epoch0, memo1, deltaClassRoots)
+	t.Logf("MUTATION root title: full-tx %d B | full-delta %d B | roots-delta %d B", fullBytes, fb, rb)
 
-	// --- one mutation: status flip on an alive row --------------------------
+	// --- one mutation on a CHILD of DRIVER (status flip) — drawer closed ----
+	childOf := func(list []wire.Session, parentID string) int {
+		for i, s := range list {
+			if s.ParentSessionID == parentID {
+				return i
+			}
+		}
+		return -1
+	}
+	kid := childOf(next, next[driver].ID)
 	next = clone(next)
-	for i := range next {
-		if next[i].Alive {
-			next[i].Status = &wire.Status{Active: !(next[i].Status != nil && next[i].Status.Active)}
-			break
-		}
-	}
+	next[kid].Status = &wire.Status{Active: !(next[kid].Status != nil && next[kid].Status.Active)}
+	next[kid].Alive = true
 	epoch2, memo2 := broadcast(next)
-	t.Logf("MUTATION status flip: full %d B -> delta %d B", fullBytes, deltaBytesFor(epoch1, memo2))
+	fb, _ = deltaBytes(epoch1, memo2, deltaClassAll)
+	rb, touchedN := deltaBytes(epoch1, memo2, deltaClassRoots)
+	t.Logf("MUTATION child status (drawer closed): full-tx %d B | full-delta %d B | roots-delta %d B (%d root(s) touched: counts)", fullBytes, fb, rb, touchedN)
 
-	// --- a spawn burst: 4 broadcasts inside one second (#519 window) --------
-	burstFrom := epoch2
-	burstDelta, burstFull := 0, 0
-	cur := clone(next)
-	last := epoch2
-	for i := 0; i < 4; i++ {
-		cur = clone(cur)
-		switch i {
-		case 0:
-			cur = append(cur, wire.Session{ID: "spike-new-session", CreatedAt: time.Now().UTC().Format(time.RFC3339), Alive: true, Adapter: "pi", Command: []string{"pi"}, Cwd: "/home/mg/dev/gmux"})
-		case 1:
-			cur[len(cur)-1].Title = "a freshly spawned subagent working on something"
-		case 2:
-			cur[len(cur)-1].Status = &wire.Status{Active: true}
-		default:
-			cur[len(cur)-1].ParentSessionID = rows[0].ID
+	// --- burst of 8 child mutations under DRIVER, drawer CLOSED ------------
+	burst := func(from []wire.Session, fromEpoch uint64, scoped bool) (rootsSum, scopeSum, events int, last uint64, out []wire.Session) {
+		cur := from
+		last = fromEpoch
+		for i := 0; i < 8; i++ {
+			cur = clone(cur)
+			switch i % 4 {
+			case 0:
+				cur = append(cur, wire.Session{ID: fmt.Sprintf("burst-%d", i), CreatedAt: time.Now().UTC().Format(time.RFC3339), Alive: true, Adapter: "pi", SemanticAgent: true, ParentSessionID: rows[driver].ID, Command: []string{"pi"}, Cwd: "/home/mg/dev/gmux"})
+			case 1:
+				cur[len(cur)-1].Title = "a freshly spawned subagent working on something"
+			case 2:
+				cur[len(cur)-1].Status = &wire.Status{Active: true}
+			default:
+				cur[len(cur)-1].Status = &wire.Status{Active: false}
+				cur[len(cur)-1].Unread = true
+			}
+			e, m := broadcast(cur)
+			b, _ := deltaBytes(last, m, deltaClassRoots)
+			rootsSum += b
+			events++
+			if scoped {
+				key := scopeChildrenPrefix + rows[driver].ID
+				touched, ok := fanout.ScopeTouchedSince(last, e, key)
+				if !ok {
+					t.Fatalf("scope chain broke at %d", e)
+				}
+				up, rm := m.ScopeDeltaRows(key, touched)
+				ev, fits, _ := sessionstream.EncodeScopeDelta(fanout.BootID(), key, last, e, up, rm)
+				if !fits {
+					t.Fatalf("scope delta did not fit")
+				}
+				scopeSum += sseBytes([]sessionstream.Event{ev})
+				events++
+			}
+			last = e
 		}
-		e, m := broadcast(cur)
-		burstDelta += deltaBytesFor(last, m)
-		burstFull += fullBytes
-		last = e
+		return rootsSum, scopeSum, events, last, cur
 	}
-	t.Logf("SPAWN BURST (4 broadcasts): full %d B -> deltas %d B (%.0f\u00d7)", burstFull, burstDelta, float64(burstFull)/float64(burstDelta))
+	rClosed, _, _, epoch3, cur := burst(next, epoch2, false)
+	t.Logf("BURST 8 child mutations, drawer CLOSED: roots-deltas %d B total (%d B/mutation); full-tx would be %d B", rClosed, rClosed/8, 8*fullBytes)
 
-	// --- coalesced burst: one subscriber that only sees the last frame ------
-	t.Logf("COALESCED (subscriber that missed 3 of the 4 frames): %d B", deltaBytesFor(burstFrom, mustMemo(t, fanout, cur)))
+	// --- same burst, drawer OPEN on DRIVER (scope registered) --------------
+	regEpoch, ok := fanout.UpdateScopes(conn, []string{scopeChildrenPrefix + rows[driver].ID}, nil)
+	if !ok || regEpoch != epoch3 {
+		t.Fatalf("scope registration epoch %d ok=%v (want %d)", regEpoch, ok, epoch3)
+	}
+	rOpen, sOpen, _, epoch4, cur := burst(cur, epoch3, true)
+	t.Logf("BURST 8 child mutations, drawer OPEN:   roots-deltas %d B + scope-deltas %d B = %d B total (%d B/mutation)", rOpen, sOpen, rOpen+sOpen, (rOpen+sOpen)/8)
+	_, _ = fanout.UpdateScopes(conn, nil, []string{scopeChildrenPrefix + rows[driver].ID})
 
-	// --- reconnect after a gap ---------------------------------------------
-	// Steady state on the real corpus is ~13 broadcasts / 25 min (0.52/min).
+	// --- reconnect after a gap (roots view) --------------------------------
+	last := epoch4
 	for _, gap := range []struct {
 		label     string
 		mutations int
-	}{{"30 s (0-1 mutations)", 1}, {"5 min (~3 mutations)", 3}, {"30 min (~16 mutations)", 16}, {"2 h (~62 mutations)", 62}} {
+	}{{"30 s (1 mutation)", 1}, {"5 min (3 mutations)", 3}, {"30 min (16 mutations)", 16}, {"2 h (62 mutations)", 62}, {"8 h (250 mutations)", 250}} {
 		resumeFrom := last
-		list := clone(cur)
+		list := cur
 		for i := 0; i < gap.mutations; i++ {
 			list = clone(list)
-			list[i%len(list)].Title = fmt.Sprintf("churn-%d", i)
-			list[(i*7)%len(list)].LastOutputAt = time.Now().UTC().Format(time.RFC3339)
+			// realistic churn: mostly children (subagent exhaust), some roots
+			j := (i * 7) % len(list)
+			list[j].Title = fmt.Sprintf("churn-%d", i)
+			list[j].LastOutputAt = time.Now().UTC().Format(time.RFC3339)
 			e, _ := broadcast(list)
 			last = e
 		}
 		cur = list
-		t.Logf("RECONNECT after %s: bootstrap %d B -> resume %d B", gap.label, fullBytes, deltaBytesFor(resumeFrom, mustMemo(t, fanout, cur)))
+		memo, _ := fanout.CurrentMemo()
+		rb, n := deltaBytes(resumeFrom, memo, deltaClassRoots)
+		fb, _ := deltaBytes(resumeFrom, memo, deltaClassAll)
+		t.Logf("RECONNECT after %s: full bootstrap %d B | full-view resume %d B | roots bootstrap %d B | roots resume %d B (%d roots touched)", gap.label, fullBytes, fb, rootsBytes, rb, n)
 	}
 
-	// --- ring memory at 1,000 epochs ---------------------------------------
-	ringFanout := newSSEFanout()
-	ringFanout.SetOwnershipFilter(func(string) bool { return false })
-	list := clone(rows)
-	for i := 0; i < 1000; i++ {
-		list = clone(list)
-		list[i%len(list)].Title = fmt.Sprintf("churn-%d", i)
-		ringFanout.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: list}})
+	// --- children pages -----------------------------------------------------
+	memo, _ := fanout.CurrentMemo()
+	annotated, family := memo.Annotated()
+	pageBytes := func(id string, descendants bool, limit int) (pages int, total int, bytes int, first int) {
+		cursor := ""
+		for {
+			page, ok := wire.ListChildren(annotated, family, id, descendants, cursor, limit)
+			if !ok {
+				t.Fatalf("no such session %s", id)
+			}
+			b, _ := json.Marshal(map[string]any{"ok": true, "data": page})
+			bytes += len(b)
+			if pages == 0 {
+				first = len(b)
+			}
+			pages++
+			total = page.Total
+			if page.NextCursor == "" {
+				return
+			}
+			cursor = page.NextCursor
+		}
 	}
-	ringFanout.mu.Lock()
-	entries, ids, bytes := len(ringFanout.ring.entries), ringFanout.ring.ids, ringFanout.ring.approxBytes()
-	ringFanout.mu.Unlock()
-	t.Logf("RING after 1000 single-row epochs: %d entries, %d retained ids, ~%d B (incl. the O(N) prev-hash/membership tables)", entries, ids, bytes)
+	for _, tc := range []struct {
+		label string
+		id    string
+	}{{"DRIVER", rows[driver].ID}, {"club-3090@gmux-hs", rows[club].ID}} {
+		p, total, b, first := pageBytes(tc.id, false, 100)
+		t.Logf("CHILDREN %s direct: %d rows, %d pages of 100, %d B total (first page %d B)", tc.label, total, p, b, first)
+		p, total, b, first = pageBytes(tc.id, true, 100)
+		t.Logf("CHILDREN %s descendants: %d rows, %d pages of 100, %d B total (first page %d B)", tc.label, total, p, b, first)
+		p, total, b, first = pageBytes(tc.id, false, 25)
+		t.Logf("CHILDREN %s direct, pages of 25: %d rows, %d pages, %d B total (first page %d B)", tc.label, total, p, b, first)
+	}
 
-	// worst case: every epoch touches every row
-	ringFanout2 := newSSEFanout()
-	ringFanout2.SetOwnershipFilter(func(string) bool { return false })
-	for i := 0; i < 200; i++ {
+	// --- project_index churn: insert one session into DRIVER's project ------
+	// A new placed root in a busy project renumbers its siblings' project_index.
+	{
+		before, _ := fanout.CurrentMemo()
+		list := clone(cur)
+		newRoot := wire.Session{ID: "zz-new-root", CreatedAt: time.Now().UTC().Format(time.RFC3339), Alive: true, Adapter: "pi", SemanticAgent: true, ProjectSlug: rows[driver].ProjectSlug, ProjectIndex: 0}
+		list = append(list, newRoot)
+		// renumber siblings as wire.Converter would (positional)
+		idx := 1
+		for i := range list {
+			if list[i].ProjectSlug == newRoot.ProjectSlug && list[i].ID != newRoot.ID && list[i].ParentSessionID == "" {
+				list[i].ProjectIndex = idx
+				idx++
+			}
+		}
+		_, m := broadcast(list)
+		rb, n := deltaBytes(before.epoch, m, deltaClassRoots)
+		fb, nf := deltaBytes(before.epoch, m, deltaClassAll)
+		t.Logf("PROJECT_INDEX churn (new root in %q): roots-delta %d B (%d rows) | full-delta %d B (%d rows)", newRoot.ProjectSlug, rb, n, fb, nf)
+	}
+
+	// --- CPU per broadcast at real N ---------------------------------------
+	measure := func(label string, setup func(*sseFanout)) {
+		f := newSSEFanout()
+		f.SetOwnershipFilter(func(string) bool { return false })
+		setup(f)
 		l := clone(rows)
-		for j := range l {
-			l[j].LastOutputAt = fmt.Sprintf("2026-09-14T13:%02d:%02dZ", i%60, j%60)
+		f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l}})
+		runtime.GC()
+		const iters = 20
+		start := time.Now()
+		for i := 0; i < iters; i++ {
+			l2 := clone(l)
+			l2[i].Title = fmt.Sprintf("cpu-%d", i)
+			f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l2}})
 		}
-		ringFanout2.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l}})
+		t.Logf("CPU/broadcast at N=%d, %s: %v", len(rows), label, time.Since(start)/iters)
 	}
-	ringFanout2.mu.Lock()
-	entries2, ids2, bytes2 := len(ringFanout2.ring.entries), ringFanout2.ring.ids, ringFanout2.ring.approxBytes()
-	base2 := ringFanout2.ring.base
-	ringFanout2.mu.Unlock()
-	t.Logf("RING worst case (every epoch touches all %d rows): %d entries kept, %d ids, ~%d B, base advanced to epoch %d", len(rows), entries2, ids2, bytes2, base2)
-
-	// --- diff CPU per broadcast --------------------------------------------
-	cpuFanout := newSSEFanout()
-	cpuFanout.SetOwnershipFilter(func(string) bool { return false })
-	l := clone(rows)
-	cpuFanout.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l}})
-	runtime.GC()
-	start := time.Now()
-	const iters = 20
-	for i := 0; i < iters; i++ {
-		l2 := clone(l)
-		l2[i].Title = fmt.Sprintf("cpu-%d", i)
-		cpuFanout.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l2}})
+	measure("deltas disabled (today's fanout)", func(f *sseFanout) { f.DisableDeltas() })
+	measure("ring, no class demanded (annotate only)", func(f *sseFanout) {})
+	measure("ring, roots class", func(f *sseFanout) { f.DemandClass(deltaClassRoots) })
+	measure("ring, roots + 1 children scope (DRIVER)", func(f *sseFanout) {
+		f.DemandClass(deltaClassRoots)
+		c, _ := f.RegisterConn()
+		f.UpdateScopes(c, []string{scopeChildrenPrefix + rows[driver].ID}, nil)
+	})
+	measure("ring, roots + club-3090 scope (686 direct children)", func(f *sseFanout) {
+		f.DemandClass(deltaClassRoots)
+		c, _ := f.RegisterConn()
+		f.UpdateScopes(c, []string{scopeChildrenPrefix + rows[club].ID}, nil)
+	})
+	measure("ring, full class (spike's cost)", func(f *sseFanout) { f.DemandClass(deltaClassAll) })
+	// encode costs
+	{
+		m := newSessionEncodeMemo(1, &wire.SessionsPayload{Sessions: clone(rows)})
+		start := time.Now()
+		m.Annotated()
+		annotate := time.Since(start)
+		start = time.Now()
+		_, _ = m.Proto3(deltaClassRoots)
+		encRoots := time.Since(start)
+		start = time.Now()
+		_, _ = m.Proto3(deltaClassAll)
+		encFull := time.Since(start)
+		t.Logf("ENCODE: annotate+index %v | roots transaction %v | full transaction %v", annotate, encRoots, encFull)
 	}
-	perBroadcast := time.Since(start) / iters
-	startEnc := time.Now()
-	for i := 0; i < iters; i++ {
-		m := newSessionEncodeMemo(uint64(i+1), &wire.SessionsPayload{Sessions: l})
-		if _, err := m.Proto3(false, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	perEncode := time.Since(startEnc) / iters
 
-	control := newSSEFanout()
-	control.DisableDeltas()
-	control.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l}})
-	runtime.GC()
-	startCtl := time.Now()
-	for i := 0; i < iters; i++ {
-		l2 := clone(l)
-		l2[i].Title = fmt.Sprintf("cpu-%d", i)
-		control.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: l2}})
-	}
-	perControl := time.Since(startCtl) / iters
-	t.Logf("CPU at N=%d: BroadcastFrames today %v -> with ring %v (diff cost %v); full transaction encode %v/broadcast (skipped for delta subscribers)",
-		len(rows), perControl, perBroadcast, perBroadcast-perControl, perEncode)
-
-	// ring memory breakdown
-	bare := newSSEFanout()
-	bare.SetOwnershipFilter(func(string) bool { return false })
-	bare.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: clone(rows)}})
-	bare.mu.Lock()
-	baseTables := bare.ring.approxBytes()
-	bare.mu.Unlock()
-	t.Logf("RING breakdown: O(N) prev-hash + membership tables ~%d B at N=%d; per-epoch entries are the remainder", baseTables, len(rows))
-}
-
-func mustMemo(t *testing.T, f *sseFanout, list []wire.Session) *sessionEncodeMemo {
-	t.Helper()
-	f.mu.Lock()
-	epoch := f.epoch
-	f.mu.Unlock()
-	return newSessionEncodeMemo(epoch, &wire.SessionsPayload{Sessions: list})
+	// --- ring memory --------------------------------------------------------
+	fanout.mu.Lock()
+	entries, ids, bytes := len(fanout.ring.entries), fanout.ring.ids, fanout.ring.approxBytes()
+	fanout.mu.Unlock()
+	t.Logf("RING after %d epochs: %d entries, %d retained ids, ~%d B", entries, entries, ids, bytes)
 }

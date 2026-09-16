@@ -3,125 +3,221 @@ package main
 import (
 	"encoding/json"
 	"hash/fnv"
+	"strings"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
 
-// SPIKE (R5/R6): the bounded per-epoch changeset ring behind epoch-chained
-// deltas and `since=` resume.
+// PROTO (3.0, R5/R6 ring generalized): the bounded per-epoch changeset ring
+// behind epoch-chained deltas, `since=` resume and scoped (children:<id>)
+// subscriptions.
 //
 // What it stores: for every broadcast epoch, the set of session ids whose
-// *visible value changed* for each audience class (browser = the whole
-// payload, peer = wire.FilterOwned). It stores ids only — never rows — so a
-// subscriber's delta is always built from the CURRENT payload. That is what
-// makes the mechanism history-free: there is no log to replay, no ordering
-// hazard between peer rows, and a delta can never publish a stale value.
+// *visible value changed* for each VIEW a subscriber can hold. It stores ids
+// only — never rows — so a subscriber's delta is always built from the
+// CURRENT payload. That is what makes the mechanism history-free: there is no
+// log to replay, no ordering hazard between peer rows, and a delta can never
+// publish a stale value.
 //
-// Membership matters as much as content: a row that leaves an audience's
-// filter (ownership flip, dismissal, retention) is recorded as touched, and
-// the sender — finding it absent from the current filtered payload — emits it
-// as a removal. Deltas are therefore filtered exactly like snapshots.
+// Views come in two kinds:
+//
+//   - four static CLASSES = audience (browser | ?as=peer) × shape (full |
+//     roots). A class is tracked from the first moment a subscriber demands
+//     it and stays tracked (so a reconnecting subscriber can resume); an
+//     undemanded class costs nothing per broadcast. The browser's roots
+//     class is ~5 % of the rows of the full class, which is where the
+//     spike's +12 ms/broadcast went.
+//   - dynamic SCOPES (`children:<id>`, `session:<id>`), refcounted by the
+//     connections that registered them and dropped at zero. A scope is
+//     hashed only while someone is looking at it, so an idle daemon pays
+//     for the sidebar only.
+//
+// Membership matters as much as content: a row that leaves a view (ownership
+// flip, dismissal, promotion out of a subtree) is recorded as touched, and the
+// sender — finding it absent from the current view — emits it as a removal.
 //
 // Bounds: entries and total retained ids are both capped; eviction advances
 // `base`, and any subscriber older than `base` gets today's full bootstrap.
 
 const (
-	deltaClassAll   = 0 // browser audience: the unfiltered payload
-	deltaClassOwned = 1 // ?as=peer audience: wire.FilterOwned
-	deltaClassCount = 2
+	deltaClassAll        = 0 // browser, full payload (2.x shape)
+	deltaClassOwned      = 1 // ?as=peer, full payload (wire.FilterOwned)
+	deltaClassRoots      = 2 // browser, roots only (3.0 world state)
+	deltaClassRootsOwned = 3 // ?as=peer, roots only (3.0 hub↔spoke link)
+	deltaClassCount      = 4
 
-	// A spawn burst is ~4 broadcasts/s; 1024 entries is ~4 min of burst or
-	// hours of ordinary churn. maxRingIDs bounds the pathological case (a
-	// reindex touching every row) — 64k ids ~ 2.6 MB of strings.
 	defaultMaxRingEntries = 1024
 	defaultMaxRingIDs     = 64 * 1024
+
+	scopeChildrenPrefix = "children:"
+	scopeSessionPrefix  = "session:"
 )
+
+func deltaClassFor(peer, roots bool) int {
+	switch {
+	case peer && roots:
+		return deltaClassRootsOwned
+	case roots:
+		return deltaClassRoots
+	case peer:
+		return deltaClassOwned
+	default:
+		return deltaClassAll
+	}
+}
+
+// validScopeKey accepts the two scope kinds a client may register.
+func validScopeKey(key string) bool {
+	rest := ""
+	switch {
+	case strings.HasPrefix(key, scopeChildrenPrefix):
+		rest = key[len(scopeChildrenPrefix):]
+	case strings.HasPrefix(key, scopeSessionPrefix):
+		rest = key[len(scopeSessionPrefix):]
+	default:
+		return false
+	}
+	return rest != "" && len(rest) <= 256
+}
+
+type viewState struct {
+	prevHash   map[string]uint64
+	prevMember map[string]struct{}
+}
+
+type scopeState struct {
+	viewState
+	refs int
+}
 
 type deltaRingEntry struct {
 	epoch   uint64
 	touched [deltaClassCount][]string
+	scoped  map[string][]string
 }
 
 type deltaRing struct {
 	maxEntries int
 	maxIDs     int
 
-	// base is the newest epoch a resuming subscriber may still chain from.
-	// It advances on eviction: older subscribers must re-bootstrap.
 	base    uint64
 	entries []deltaRingEntry
 	ids     int
 
-	prevHash   map[string]uint64
-	prevMember [deltaClassCount]map[string]struct{}
+	classes [deltaClassCount]*viewState
+	scopes  map[string]*scopeState
 }
 
 func newDeltaRing() *deltaRing {
-	r := &deltaRing{maxEntries: defaultMaxRingEntries, maxIDs: defaultMaxRingIDs, prevHash: map[string]uint64{}}
-	for c := range r.prevMember {
-		r.prevMember[c] = map[string]struct{}{}
-	}
-	return r
+	return &deltaRing{maxEntries: defaultMaxRingEntries, maxIDs: defaultMaxRingIDs, scopes: map[string]*scopeState{}}
 }
 
-// hashSession fingerprints a row's wire value. SPIKE shortcut: it marshals
-// the row (O(row) per row per broadcast, measured in the report). A real PR
-// should carry a per-row revision from the store instead, which makes the
-// diff O(1) per row and removes the (astronomically unlikely, but real)
-// 64-bit collision hazard.
+// hashSession fingerprints a row's wire value (including its descendant
+// counts, so a root whose subtree changed is touched). PROTO shortcut kept
+// from the spike: it marshals the row. With the roots class this runs over
+// ~150 rows per broadcast instead of ~2,900; a store-side revision would make
+// it O(1)/row and is still the right end state.
 func hashSession(s wire.Session) uint64 {
 	encoded, err := json.Marshal(s)
 	if err != nil {
-		return 0 // encode failures are quarantined by the transaction path
+		return 0
 	}
 	h := fnv.New64a()
 	_, _ = h.Write(encoded)
 	return h.Sum64()
 }
 
-// Record folds one broadcast into the ring. Must be called under the fanout
-// mutex, once per epoch, in epoch order, for every broadcast — the chain is
-// only valid if no broadcast is skipped.
-func (r *deltaRing) Record(epoch uint64, payload *wire.SessionsPayload, isLocalPeer func(string) bool) {
-	rows := []wire.Session(nil)
-	if payload != nil {
-		rows = payload.Sessions
-	}
-	curHash := make(map[string]uint64, len(rows))
-	var curMember [deltaClassCount]map[string]struct{}
-	for c := range curMember {
-		curMember[c] = make(map[string]struct{}, len(rows))
-	}
+func snapshotView(rows []wire.Session) viewState {
+	v := viewState{prevHash: make(map[string]uint64, len(rows)), prevMember: make(map[string]struct{}, len(rows))}
 	for _, s := range rows {
-		curHash[s.ID] = hashSession(s)
-		curMember[deltaClassAll][s.ID] = struct{}{}
-		if wire.IsOwnedRow(s, isLocalPeer) {
-			curMember[deltaClassOwned][s.ID] = struct{}{}
+		v.prevHash[s.ID] = hashSession(s)
+		v.prevMember[s.ID] = struct{}{}
+	}
+	return v
+}
+
+// diffView returns the ids whose visible value changed between prev and the
+// rows now in the view, including ids that left it. It also returns the new
+// state for the next diff.
+func diffView(prev viewState, rows []wire.Session) ([]string, viewState) {
+	cur := snapshotView(rows)
+	var touched []string
+	for id, h := range cur.prevHash {
+		if ph, was := prev.prevHash[id]; !was || ph != h {
+			touched = append(touched, id)
 		}
 	}
+	for id := range prev.prevMember {
+		if _, still := cur.prevMember[id]; !still {
+			touched = append(touched, id)
+		}
+	}
+	return touched, cur
+}
 
+// DemandClass starts tracking a class (idempotent). Must be called under the
+// fanout mutex with the memo of the CURRENT state, so the first diff has a
+// correct baseline.
+func (r *deltaRing) DemandClass(class int, memo *sessionEncodeMemo) {
+	if class < 0 || class >= deltaClassCount || r.classes[class] != nil {
+		return
+	}
+	v := viewState{prevHash: map[string]uint64{}, prevMember: map[string]struct{}{}}
+	if memo != nil {
+		v = snapshotView(memo.ViewRows(class))
+	}
+	r.classes[class] = &v
+}
+
+// AddScope registers one more viewer of a scope, initializing its baseline
+// from the current memo when it is new.
+func (r *deltaRing) AddScope(key string, memo *sessionEncodeMemo) {
+	if st, ok := r.scopes[key]; ok {
+		st.refs++
+		return
+	}
+	st := &scopeState{refs: 1, viewState: viewState{prevHash: map[string]uint64{}, prevMember: map[string]struct{}{}}}
+	if memo != nil {
+		st.viewState = snapshotView(memo.ScopeRows(key))
+	}
+	r.scopes[key] = st
+}
+
+// ReleaseScope drops one viewer; at zero the scope stops being tracked.
+func (r *deltaRing) ReleaseScope(key string) {
+	st, ok := r.scopes[key]
+	if !ok {
+		return
+	}
+	st.refs--
+	if st.refs <= 0 {
+		delete(r.scopes, key)
+	}
+}
+
+// Record folds one broadcast into the ring. Must be called under the fanout
+// mutex, once per epoch, in epoch order, for every broadcast.
+func (r *deltaRing) Record(epoch uint64, memo *sessionEncodeMemo) {
 	entry := deltaRingEntry{epoch: epoch}
 	for c := 0; c < deltaClassCount; c++ {
+		st := r.classes[c]
+		if st == nil {
+			continue
+		}
 		var touched []string
-		for id := range curMember[c] {
-			if _, was := r.prevMember[c][id]; !was {
-				touched = append(touched, id)
-				continue
-			}
-			if r.prevHash[id] != curHash[id] {
-				touched = append(touched, id)
-			}
-		}
-		for id := range r.prevMember[c] {
-			if _, still := curMember[c][id]; !still {
-				touched = append(touched, id) // removal, incl. filtered-out
-			}
-		}
+		touched, *st = diffView(*st, memo.ViewRows(c))
 		entry.touched[c] = touched
 		r.ids += len(touched)
 	}
-	r.prevHash = curHash
-	r.prevMember = curMember
+	if len(r.scopes) > 0 {
+		entry.scoped = make(map[string][]string, len(r.scopes))
+		for key, st := range r.scopes {
+			var touched []string
+			touched, st.viewState = diffView(st.viewState, memo.ScopeRows(key))
+			entry.scoped[key] = touched
+			r.ids += len(touched)
+		}
+	}
 	r.entries = append(r.entries, entry)
 	r.evict()
 }
@@ -132,19 +228,15 @@ func (r *deltaRing) evict() {
 		for c := range oldest.touched {
 			r.ids -= len(oldest.touched[c])
 		}
+		for _, ids := range oldest.scoped {
+			r.ids -= len(ids)
+		}
 		r.base = oldest.epoch
 		r.entries = r.entries[1:]
 	}
 }
 
-// TouchedSince returns the ids a subscriber last served at `from` must be
-// updated on to reach `to`, for one audience class. ok is false when the
-// chain no longer covers `from` (evicted, or a different daemon boot) —
-// the caller must then send a full transaction.
-func (r *deltaRing) TouchedSince(from, to uint64, class int) ([]string, bool) {
-	if class < 0 || class >= deltaClassCount {
-		return nil, false
-	}
+func (r *deltaRing) touchedSince(from, to uint64, pick func(deltaRingEntry) ([]string, bool)) ([]string, bool) {
 	if from == 0 || from < r.base || to < from {
 		return nil, false
 	}
@@ -157,7 +249,11 @@ func (r *deltaRing) TouchedSince(from, to uint64, class int) ([]string, bool) {
 		if e.epoch > to {
 			break
 		}
-		for _, id := range e.touched[class] {
+		ids, ok := pick(e)
+		if !ok {
+			return nil, false
+		}
+		for _, id := range ids {
 			if _, dup := seen[id]; dup {
 				continue
 			}
@@ -168,23 +264,55 @@ func (r *deltaRing) TouchedSince(from, to uint64, class int) ([]string, bool) {
 	return out, true
 }
 
-// approxBytes is the ring's retained-string footprint, for the memory
-// measurement in the report.
+// TouchedSince returns the ids a subscriber of `class` last served at `from`
+// must be updated on to reach `to`. ok is false when the chain no longer
+// covers `from` (evicted, never tracked, or a different daemon boot).
+func (r *deltaRing) TouchedSince(from, to uint64, class int) ([]string, bool) {
+	if class < 0 || class >= deltaClassCount || r.classes[class] == nil {
+		return nil, false
+	}
+	return r.touchedSince(from, to, func(e deltaRingEntry) ([]string, bool) { return e.touched[class], true })
+}
+
+// ScopeTouchedSince is TouchedSince for a dynamic scope. An epoch in the
+// range that predates the scope's registration breaks the chain (ok=false):
+// the client must refetch.
+func (r *deltaRing) ScopeTouchedSince(from, to uint64, key string) ([]string, bool) {
+	if _, tracked := r.scopes[key]; !tracked {
+		return nil, false
+	}
+	return r.touchedSince(from, to, func(e deltaRingEntry) ([]string, bool) {
+		ids, ok := e.scoped[key]
+		return ids, ok
+	})
+}
+
+// approxBytes is the ring's retained-string footprint, for measurements.
 func (r *deltaRing) approxBytes() int {
 	total := 0
 	for _, e := range r.entries {
 		for c := range e.touched {
 			for _, id := range e.touched[c] {
-				total += len(id) + 16 // string header + bytes
+				total += len(id) + 16
+			}
+		}
+		for _, ids := range e.scoped {
+			for _, id := range ids {
+				total += len(id) + 16
 			}
 		}
 	}
-	for id := range r.prevHash {
-		total += len(id) + 16 + 8
+	for _, st := range r.classes {
+		if st == nil {
+			continue
+		}
+		for id := range st.prevHash {
+			total += 2*(len(id)+16) + 8
+		}
 	}
-	for c := range r.prevMember {
-		for id := range r.prevMember[c] {
-			total += len(id) + 16
+	for _, st := range r.scopes {
+		for id := range st.prevHash {
+			total += 2*(len(id)+16) + 8
 		}
 	}
 	return total

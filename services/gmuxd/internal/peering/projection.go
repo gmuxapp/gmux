@@ -46,6 +46,21 @@ type SessionProjection struct {
 	ProjectSlug           string            `json:"project_slug,omitempty"`
 	ProjectIndex          int               `json:"project_index,omitempty"`
 	LastOutputAt          string            `json:"last_output_at,omitempty"`
+	// DescendantCounts rides verbatim from a 3.0 spoke's roots-only feed; the
+	// hub adds it to whatever it can see itself (wire.AnnotateDescendantCounts).
+	DescendantCounts *DescendantCounts `json:"descendant_counts,omitempty"`
+}
+
+// DescendantCounts mirrors wire.DescendantCounts field-for-field.
+type DescendantCounts struct {
+	Total    int `json:"total"`
+	Alive    int `json:"alive"`
+	Unread   int `json:"unread"`
+	Error    int `json:"error"`
+	Waiting  int `json:"waiting"`
+	Active   int `json:"active"`
+	Running  int `json:"running"`
+	Children int `json:"children"`
 }
 
 type SessionStatus struct {
@@ -66,6 +81,10 @@ func cloneProjection(s SessionProjection) SessionProjection {
 	if s.Status != nil {
 		v := *s.Status
 		s.Status = &v
+	}
+	if s.DescendantCounts != nil {
+		v := *s.DescendantCounts
+		s.DescendantCounts = &v
 	}
 	return s
 }

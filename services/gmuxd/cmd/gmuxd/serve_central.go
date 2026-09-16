@@ -909,40 +909,77 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				}
 			}
 		})
+		// PROTO (3.0): a delta-capable connection registers the subtrees it is
+		// looking at. The connection id comes from stream.hello; the reply
+		// names the epoch the new scopes chain from.
+		mux.HandleFunc("POST /v1/events/scopes", func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "read error")
+				return
+			}
+			var req struct {
+				Conn   string   `json:"conn"`
+				Add    []string `json:"add"`
+				Remove []string `json:"remove"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil || req.Conn == "" {
+				writeError(w, http.StatusBadRequest, "bad_request", "conn is required")
+				return
+			}
+			if len(req.Add) > 256 {
+				writeError(w, http.StatusBadRequest, "bad_request", "too many scopes")
+				return
+			}
+			epoch, ok := fanout.UpdateScopes(req.Conn, req.Add, req.Remove)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not_found", "unknown stream connection")
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"epoch": epoch, "boot_id": fanout.BootID()}})
+		})
 		mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Connection", "keep-alive")
 			rc := http.NewResponseController(w)
-			asPeer := r.URL.Query().Get("as") == "peer"
+			q := r.URL.Query()
+			asPeer := q.Get("as") == "peer"
 			// Protocol 3 is explicit for every consumer. The current browser adds
 			// the marker; an old tab, peer, or custom consumer omits it and gets
 			// protocol 2 for one transitional release.
-			semanticSessions := useSemanticSessionStream(asPeer, r.URL.Query().Get("session_stream"))
-			// SPIKE (R5/R6): additive opt-in. `delta=1` asks for epoch-chained
-			// deltas instead of a full transaction per mutation; `since=<epoch>`
-			// plus `boot=<boot_id>` asks to resume a dropped connection instead
-			// of re-bootstrapping. Both are ignored for protocol-2 consumers
-			// and may be declined at any time by sending today's transaction.
-			wantDelta := semanticSessions && r.URL.Query().Get("delta") == "1"
-			deltaClass := deltaClassAll
-			if asPeer {
-				deltaClass = deltaClassOwned
-			}
+			semanticSessions := useSemanticSessionStream(asPeer, q.Get("session_stream"))
+			// PROTO (3.0): `view=roots` asks for the roots-only world state
+			// (each root carrying descendant_counts); `delta=1` asks for
+			// epoch-chained deltas instead of a full transaction per mutation;
+			// `since=<epoch>` plus `boot=<boot_id>` asks to resume a dropped
+			// connection instead of re-bootstrapping. All are ignored for
+			// protocol-2 consumers and may be declined at any time by sending
+			// today's transaction.
+			rootsView := semanticSessions && q.Get("view") == "roots"
+			wantDelta := semanticSessions && q.Get("delta") == "1"
+			class := deltaClassFor(asPeer, rootsView)
 			sinceEpoch := uint64(0)
-			if wantDelta && r.URL.Query().Get("boot") == fanout.BootID() {
-				if v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64); err == nil {
+			if wantDelta && q.Get("boot") == fanout.BootID() {
+				if v, err := strconv.ParseUint(q.Get("since"), 10, 64); err == nil {
 					sinceEpoch = v
 				}
+			}
+			connID := ""
+			if wantDelta {
+				// Demand precedes Subscribe so the class baseline is the state
+				// this connection's first transaction publishes.
+				fanout.DemandClass(class)
+				id, release := fanout.RegisterConn()
+				connID = id
+				defer release()
 			}
 			initial, ch, cancel := fanout.Subscribe()
 			defer cancel()
 			isLocalPeer := func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }
-			// Encoding is shared across subscribers: every broadcast carries one
-			// memo, and the first subscriber to reach it encodes for its filter
-			// class × protocol; the rest reuse the bytes. Epochs are allocated
-			// by the fanout under its mutex, so they are strictly increasing in
-			// each connection's delivery order.
+			if initial.SessionsEncode != nil {
+				initial.SessionsEncode.SetLocalPeer(isLocalPeer)
+			}
 			// lastSentEpoch is the only per-connection state deltas add: the
 			// epoch whose value this connection has already published.
 			lastSentEpoch := uint64(0)
@@ -950,11 +987,11 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				if !wantDelta || lastSentEpoch == 0 || memo == nil {
 					return false, nil
 				}
-				touched, ok := fanout.TouchedSince(lastSentEpoch, memo.epoch, deltaClass)
+				touched, ok := fanout.TouchedSince(lastSentEpoch, memo.epoch, class)
 				if !ok {
 					return false, nil
 				}
-				upsert, remove := memo.DeltaRows(asPeer, isLocalPeer, touched)
+				upsert, remove := memo.DeltaRows(class, touched)
 				event, fits, err := sessionstream.EncodeDelta(fanout.BootID(), lastSentEpoch, memo.epoch, upsert, remove)
 				if err != nil || !fits {
 					return false, nil // oversized or unencodable: fall back to the transaction
@@ -965,21 +1002,60 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				lastSentEpoch = memo.epoch
 				return true, nil
 			}
+			// sendScopes emits one snapshot.scope.delta per registered scope
+			// whose rows changed since the connection last saw it, at the same
+			// epoch as the world-state delta that preceded it — so a root's
+			// counts and its open children view never disagree.
+			sendScopes := func(memo *sessionEncodeMemo) error {
+				if connID == "" || memo == nil {
+					return nil
+				}
+				for key, last := range fanout.ScopesOf(connID) {
+					if last == 0 || last >= memo.epoch {
+						continue
+					}
+					touched, ok := fanout.ScopeTouchedSince(last, memo.epoch, key)
+					var event sessionstream.Event
+					fits := false
+					if ok {
+						if len(touched) == 0 {
+							fanout.AdvanceScope(connID, key, memo.epoch)
+							continue
+						}
+						upsert, remove := memo.ScopeDeltaRows(key, touched)
+						var err error
+						event, fits, err = sessionstream.EncodeScopeDelta(fanout.BootID(), key, last, memo.epoch, upsert, remove)
+						if err != nil {
+							fits = false
+						}
+					}
+					if !fits {
+						// Chain broken or oversized: the client refetches the page.
+						event = sessionstream.ScopeReset(fanout.BootID(), key, memo.epoch)
+					}
+					if err := sendSSEBytesFrame(rc, w, event.Type, event.Data); err != nil {
+						return err
+					}
+					fanout.AdvanceScope(connID, key, memo.epoch)
+				}
+				return nil
+			}
 			sendSessions := func(memo *sessionEncodeMemo) error {
 				if memo == nil {
 					return nil
 				}
+				memo.SetLocalPeer(isLocalPeer)
 				if sent, err := sendDelta(memo); sent {
 					return err
 				}
 				if !semanticSessions {
-					data, encodeErr := memo.Proto2(asPeer, isLocalPeer)
+					data, encodeErr := memo.Proto2(class)
 					if encodeErr != nil {
 						return encodeErr
 					}
 					return sendSSEBytesFrame(rc, w, "snapshot.sessions", data)
 				}
-				events, encodeErr := memo.Proto3(asPeer, isLocalPeer)
+				events, encodeErr := memo.Proto3(class)
 				if encodeErr != nil {
 					return encodeErr
 				}
@@ -989,14 +1065,25 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				lastSentEpoch = memo.epoch
 				return nil
 			}
+			worldFor := func(memo *sessionEncodeMemo, world *wire.WorldPayload) *wire.WorldPayload {
+				if !rootsView || memo == nil || world == nil {
+					return world
+				}
+				_, family := memo.Annotated()
+				narrowed := wire.RootsWorld(*world, family)
+				return &narrowed
+			}
 			if wantDelta {
 				// Feature detection: a client that asked for deltas learns
-				// whether this daemon speaks them, and which boot its epochs
-				// belong to, before any session data arrives.
+				// whether this daemon speaks them, which boot its epochs
+				// belong to, which view it is on, and the id it registers
+				// scopes under — before any session data arrives.
 				if err := sendSSEFrame(rc, w, "stream.hello", map[string]any{
 					"version": sessionstream.ProtocolVersion,
 					"boot_id": fanout.BootID(),
 					"delta":   true,
+					"view":    map[bool]string{true: "roots", false: "full"}[rootsView],
+					"conn_id": connID,
 				}); err != nil {
 					return
 				}
@@ -1031,12 +1118,13 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					h.Sessions = counts
 					initial.Frames.World.Health = &h
 				}
-				if err := sendSSEFrame(rc, w, "snapshot.world", initial.Frames.World); err != nil {
+				if err := sendSSEFrame(rc, w, "snapshot.world", worldFor(initial.SessionsEncode, initial.Frames.World)); err != nil {
 					return
 				}
 			}
 			heartbeat := time.NewTicker(30 * time.Second)
 			defer heartbeat.Stop()
+			lastMemo := initial.SessionsEncode
 			for {
 				select {
 				case <-r.Context().Done():
@@ -1061,6 +1149,12 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					if err := sendSessions(msg.SessionsEncode); err != nil {
 						return
 					}
+					if msg.SessionsEncode != nil {
+						lastMemo = msg.SessionsEncode
+						if err := sendScopes(msg.SessionsEncode); err != nil {
+							return
+						}
+					}
 					if asPeer {
 						if msg.ProjectsUpdate {
 							if err := sendSSEFrame(rc, w, "projects-update", map[string]any{"type": "projects-update"}); err != nil {
@@ -1070,7 +1164,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						continue
 					}
 					if msg.Frames.World != nil {
-						if err := sendSSEFrame(rc, w, "snapshot.world", msg.Frames.World); err != nil {
+						if err := sendSSEFrame(rc, w, "snapshot.world", worldFor(lastMemo, msg.Frames.World)); err != nil {
 							return
 						}
 					}
@@ -1224,6 +1318,17 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	action := ""
 	if len(parts) == 4 {
 		action = parts[3]
+	}
+	// PROTO (3.0): the two family read routes, local or forwarded.
+	if r.Method == http.MethodGet {
+		switch action {
+		case "":
+			handleSessionDetail(w, r, fanout, peerManager, sessionID)
+			return
+		case "children":
+			handleSessionChildren(w, r, fanout, peerManager, sessionID)
+			return
+		}
 	}
 	if peerManager != nil && action != "" {
 		if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {

@@ -91,6 +91,9 @@ type Session struct {
 	ProjectSlug           string            `json:"project_slug,omitempty"`
 	ProjectIndex          int               `json:"project_index,omitempty"`
 	LastOutputAt          string            `json:"last_output_at,omitempty"`
+	// DescendantCounts is the PROTO (3.0) additive subtree summary; present
+	// only on rows that have family descendants (see family.go).
+	DescendantCounts *DescendantCounts `json:"descendant_counts,omitempty"`
 }
 
 // SessionsPayload is the body of a snapshot.sessions SSE event and the
