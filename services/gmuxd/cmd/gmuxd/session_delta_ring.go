@@ -127,10 +127,27 @@ func hashSession(s wire.Session) uint64 {
 	return h.Sum64()
 }
 
-func snapshotView(rows []wire.Session) viewState {
+// rowHasher memoizes hashSession for one broadcast: a row that sits in
+// several demanded views/scopes (roots + roots-owned on a hub, a 2.x and a
+// 3.0 tab side by side, a `session:` scope over a root) is marshalled once
+// per epoch instead of once per view. The Proto3 encode still marshals the
+// row again for the wire; folding that in needs sessionstream.Encode to take
+// pre-encoded rows (see the report).
+type rowHasher interface {
+	RowHash(s wire.Session) uint64
+}
+
+type plainHasher struct{}
+
+func (plainHasher) RowHash(s wire.Session) uint64 { return hashSession(s) }
+
+func snapshotView(rows []wire.Session, h rowHasher) viewState {
+	if h == nil {
+		h = plainHasher{}
+	}
 	v := viewState{prevHash: make(map[string]uint64, len(rows)), prevMember: make(map[string]struct{}, len(rows))}
 	for _, s := range rows {
-		v.prevHash[s.ID] = hashSession(s)
+		v.prevHash[s.ID] = h.RowHash(s)
 		v.prevMember[s.ID] = struct{}{}
 	}
 	return v
@@ -139,8 +156,8 @@ func snapshotView(rows []wire.Session) viewState {
 // diffView returns the ids whose visible value changed between prev and the
 // rows now in the view, including ids that left it. It also returns the new
 // state for the next diff.
-func diffView(prev viewState, rows []wire.Session) ([]string, viewState) {
-	cur := snapshotView(rows)
+func diffView(prev viewState, rows []wire.Session, h rowHasher) ([]string, viewState) {
+	cur := snapshotView(rows, h)
 	var touched []string
 	for id, h := range cur.prevHash {
 		if ph, was := prev.prevHash[id]; !was || ph != h {
@@ -164,7 +181,7 @@ func (r *deltaRing) DemandClass(class int, memo *sessionEncodeMemo) {
 	}
 	v := viewState{prevHash: map[string]uint64{}, prevMember: map[string]struct{}{}}
 	if memo != nil {
-		v = snapshotView(memo.ViewRows(class))
+		v = snapshotView(memo.ViewRows(class), memo)
 	}
 	r.classes[class] = &v
 }
@@ -178,7 +195,7 @@ func (r *deltaRing) AddScope(key string, memo *sessionEncodeMemo) {
 	}
 	st := &scopeState{refs: 1, viewState: viewState{prevHash: map[string]uint64{}, prevMember: map[string]struct{}{}}}
 	if memo != nil {
-		st.viewState = snapshotView(memo.ScopeRows(key))
+		st.viewState = snapshotView(memo.ScopeRows(key), memo)
 	}
 	r.scopes[key] = st
 }
@@ -205,7 +222,7 @@ func (r *deltaRing) Record(epoch uint64, memo *sessionEncodeMemo) {
 			continue
 		}
 		var touched []string
-		touched, *st = diffView(*st, memo.ViewRows(c))
+		touched, *st = diffView(*st, memo.ViewRows(c), memo)
 		entry.touched[c] = touched
 		r.ids += len(touched)
 	}
@@ -213,7 +230,7 @@ func (r *deltaRing) Record(epoch uint64, memo *sessionEncodeMemo) {
 		entry.scoped = make(map[string][]string, len(r.scopes))
 		for key, st := range r.scopes {
 			var touched []string
-			touched, st.viewState = diffView(st.viewState, memo.ScopeRows(key))
+			touched, st.viewState = diffView(st.viewState, memo.ScopeRows(key), memo)
 			entry.scoped[key] = touched
 			r.ids += len(touched)
 		}

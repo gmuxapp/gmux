@@ -86,6 +86,9 @@ type sessionEncodeMemo struct {
 	index     map[int]map[string]int
 	proto2    map[int][]byte
 	proto3    map[int][]sessionstream.Event
+	// hashes memoizes the ring's per-row fingerprint for this epoch (see
+	// rowHasher): views and scopes share rows, the marshal runs once.
+	hashes map[string]uint64
 	// isLocalPeer is captured at first use: it is the same predicate for
 	// every subscriber of one daemon.
 	isLocalPeer func(string) bool
@@ -95,7 +98,21 @@ func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionE
 	if payload == nil {
 		return nil
 	}
-	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}}
+	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}, hashes: map[string]uint64{}}
+}
+
+// RowHash implements rowHasher: one marshal per row per epoch. Rows are
+// keyed by id, which is unique within one payload; the annotated copy is the
+// only one the ring ever hashes, so a memoized value never mixes states.
+func (m *sessionEncodeMemo) RowHash(s wire.Session) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if h, ok := m.hashes[s.ID]; ok {
+		return h
+	}
+	h := hashSession(s)
+	m.hashes[s.ID] = h
+	return h
 }
 
 // SetLocalPeer installs the ownership predicate used by the peer views.

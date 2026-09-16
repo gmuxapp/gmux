@@ -287,7 +287,7 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 		t.Logf("CPU/broadcast at N=%d, %s: %v", len(rows), label, time.Since(start)/iters)
 	}
 	measure("deltas disabled (today's fanout)", func(f *sseFanout) { f.DisableDeltas() })
-	measure("ring, no class demanded (annotate only)", func(f *sseFanout) {})
+	measure("ring idle, no class demanded (nothing hashed or annotated)", func(f *sseFanout) {})
 	measure("ring, roots class", func(f *sseFanout) { f.DemandClass(deltaClassRoots) })
 	measure("ring, roots + 1 children scope (DRIVER)", func(f *sseFanout) {
 		f.DemandClass(deltaClassRoots)
@@ -300,6 +300,14 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 		f.UpdateScopes(c, []string{scopeChildrenPrefix + rows[club].ID}, nil)
 	})
 	measure("ring, full class (spike's cost)", func(f *sseFanout) { f.DemandClass(deltaClassAll) })
+	measure("ring, roots + roots-owned (hub with a 3.0 spoke attached)", func(f *sseFanout) {
+		f.DemandClass(deltaClassRoots)
+		f.DemandClass(deltaClassRootsOwned)
+	})
+	measure("ring, roots + full (a 2.x tab and a 3.0 tab side by side)", func(f *sseFanout) {
+		f.DemandClass(deltaClassRoots)
+		f.DemandClass(deltaClassAll)
+	})
 	// encode costs
 	{
 		m := newSessionEncodeMemo(1, &wire.SessionsPayload{Sessions: clone(rows)})
