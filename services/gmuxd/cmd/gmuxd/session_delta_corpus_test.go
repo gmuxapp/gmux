@@ -139,14 +139,14 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	t.Logf("MUTATION child status (drawer closed): full-tx %d B | full-delta %d B | roots-delta %d B (%d root(s) touched: counts)", fullBytes, fb, rb, touchedN)
 
 	// --- burst of 8 child mutations under DRIVER, drawer CLOSED ------------
-	burst := func(from []wire.Session, fromEpoch uint64, scoped bool) (rootsSum, scopeSum, events int, last uint64, out []wire.Session) {
+	burst := func(label string, from []wire.Session, fromEpoch uint64, scoped bool) (rootsSum, scopeSum, events int, last uint64, out []wire.Session) {
 		cur := from
 		last = fromEpoch
 		for i := 0; i < 8; i++ {
 			cur = clone(cur)
 			switch i % 4 {
 			case 0:
-				cur = append(cur, wire.Session{ID: fmt.Sprintf("burst-%d", i), CreatedAt: time.Now().UTC().Format(time.RFC3339), Alive: true, Adapter: "pi", SemanticAgent: true, ParentSessionID: rows[driver].ID, Command: []string{"pi"}, Cwd: "/home/mg/dev/gmux"})
+				cur = append(cur, wire.Session{ID: fmt.Sprintf("burst-%s-%d", label, i), CreatedAt: time.Now().UTC().Format(time.RFC3339), Alive: true, Adapter: "pi", SemanticAgent: true, ParentSessionID: rows[driver].ID, Command: []string{"pi"}, Cwd: "/home/mg/dev/gmux"})
 			case 1:
 				cur[len(cur)-1].Title = "a freshly spawned subagent working on something"
 			case 2:
@@ -177,7 +177,7 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 		}
 		return rootsSum, scopeSum, events, last, cur
 	}
-	rClosed, _, _, epoch3, cur := burst(next, epoch2, false)
+	rClosed, _, _, epoch3, cur := burst("closed", next, epoch2, false)
 	t.Logf("BURST 8 child mutations, drawer CLOSED: roots-deltas %d B total (%d B/mutation); full-tx would be %d B", rClosed, rClosed/8, 8*fullBytes)
 
 	// --- same burst, drawer OPEN on DRIVER (scope registered) --------------
@@ -185,7 +185,7 @@ func TestSpikeCorpusMeasurements(t *testing.T) {
 	if !ok || regEpoch != epoch3 {
 		t.Fatalf("scope registration epoch %d ok=%v (want %d)", regEpoch, ok, epoch3)
 	}
-	rOpen, sOpen, _, epoch4, cur := burst(cur, epoch3, true)
+	rOpen, sOpen, _, epoch4, cur := burst("open", cur, epoch3, true)
 	t.Logf("BURST 8 child mutations, drawer OPEN:   roots-deltas %d B + scope-deltas %d B = %d B total (%d B/mutation)", rOpen, sOpen, rOpen+sOpen, (rOpen+sOpen)/8)
 	_, _ = fanout.UpdateScopes(conn, nil, []string{scopeChildrenPrefix + rows[driver].ID})
 

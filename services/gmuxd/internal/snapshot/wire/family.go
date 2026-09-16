@@ -180,6 +180,16 @@ func AnnotateDescendantCounts(rows []Session) *FamilyIndex {
 // each annotated with its subtree summary. rows must already be annotated
 // (AnnotateDescendantCounts) — the view is a filter, so the two cannot drift.
 // Order is preserved (ascending id, as the converter emits it).
+//
+// project_index is re-stamped as the dense rank among the ROOTS of each
+// (peer, project) folder. The flat FD-1 index counts children too, so every
+// subagent spawn renumbered every root placed after it in the project — on
+// the live corpus a spawn under DRIVER touched 10 roots (8.5 KB) instead of
+// one (0.9 KB). The sidebar uses project_index only as a sort key
+// (projects.ts compareFolderSessions), and the rank among roots orders roots
+// exactly as the flat index did, so no consumer of this view can tell the
+// difference except by the bytes it no longer receives. Rows that carry the
+// full index (2.x view, children pages) are untouched.
 func RootsView(rows []Session, idx *FamilyIndex) []Session {
 	out := make([]Session, 0, len(rows)/8+1)
 	for _, s := range rows {
@@ -188,7 +198,35 @@ func RootsView(rows []Session, idx *FamilyIndex) []Session {
 		}
 		out = append(out, s)
 	}
+	rerankRoots(out)
 	return out
+}
+
+func rerankRoots(roots []Session) {
+	type folder struct{ peer, slug string }
+	byFolder := map[folder][]int{}
+	for i, s := range roots {
+		if s.ProjectSlug == "" {
+			continue
+		}
+		f := folder{s.Peer, s.ProjectSlug}
+		byFolder[f] = append(byFolder[f], i)
+	}
+	for _, members := range byFolder {
+		sort.SliceStable(members, func(a, b int) bool {
+			x, y := roots[members[a]], roots[members[b]]
+			if x.ProjectIndex != y.ProjectIndex {
+				return x.ProjectIndex < y.ProjectIndex
+			}
+			if x.CreatedAt != y.CreatedAt {
+				return x.CreatedAt < y.CreatedAt
+			}
+			return x.ID < y.ID
+		})
+		for rank, i := range members {
+			roots[i].ProjectIndex = rank
+		}
+	}
 }
 
 // RootsWorld narrows the world frame to match the roots view: a project's

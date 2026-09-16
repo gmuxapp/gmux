@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,17 +102,28 @@ func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionE
 	return &sessionEncodeMemo{epoch: epoch, payload: payload, views: map[int]*wire.SessionsPayload{}, index: map[int]map[string]int{}, proto2: map[int][]byte{}, proto3: map[int][]sessionstream.Event{}, hashes: map[string]uint64{}}
 }
 
-// RowHash implements rowHasher: one marshal per row per epoch. Rows are
-// keyed by id, which is unique within one payload; the annotated copy is the
-// only one the ring ever hashes, so a memoized value never mixes states.
+// RowHash implements rowHasher: one marshal per row per epoch. Every view is
+// cut from the memo's one annotated copy, so a row differs between views in
+// exactly one field: project_index, which the roots views re-rank
+// (wire.RootsView). The key carries it so the two values never share a hash.
+//
+// INVARIANT: ids are unique within one payload (local ids are store-unique,
+// peer ids are namespaced `id@peer`). A payload with two rows of one id
+// would make the second alias the first's hash and its changes invisible to
+// the ring; the converter never produces one, and the delta tests' fixtures
+// must not either.
 func (m *sessionEncodeMemo) RowHash(s wire.Session) uint64 {
+	key := s.ID
+	if s.ProjectIndex != 0 {
+		key += "#" + strconv.Itoa(s.ProjectIndex)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if h, ok := m.hashes[s.ID]; ok {
+	if h, ok := m.hashes[key]; ok {
 		return h
 	}
 	h := hashSession(s)
-	m.hashes[s.ID] = h
+	m.hashes[key] = h
 	return h
 }
 

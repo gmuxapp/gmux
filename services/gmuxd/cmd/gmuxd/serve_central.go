@@ -1073,6 +1073,27 @@ func serveCentral(stderr io.Writer, replace bool) int {
 				narrowed := wire.RootsWorld(*world, family)
 				return &narrowed
 			}
+			// PROTO (3.0): the composer emits a world frame whenever a project's
+			// sessions[] changes — which every child spawn does. Narrowed to
+			// roots the frame is usually byte-identical to the last one this
+			// connection got (6.4 KB on the live corpus); skip it then. Full-view
+			// (2.x) connections keep today's behavior.
+			var lastWorldSent []byte
+			sendWorld := func(memo *sessionEncodeMemo, world *wire.WorldPayload) error {
+				narrowed := worldFor(memo, world)
+				if !rootsView {
+					return sendSSEFrame(rc, w, "snapshot.world", narrowed)
+				}
+				data, err := json.Marshal(narrowed)
+				if err != nil {
+					return err
+				}
+				if lastWorldSent != nil && bytes.Equal(data, lastWorldSent) {
+					return nil
+				}
+				lastWorldSent = data
+				return sendSSEBytesFrame(rc, w, "snapshot.world", data)
+			}
 			if wantDelta {
 				// Feature detection: a client that asked for deltas learns
 				// whether this daemon speaks them, which boot its epochs
@@ -1118,7 +1139,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					h.Sessions = counts
 					initial.Frames.World.Health = &h
 				}
-				if err := sendSSEFrame(rc, w, "snapshot.world", worldFor(initial.SessionsEncode, initial.Frames.World)); err != nil {
+				if err := sendWorld(initial.SessionsEncode, initial.Frames.World); err != nil {
 					return
 				}
 			}
@@ -1164,7 +1185,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 						continue
 					}
 					if msg.Frames.World != nil {
-						if err := sendSSEFrame(rc, w, "snapshot.world", worldFor(lastMemo, msg.Frames.World)); err != nil {
+						if err := sendWorld(lastMemo, msg.Frames.World); err != nil {
 							return
 						}
 					}
