@@ -38,6 +38,31 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.2 - 2026-09-16
+
+- **Fast recovery after daemon restart.** Live sessions no longer show as dead for up to a minute after a restart on hosts with a large history (~55 s → ~2 s). Health reports `degraded` instead of a false `ready` when a runner could not be recovered ([#531](https://github.com/gmuxapp/gmux/pull/531)).
+- **Web app reconnects on its own.** No more page reload after a stuck "reconnecting". Returning to the tab or coming back online reconnects automatically; a **Retry** button appears if retries run out ([#522](https://github.com/gmuxapp/gmux/pull/522), [#527](https://github.com/gmuxapp/gmux/pull/527)).
+- **Peer sessions in families.** "Promote to root" and reparenting now work for sessions on peered daemons. Cross-host moves are refused with a clear `cross_peer` error ([#525](https://github.com/gmuxapp/gmux/pull/525)).
+- **Rerun dead shells.** Dead shell sessions offered a "Resume" that always failed. They now **Rerun** the recorded command; sessions with a conversation still resume. Restarting a live shell no longer kills it ([#526](https://github.com/gmuxapp/gmux/pull/526)).
+- Plus minor fixes
+
+
+### Fixes
+- **(build)** support direct Go 1.27 invocations ([#523](https://github.com/gmuxapp/gmux/pull/523))
+- **(web)** recover SSE after fatal transport failures ([#522](https://github.com/gmuxapp/gmux/pull/522))
+- **(peering)** promote and same-peer reparent for peer sessions ([#525](https://github.com/gmuxapp/gmux/pull/525))
+- **(web)** patch-release polish — resize refusal, day labels, wake retry, dep trim ([#527](https://github.com/gmuxapp/gmux/pull/527))
+- **(gmuxd,build)** patch-release polish — bounded scan guard, diagnostic dev version ([#528](https://github.com/gmuxapp/gmux/pull/528))
+- rerun dead shell sessions instead of refusing the relaunch the UI offered ([#526](https://github.com/gmuxapp/gmux/pull/526))
+- **(daemon)** recover surviving runners on the first pass after a restart, and stop reporting an abandoned pass as ready ([#531](https://github.com/gmuxapp/gmux/pull/531))
+
+### Docs
+- correct 2.1 docs against shipped behavior; fix two e2e defects ([#529](https://github.com/gmuxapp/gmux/pull/529))
+
+### Features
+- gzip on the phone path — SSE stream, scrollback replay, JSON and the web bundle ([#533](https://github.com/gmuxapp/gmux/pull/533))
+
+---
 ## v2.1.1 - 2026-09-14
 
 - **Fast recovery after daemon restart.** Live sessions no longer show as dead for up to a minute after a restart on hosts with a large history (~55 s → ~2 s). Health reports `degraded` instead of a false `ready` when a runner could not be recovered ([#531](https://github.com/gmuxapp/gmux/pull/531)).
