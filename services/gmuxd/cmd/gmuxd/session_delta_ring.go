@@ -148,11 +148,14 @@ func newDeltaRing() *deltaRing {
 func (r *deltaRing) ScopeCount() int { return len(r.scopes) }
 
 // hashSession fingerprints a row's wire value (including its descendant
-// counts, so a root whose subtree changed is touched). PROTO shortcut kept
-// from the spike: it marshals the row. With the roots class this runs over
-// ~150 rows per broadcast instead of ~2,900; a store-side revision would make
-// it O(1)/row and is still the right end state.
-func hashSession(s wire.Session) uint64 {
+// counts, so a root whose subtree changed is touched). Round 2: a reflective
+// walk (row_fingerprint.go) instead of json.Marshal; a store-side revision
+// would make it O(1)/row and is still the right end state.
+func hashSession(s wire.Session) uint64 { return fingerprintSession(s) }
+
+// hashSessionJSON is the spike's marshal-based fingerprint, kept as the
+// oracle the reflective one is tested against.
+func hashSessionJSON(s wire.Session) uint64 {
 	encoded, err := json.Marshal(s)
 	if err != nil {
 		return 0
