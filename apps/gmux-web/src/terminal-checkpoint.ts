@@ -16,6 +16,27 @@ export const CHECKPOINT_WIRE_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J'
 const CHECKPOINT_BROWSER_RESET = encoder.encode('\x1b[r\x1b[H\x1b[2J\x1b[3J')
 const CHECKPOINT_SGR_RESET = encoder.encode('\x1b[0m')
 
+// DEC private modes that change what the browser *sends* (cursor keys, mouse
+// tracking + encodings, focus reports, bracketed paste). Mirrors the runner's
+// `browserInputModes`. A repaint alone leaves a fresh or session-reset xterm
+// with none of them, so a fullscreen TUI that enabled mouse tracking before
+// the browser attached would get wheel events as arrow keys.
+export const BROWSER_INPUT_MODES: readonly number[] = [1, 9, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016, 2004]
+
+/**
+ * Authoritative input-mode restore: clear every known input mode, then set
+ * the runner-reported ones in ascending order (mouse protocols are mutually
+ * exclusive in xterm.js; the highest set one wins, as in the emulator's
+ * boolean view). Unknown numbers are ignored.
+ */
+export function inputModeSequence(modes: readonly number[]): Uint8Array {
+  const set = new Set(modes)
+  let seq = ''
+  for (const m of BROWSER_INPUT_MODES) seq += `\x1b[?${m}l`
+  for (const m of BROWSER_INPUT_MODES) if (set.has(m)) seq += `\x1b[?${m}h`
+  return encoder.encode(seq)
+}
+
 export type CheckpointMargins = { top: number, bottom: number, rows: number }
 
 /**
@@ -26,8 +47,9 @@ export type CheckpointMargins = { top: number, bottom: number, rows: number }
  * background from coloring blank cells. The browser-specific transform also
  * resets margins before repaint and restores the emulator's authoritative
  * 1-based region before the frame's final cursor-position/visibility tail.
- * The raw frame's CSI r is never changed, and no other terminal state is
- * claimed to be serialized.
+ * When the runner reports them, input modes (BROWSER_INPUT_MODES) are
+ * restored authoritatively too. The raw frame's CSI r is never changed, and
+ * no other terminal state is claimed to be serialized.
  */
 function cursorTailOffset(frameBody: Uint8Array): number | null {
   // The shared frame ends with CUP + DECTCEM + ESU. Find CUP only within that
@@ -56,7 +78,7 @@ function cursorTailOffset(frameBody: Uint8Array): number | null {
   return null
 }
 
-export function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: boolean | null, margins: CheckpointMargins | null): Uint8Array[] {
+export function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: boolean | null, margins: CheckpointMargins | null, inputModes: readonly number[] | null = null): Uint8Array[] {
   if (chunks.length === 0) return chunks
   const first = chunks[0]
   if (!startsWith(first, BSU)) {
@@ -96,7 +118,9 @@ export function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: 
   }
   const repaint = body.slice(0, tailOffset)
   const cursorTail = body.slice(tailOffset)
-  const prepared = new Uint8Array(BSU.length + CHECKPOINT_SGR_RESET.length + buffer.length + CHECKPOINT_BROWSER_RESET.length + repaint.length + restoreMargins.length + cursorTail.length)
+  // Runners that predate input-mode metadata send none: leave modes alone.
+  const modes = inputModes === null ? new Uint8Array() : inputModeSequence(inputModes)
+  const prepared = new Uint8Array(BSU.length + CHECKPOINT_SGR_RESET.length + buffer.length + CHECKPOINT_BROWSER_RESET.length + repaint.length + restoreMargins.length + modes.length + cursorTail.length)
   let offset = 0
   prepared.set(BSU, offset); offset += BSU.length
   prepared.set(CHECKPOINT_SGR_RESET, offset); offset += CHECKPOINT_SGR_RESET.length
@@ -104,6 +128,7 @@ export function prepareBrowserCheckpoint(chunks: Uint8Array[], activeAlternate: 
   prepared.set(CHECKPOINT_BROWSER_RESET, offset); offset += CHECKPOINT_BROWSER_RESET.length
   prepared.set(repaint, offset); offset += repaint.length
   prepared.set(restoreMargins, offset); offset += restoreMargins.length
+  prepared.set(modes, offset); offset += modes.length
   prepared.set(cursorTail, offset)
   return [prepared, ...chunks.slice(1)]
 }
