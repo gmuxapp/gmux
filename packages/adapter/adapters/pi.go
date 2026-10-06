@@ -34,7 +34,14 @@ var (
 // CORRECTNESS-critical: gmux injects `-e` right after the binary for the
 // session extension, which shoves the verb off argv[1] and demotes it to a
 // prompt — so a verb missing here means `gmux -- pi <verb>` silently starts a
-// chat instead of running the command. Keep synced with `pi --help`.
+// chat instead of running the command. Keep synced with `pi --help`
+// (TestPiSubcommandsMatchHelp fails on any drift, by design).
+//
+// Every pi verb so far is a utility, never an agent session: the only way to
+// get an interactive (resumable) session is bare `pi [flags] [messages]`.
+// `config` opens a TUI, but a settings picker, not a conversation. To add a
+// verb pi introduces, add one line here; if pi ever adds a verb that DOES
+// start an agent session, it must not be listed here.
 var piSubcommands = map[string]bool{
 	// auth was added after pi 0.82.1. Keeping it in the passthrough superset is
 	// harmless with older pi (where it is not a valid command) and prevents a
@@ -46,6 +53,8 @@ var piSubcommands = map[string]bool{
 	"update":    true,
 	"list":      true,
 	"config":    true,
+	// mcp (pi 1.0): inspect MCP servers / OAuth sign-in. One-shot utility.
+	"mcp": true,
 }
 
 // piInfoFlags short-circuit pi to print-and-exit. Passing these through is
@@ -55,6 +64,7 @@ var piInfoFlags = map[string]bool{
 	"--help":    true,
 	"-h":        true,
 	"--version": true,
+	"-v":        true,
 }
 
 func init() {
