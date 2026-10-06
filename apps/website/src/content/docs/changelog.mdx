@@ -38,6 +38,25 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.1.2 - 2026-10-06
+
+- **Scrolling works in fullscreen pi.** pi 1.0 runs fullscreen and handles the mouse wheel itself; gmux now restores its mouse modes when you open, switch to, or reload a session, so the wheel scrolls the transcript instead of cycling prompt history ([#538](https://github.com/gmuxapp/gmux/pull/538)).
+- **Less data on mobile.** The session stream, scrollback replay, JSON responses and the web bundle are gzip-compressed over the network (session list ~6.5× smaller, scrollback ~20×). Disable with `[http] compression = false` or `GMUXD_HTTP_COMPRESS=0` ([#533](https://github.com/gmuxapp/gmux/pull/533)).
+- **pi 1.0 compatibility.** `pi mcp …` and `pi -v` run as plain commands instead of starting an agent session ([#539](https://github.com/gmuxapp/gmux/pull/539)).
+
+### Upgrade notes
+
+- Sessions that were already running keep their old runner until restarted. To get the scrolling fix in an existing fullscreen pi session, kill and resume it (or start a new one).
+
+### Features
+- gzip on the phone path — SSE stream, scrollback replay, JSON and the web bundle ([#533](https://github.com/gmuxapp/gmux/pull/533))
+
+### Fixes
+- **(terminal)** restore mouse/input modes on checkpoint so wheel in fullscreen pi scrolls ([#538](https://github.com/gmuxapp/gmux/pull/538))
+- **(adapter)** handle pi 1.0 `mcp` subcommand and `-v` info flag ([#539](https://github.com/gmuxapp/gmux/pull/539))
+- **(web)** first scroll after a reflow no longer jumps back to the last hand-scrolled row ([#541](https://github.com/gmuxapp/gmux/pull/541))
+
+---
 ## v2.1.1 - 2026-09-14
 
 - **Fast recovery after daemon restart.** Live sessions no longer show as dead for up to a minute after a restart on hosts with a large history (~55 s → ~2 s). Health reports `degraded` instead of a false `ready` when a runner could not be recovered ([#531](https://github.com/gmuxapp/gmux/pull/531)).
