@@ -43,14 +43,14 @@ func TestPiSubcommandsMatchHelp(t *testing.T) {
 		t.Fatalf("found no subcommands in `pi --help` — has the Commands block format changed?\n%s", out)
 	}
 	for verb := range got {
-		if !piSubcommands[verb] {
-			t.Errorf("pi added subcommand %q not in piSubcommands — `gmux -- pi %s` would be demoted to a prompt; add it (pi.go)", verb, verb)
+		if !piSubcommands[verb] && !piSessionVerbs[verb] {
+			t.Errorf("pi added subcommand %q not in piSubcommands — `gmux -- pi %s` would be demoted to a prompt; add it to piSubcommands, or to piSessionVerbs if it starts an agent session (pi.go)", verb, verb)
 		}
 	}
-	// `auth` first appears after pi 0.82.1. CI intentionally exercises multiple
-	// pi versions, so the production set is a forward-compatible superset rather
-	// than requiring every older help page to advertise every known command.
-	forwardCompatible := map[string]bool{"auth": true}
+	// `auth` first appears after pi 0.82.1 and `mcp` in pi 1.0. CI only runs
+	// pi@latest, but the production set is a forward-compatible superset, so
+	// tolerate their absence for developers with an older local pi.
+	forwardCompatible := map[string]bool{"auth": true, "mcp": true}
 	for verb := range piSubcommands {
 		if !got[verb] && !forwardCompatible[verb] {
 			t.Errorf("piSubcommands has %q but `pi --help` no longer lists it — remove it (pi.go)", verb)

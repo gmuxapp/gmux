@@ -41,7 +41,12 @@ var (
 // get an interactive (resumable) session is bare `pi [flags] [messages]`.
 // `config` opens a TUI, but a settings picker, not a conversation. To add a
 // verb pi introduces, add one line here; if pi ever adds a verb that DOES
-// start an agent session, it must not be listed here.
+// start an agent session, add it to piSessionVerbs instead (never both).
+// piSessionVerbs are pi verbs that start an agent session and therefore must
+// NOT be in piSubcommands. Empty today; TestPiSubcommandsMatchHelp accepts
+// verbs listed here as known. Not consulted at runtime.
+var piSessionVerbs = map[string]bool{}
+
 var piSubcommands = map[string]bool{
 	// auth was added after pi 0.82.1. Keeping it in the passthrough superset is
 	// harmless with older pi (where it is not a valid command) and prevents a
