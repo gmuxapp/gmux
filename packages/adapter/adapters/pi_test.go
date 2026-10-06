@@ -128,6 +128,7 @@ func TestPiIsPassthrough(t *testing.T) {
 	passthrough := [][]string{
 		{"pi", "update"},
 		{"pi", "update", "self"},
+		{"pi", "mcp", "list"},
 		{"pi", "list"},
 		{"pi", "config"},
 		{"pi", "install", "foo"},
@@ -137,6 +138,7 @@ func TestPiIsPassthrough(t *testing.T) {
 		{"pi", "--help"},                       // info flags short-circuit pi
 		{"pi", "-h"},
 		{"pi", "--version"},
+		{"pi", "-v"},
 		{"pi", "--name", "x", "--help"}, // info flag anywhere in top-level args
 	}
 	for _, args := range passthrough {
