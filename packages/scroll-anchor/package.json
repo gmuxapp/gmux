@@ -37,7 +37,7 @@
     "@xterm/xterm": "*"
   },
   "devDependencies": {
-    "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.288-gmux.5",
+    "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.288-gmux.6",
     "typescript": "^5.8.2",
     "vitest": "^3.0.7"
   }
