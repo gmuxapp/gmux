@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BSU, ESU } from './replay'
-import { CHECKPOINT_WIRE_RESET, prepareBrowserCheckpoint } from './terminal-checkpoint'
+import { BROWSER_INPUT_MODES, CHECKPOINT_WIRE_RESET, prepareBrowserCheckpoint } from './terminal-checkpoint'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -108,5 +108,33 @@ describe('prepareBrowserCheckpoint with authoritative metadata', () => {
     const frame = encoder.encode(bsu + WIRE_RESET + 'body with no tail' + esu)
     const prepared = prepare(frame, false, { top: 1, bottom: 24, rows: 24 })
     expect(prepared).toBe(SGR_RESET + decoder.decode(frame))
+  })
+})
+
+describe('prepareBrowserCheckpoint input modes', () => {
+  const margins = { top: 1, bottom: 24, rows: 24 }
+
+  it('leaves input modes untouched when the runner reports none (older runner)', () => {
+    const out = decoder.decode(prepareBrowserCheckpoint([sharedFrame('x')], true, margins, null)[0])
+    for (const m of [1000, 1006, 2004]) for (const f of 'hl') expect(out).not.toContain(`\x1b[?${m}${f}`)
+  })
+
+  it('restores reported mouse/paste modes after the repaint and before the cursor tail', () => {
+    const out = decoder.decode(prepareBrowserCheckpoint([sharedFrame('PI')], true, margins, [1000, 1002, 1003, 1004, 1006, 2004])[0])
+    const sets = out.indexOf('\x1b[?1000h')
+    expect(out.indexOf('PI')).toBeLessThan(sets)
+    expect(sets).toBeLessThan(out.indexOf('\x1b[5;7H'))
+    for (const m of [1000, 1002, 1003, 1004, 1006, 2004]) expect(out).toContain(`\x1b[?${m}h`)
+    expect(out).not.toContain('\x1b[?1h')
+    // Ascending order: the most capable mouse protocol is applied last.
+    expect(out.indexOf('\x1b[?1003h')).toBeGreaterThan(out.indexOf('\x1b[?1000h'))
+    expect(out.endsWith(esu)).toBe(true)
+  })
+
+  it('clears every known input mode for an empty list and ignores unknown modes', () => {
+    const out = decoder.decode(prepareBrowserCheckpoint([sharedFrame('x')], false, margins, [12345])[0])
+    for (const m of [1, 1000, 1003, 1006, 2004]) expect(out).toContain(`\x1b[?${m}l`)
+    for (const m of BROWSER_INPUT_MODES) expect(out).not.toContain(`\x1b[?${m}h`)
+    expect(out).not.toContain('\x1b[?12345')
   })
 })

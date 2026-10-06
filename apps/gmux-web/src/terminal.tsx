@@ -1056,6 +1056,7 @@ export function TerminalView({
       let checkpointAlt: boolean | null = null
       let checkpointMargins: CheckpointMargins | null = null
       let checkpointCols: number | undefined
+      let checkpointInputModes: number[] | null = null
       // Keep post-checkpoint bytes out of TerminalIO until the initial replay
       // has committed and xterm has claimed the browser geometry.
       let attachPhase: 'replay' | 'claiming' | 'claimed' = isFirstConnect ? 'replay' : 'claimed'
@@ -1067,7 +1068,7 @@ export function TerminalView({
         setTermLoading(false)
       }
       const replay = createReplayBuffer((chunks) => {
-        const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins)
+        const prepared = prepareBrowserCheckpoint(chunks, checkpointAlt, checkpointMargins, checkpointInputModes)
         const claiming = attachPhase === 'replay'
         if (claiming) attachPhase = 'claiming'
         // New runners declare the exact geometry used to render this frame.
@@ -1206,6 +1207,9 @@ export function TerminalView({
             if (msg.type === 'terminal_checkpoint') {
               checkpointAlt = msg.active_buffer === 'alternate'
               checkpointCols = Number.isInteger(msg.cols) && msg.cols > 0 ? msg.cols : undefined
+              checkpointInputModes = Array.isArray(msg.input_modes)
+                ? msg.input_modes.filter((m: unknown): m is number => Number.isInteger(m))
+                : null
               if (Number.isInteger(msg.scroll_top) && Number.isInteger(msg.scroll_bottom) && Number.isInteger(msg.rows)) {
                 checkpointMargins = { top: msg.scroll_top, bottom: msg.scroll_bottom, rows: msg.rows }
               }

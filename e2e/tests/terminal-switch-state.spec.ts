@@ -210,11 +210,13 @@ test('real A→B→A isolation and reconnect checkpoint', async ({ page }) => {
         && !text.includes('B-ALT')
     })
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-A-again.png' })
-    await page.waitForFunction(() => {
+    // A's own input modes (?1 ?1000 ?1006 ?2004 ?1004) come back from the
+    // runner's checkpoint metadata: a TUI that enabled mouse tracking before
+    // this attach must keep receiving mouse reports, not wheel→arrow keys.
+    await expect.poll(() => page.evaluate(() => {
       const term = (window as any).__gmuxTerm
-      return !term.modes.applicationCursorKeys && !term.modes.bracketedPasteMode
-        && term.modes.mouseTrackingMode === 'none'
-    })
+      return { appCursor: term.modes.applicationCursorKeysMode, bracketedPaste: term.modes.bracketedPasteMode, mouse: term.modes.mouseTrackingMode, focus: term.modes.sendFocusMode }
+    })).toMatchObject({ appCursor: true, bracketedPaste: true, mouse: 'vt200', focus: true })
 
     await page.screenshot({ path: '.memory/screenshots/terminal-switch-state-after-reconnect.png' })
 

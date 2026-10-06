@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -375,12 +376,64 @@ func (m *marginTracker) set(alt bool, margins verticalMargins) {
 	}
 }
 
+// browserInputModes are the DEC private modes that change what the browser
+// terminal *sends*: cursor-key encoding, mouse tracking and its encodings,
+// focus reports and bracketed paste. A checkpoint repaints the screen but a
+// fresh or session-reset xterm has none of these, so a fullscreen TUI that
+// enabled mouse tracking before the browser attached (pi ≥ 1.0 does, inside
+// ?1049h) would get wheel events translated into arrow keys. The runner's
+// emulator observes every byte, so it is authoritative for these modes.
+var browserInputModes = []int{1, 9, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016, 2004}
+
+// inputModeTracker mirrors browserInputModes from the emulator's mode
+// callbacks (including the resets RIS performs). Guarded by Server.mu like
+// the emulator itself.
+type inputModeTracker struct {
+	set map[int]bool
+}
+
+func newInputModeTracker() *inputModeTracker {
+	return &inputModeTracker{set: map[int]bool{}}
+}
+
+func (t *inputModeTracker) update(mode ansi.Mode, on bool) {
+	dec, ok := mode.(ansi.DECMode)
+	if !ok {
+		return
+	}
+	n := int(dec)
+	if !slices.Contains(browserInputModes, n) {
+		return
+	}
+	if on {
+		t.set[n] = true
+	} else {
+		delete(t.set, n)
+	}
+}
+
+// active returns the set modes in ascending order (never nil, so the JSON
+// field is always an explicit list for runners that know about it).
+func (t *inputModeTracker) active() []int {
+	out := []int{}
+	for _, n := range browserInputModes {
+		if t.set[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // newScreenWithMargins observes DECSTBM at the same point the vt emulator
 // applies it. Registering a handler that returns false lets vt's built-in
 // handler run after we mirror its validated 1-based semantics. Keeping one
 // pair per buffer matters: vt retains the normal screen's region when 1049
 // switches to the separately initialised alternate screen.
 func newScreenWithMargins(cols, rows int, cursorCb func(visible bool), margins *marginTracker) (*vt.Emulator, chan struct{}) {
+	return newScreenWithTrackers(cols, rows, cursorCb, margins, nil)
+}
+
+func newScreenWithTrackers(cols, rows int, cursorCb func(visible bool), margins *marginTracker, modes *inputModeTracker) (*vt.Emulator, chan struct{}) {
 	// Default to 80x24 when launched non-interactively (no terminal).
 	// The first resize from a connecting client will set the real size.
 	if cols <= 0 {
@@ -391,7 +444,12 @@ func newScreenWithMargins(cols, rows int, cursorCb func(visible bool), margins *
 	}
 	e := vt.NewEmulator(cols, rows)
 	e.SetScrollbackSize(maxScrollback)
-	e.SetCallbacks(vt.Callbacks{CursorVisibility: cursorCb})
+	cb := vt.Callbacks{CursorVisibility: cursorCb}
+	if modes != nil {
+		cb.EnableMode = func(mode ansi.Mode) { modes.update(mode, true) }
+		cb.DisableMode = func(mode ansi.Mode) { modes.update(mode, false) }
+	}
+	e.SetCallbacks(cb)
 	if margins != nil {
 		e.RegisterCsiHandler('r', func(params ansi.Params) bool {
 			top, _, _ := params.Param(0, 1)
@@ -571,6 +629,9 @@ type terminalCheckpointMetadata struct {
 	ScrollBottom int    `json:"scroll_bottom"`
 	Cols         int    `json:"cols"`
 	Rows         int    `json:"rows"`
+	// InputModes lists the set browserInputModes. Older browsers ignore it;
+	// its absence (older runner) tells the browser not to touch input modes.
+	InputModes []int `json:"input_modes"`
 }
 
 // snapshotFrame is the shared raw attach checkpoint. It must remain valid for
@@ -617,9 +678,10 @@ type Server struct {
 	// nil when a test injected a bare listener; such a server owns no
 	// pathname and must never unlink one.
 	bound           *BoundSocket
-	screen          *vt.Emulator   // virtual terminal for replay snapshots (guarded by mu)
-	screenDrainDone chan struct{}  // closed when the DSR drain goroutine exits
-	margins         *marginTracker // DECSTBM margins mirrored per emulator buffer (guarded by mu)
+	screen          *vt.Emulator      // virtual terminal for replay snapshots (guarded by mu)
+	screenDrainDone chan struct{}     // closed when the DSR drain goroutine exits
+	margins         *marginTracker    // DECSTBM margins mirrored per emulator buffer (guarded by mu)
+	inputModes      *inputModeTracker // browser input modes mirrored from the emulator (guarded by mu)
 	state           *session.State
 	// promptMarks derives Status from OSC 133 prompt marks for every
 	// session whose adapter is not hook-driven (adapter.HookDriven — the
@@ -860,9 +922,10 @@ func New(cfg Config) (*Server, error) {
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
 	s.margins = newMarginTracker(int(cfg.Rows))
-	s.screen, s.screenDrainDone = newScreenWithMargins(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
+	s.inputModes = newInputModeTracker()
+	s.screen, s.screenDrainDone = newScreenWithTrackers(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
-	}, s.margins)
+	}, s.margins, s.inputModes)
 
 	// Non-hook-driven sessions get their busy/idle Status derived from
 	// OSC 133 prompt marks in the output stream: Active=true when a
@@ -1769,6 +1832,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			Type: "terminal_checkpoint", ActiveBuffer: activeBuffer,
 			ScrollTop: margins.top, ScrollBottom: margins.bottom,
 			Cols: int(s.ptyCols), Rows: int(s.ptyRows),
+			InputModes: []int{},
+		}
+		if s.inputModes != nil {
+			meta.InputModes = s.inputModes.active()
 		}
 		metaBytes, _ := json.Marshal(meta)
 		if err := client.write(websocket.MessageText, metaBytes); err != nil {

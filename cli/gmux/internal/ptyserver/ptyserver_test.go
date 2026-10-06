@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -930,11 +931,12 @@ func TestShutdownDrainNoRace(t *testing.T) {
 func TestTerminalCheckpointMetadataCarriesGeometryAndMargins(t *testing.T) {
 	data, err := json.Marshal(terminalCheckpointMetadata{
 		Type: "terminal_checkpoint", ActiveBuffer: "alternate", ScrollTop: 2, ScrollBottom: 4, Cols: 91, Rows: 44,
+		InputModes: []int{1000, 1006},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"type":"terminal_checkpoint","active_buffer":"alternate","scroll_top":2,"scroll_bottom":4,"cols":91,"rows":44}`
+	want := `{"type":"terminal_checkpoint","active_buffer":"alternate","scroll_top":2,"scroll_bottom":4,"cols":91,"rows":44,"input_modes":[1000,1006]}`
 	if string(data) != want {
 		t.Fatalf("metadata = %s, want %s", data, want)
 	}
@@ -962,6 +964,26 @@ func TestMarginsFollowVTPerBufferAndResetSemantics(t *testing.T) {
 	}
 	if got := margins.active(true); got != (verticalMargins{top: 1, bottom: 6}) {
 		t.Fatalf("alternate margins after RIS = %+v, want full screen", got)
+	}
+}
+
+func TestInputModesFollowVTIncludingRIS(t *testing.T) {
+	modes := newInputModeTracker()
+	screen, screenDrain := newScreenWithTrackers(20, 6, func(bool) {}, nil, modes)
+	defer stopScreenDrain(screen, screenDrain)
+
+	// pi >= 1.0 fullscreen startup sequence (recorded from 1.0.4).
+	screen.Write([]byte("\x1b[?1049h\x1b[?7l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h\x1b[?25l\x1b[?2004h\x1b[?2031h"))
+	if got, want := modes.active(), []int{1000, 1002, 1003, 1004, 1006, 2004}; !slices.Equal(got, want) {
+		t.Fatalf("modes = %v, want %v", got, want)
+	}
+	screen.Write([]byte("\x1b[?1003l\x1b[?1h"))
+	if got, want := modes.active(), []int{1, 1000, 1002, 1004, 1006, 2004}; !slices.Equal(got, want) {
+		t.Fatalf("modes after 1003l/1h = %v, want %v", got, want)
+	}
+	screen.Write([]byte("\x1bc"))
+	if got := modes.active(); got == nil || len(got) != 0 {
+		t.Fatalf("modes after RIS = %#v, want empty non-nil", got)
 	}
 }
 
