@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +47,13 @@ type sseFanout struct {
 	sessions *wire.SessionsPayload
 	world    *wire.WorldPayload
 	subs     map[chan fanoutMessage]struct{}
+
+	// SPIKE (R5/R6). bootID makes epochs comparable across daemon restarts:
+	// epochs restart at 1 on every boot, so a resume request is only honored
+	// when the boot id matches too. ring/ownedFilter power deltas + resume.
+	bootID      string
+	ring        *deltaRing
+	ownedFilter func(string) bool
 }
 
 // sessionEncodeMemo encodes one broadcast sessions payload at most once per
@@ -66,6 +75,39 @@ type sessionEncodeMemo struct {
 	peerFiltered *wire.SessionsPayload
 	proto2       map[bool][]byte                // peer-filtered? -> marshaled payload
 	proto3       map[bool][]sessionstream.Event // peer-filtered? -> transaction events
+	index        map[bool]map[string]int        // SPIKE: peer-filtered? -> id -> row position
+}
+
+// SPIKE (R5): DeltaRows resolves touched ids against this broadcast's payload
+// for one audience. Present ids come back as upserts carrying the row's value
+// AT THIS EPOCH; absent ids come back as removals — which is how a row that
+// was filtered out (ownership flip, dismissal) reaches the client as a
+// removal rather than going stale.
+func (m *sessionEncodeMemo) DeltaRows(peer bool, isLocalPeer func(string) bool, touched []string) ([]wire.Session, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.payloadForLocked(peer, isLocalPeer)
+	idx, ok := m.index[peer]
+	if !ok {
+		idx = make(map[string]int, len(p.Sessions))
+		for i, s := range p.Sessions {
+			idx[s.ID] = i
+		}
+		if m.index == nil {
+			m.index = map[bool]map[string]int{}
+		}
+		m.index[peer] = idx
+	}
+	upsert := make([]wire.Session, 0, len(touched))
+	remove := make([]string, 0, 8)
+	for _, id := range touched {
+		if i, present := idx[id]; present {
+			upsert = append(upsert, p.Sessions[i])
+			continue
+		}
+		remove = append(remove, id)
+	}
+	return upsert, remove
 }
 
 func newSessionEncodeMemo(epoch uint64, payload *wire.SessionsPayload) *sessionEncodeMemo {
@@ -119,7 +161,47 @@ func (m *sessionEncodeMemo) Proto3(peer bool, isLocalPeer func(string) bool) ([]
 	return events, nil
 }
 
-func newSSEFanout() *sseFanout { return &sseFanout{subs: make(map[chan fanoutMessage]struct{})} }
+func newSSEFanout() *sseFanout {
+	return &sseFanout{subs: make(map[chan fanoutMessage]struct{}), bootID: newBootID(), ring: newDeltaRing()}
+}
+
+func newBootID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("t%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// SetOwnershipFilter installs the ?as=peer membership predicate so the ring
+// can track the peer audience's changesets. Called once at startup, before
+// any broadcast.
+func (f *sseFanout) SetOwnershipFilter(isLocalPeer func(string) bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ownedFilter = isLocalPeer
+}
+
+func (f *sseFanout) BootID() string { return f.bootID }
+
+// TouchedSince is the delta chain lookup (see deltaRing).
+func (f *sseFanout) TouchedSince(from, to uint64, class int) ([]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ring == nil {
+		return nil, false
+	}
+	return f.ring.TouchedSince(from, to, class)
+}
+
+// DisableDeltas is the kill switch: without a ring no chain can be offered,
+// every subscriber falls back to today's full transaction, and the per-
+// broadcast diff cost disappears.
+func (f *sseFanout) DisableDeltas() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ring = nil
+}
 
 func (f *sseFanout) Current() wire.Frames {
 	f.mu.Lock()
@@ -167,6 +249,10 @@ func (f *sseFanout) Subscribe() (fanoutMessage, <-chan fanoutMessage, func()) {
 	f.subs[ch] = struct{}{}
 	frames := f.currentLocked()
 	f.epoch++
+	// A subscribe epoch is NOT a broadcast: it publishes the state the last
+	// broadcast left behind, so it appends no ring entry. Resuming from it is
+	// still well defined — the union of entries strictly newer than it is
+	// exactly what the subscriber missed.
 	initial := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions)}
 	cancel := func() {
 		f.mu.Lock()
@@ -212,6 +298,9 @@ func (f *sseFanout) BroadcastFrames(frames wire.Frames) {
 		f.world = &copy
 	}
 	f.epoch++
+	if f.ring != nil && frames.Sessions != nil {
+		f.ring.Record(f.epoch, frames.Sessions, f.ownedFilter)
+	}
 	msg := fanoutMessage{Frames: frames, SessionsEncode: newSessionEncodeMemo(f.epoch, frames.Sessions), ProjectsUpdate: frames.World != nil}
 	for ch := range f.subs {
 		fanoutEnqueue(ch, msg)

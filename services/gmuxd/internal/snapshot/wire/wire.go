@@ -107,11 +107,19 @@ type SessionsPayload struct {
 func (p SessionsPayload) FilterOwned(isLocalPeer func(string) bool) SessionsPayload {
 	out := make([]Session, 0, len(p.Sessions))
 	for _, s := range p.Sessions {
-		if s.Peer == "" || (isLocalPeer != nil && isLocalPeer(s.Peer)) {
+		if IsOwnedRow(s, isLocalPeer) {
 			out = append(out, s)
 		}
 	}
 	return SessionsPayload{Sessions: out}
+}
+
+// IsOwnedRow is FilterOwned's membership predicate for a single row. Delta
+// senders need the same rule row-by-row (a row that leaves this set must be
+// published as a removal, not silently retained), so the rule lives here once
+// instead of being restated per caller.
+func IsOwnedRow(s Session, isLocalPeer func(string) bool) bool {
+	return s.Peer == "" || (isLocalPeer != nil && isLocalPeer(s.Peer))
 }
 
 // MatchRule mirrors projects.MatchRule on the wire.
