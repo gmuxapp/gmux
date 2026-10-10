@@ -80,31 +80,92 @@ func (s *Store) DismissSessionTree(ctx context.Context, root SessionID, at UnixM
 		return nil, MutationResult{}, nil
 	}
 
-	placementsRemoved := false
-	for _, id := range toDismiss {
-		n, dismissErr := q.DismissSession(ctx, db.DismissSessionParams{DismissedAtMs: nullMillis(&at), ID: string(id)})
-		if dismissErr != nil {
-			return nil, MutationResult{}, dismissErr
-		}
-		if n != 1 {
-			return nil, MutationResult{}, fmt.Errorf("centralstore: session %s disappeared during dismissal", id)
-		}
-		removed, deleteErr := q.DeleteLocalSessionPlacement(ctx, nullString(string(id)))
-		if deleteErr != nil {
-			return nil, MutationResult{}, deleteErr
-		}
-		placementsRemoved = placementsRemoved || removed > 0
-	}
-
-	normalized, err := normalizePlacements(ctx, q, s.beforePlacementFinalize)
+	_, result, err := dismissRows(ctx, q, s.beforePlacementFinalize, toDismiss, at, true)
 	if err != nil {
 		return nil, MutationResult{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, MutationResult{}, err
 	}
-	worldDirty := placementsRemoved || normalized
-	return toDismiss, MutationResult{Changed: true, SessionsDirty: true, WorldDirty: worldDirty}, nil
+	return toDismiss, result, nil
+}
+
+// DismissSessions dismisses an explicit set of rows in one transaction with
+// the same per-row semantics as DismissSessionTree (dismissed_at stamped,
+// placement removed, sibling scopes re-normalized; hidden-not-forgotten).
+// Unlike DismissSessionTree it does NOT walk descendants: the caller names
+// exactly the rows to hide. It backs the retention auto-dismiss sweep, whose
+// candidate rule is "dead ∧ read ∧ idle > W ∧ every descendant already
+// dismissed or also a candidate" — i.e. the caller has already ensured that
+// no visible row is left under a hidden ancestor.
+//
+// Rows already dismissed, or that disappeared meanwhile, are silently
+// skipped (`dismissed_at IS NULL` predicate). Liveness exclusion is the
+// lifecycle coordinator's obligation, exactly as for DismissSessionTree and
+// SweepDeadSessions.
+func (s *Store) DismissSessions(ctx context.Context, ids []SessionID, at UnixMillis) ([]SessionID, MutationResult, error) {
+	if at < 0 {
+		return nil, MutationResult{}, errors.New("centralstore: dismissal timestamp must be non-negative")
+	}
+	for _, id := range ids {
+		if id == "" {
+			return nil, MutationResult{}, errors.New("centralstore: session id required")
+		}
+	}
+	if len(ids) == 0 {
+		return nil, MutationResult{}, nil
+	}
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, MutationResult{}, err
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+
+	dismissed, result, err := dismissRows(ctx, q, s.beforePlacementFinalize, ids, at, false)
+	if err != nil {
+		return nil, MutationResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, MutationResult{}, err
+	}
+	return dismissed, result, nil
+}
+
+// dismissRows stamps dismissed_at on rows, drops their placements and
+// re-normalizes sibling scopes; the caller commits. With strict set, a row
+// that is no longer visible is an error (the subtree caller just read it in
+// this transaction); otherwise it is skipped (the sweep caller selected it
+// outside this transaction). Returns the rows actually stamped.
+func dismissRows(ctx context.Context, q *db.Queries, fault func() error, ids []SessionID, at UnixMillis, strict bool) ([]SessionID, MutationResult, error) {
+	dismissed := make([]SessionID, 0, len(ids))
+	placementsRemoved := false
+	for _, id := range ids {
+		n, dismissErr := q.DismissSession(ctx, db.DismissSessionParams{DismissedAtMs: nullMillis(&at), ID: string(id)})
+		if dismissErr != nil {
+			return nil, MutationResult{}, dismissErr
+		}
+		if n != 1 {
+			if strict {
+				return nil, MutationResult{}, fmt.Errorf("centralstore: session %s disappeared during dismissal", id)
+			}
+			continue // already dismissed or gone: not this sweep's row any more
+		}
+		dismissed = append(dismissed, id)
+		removed, deleteErr := q.DeleteLocalSessionPlacement(ctx, nullString(string(id)))
+		if deleteErr != nil {
+			return nil, MutationResult{}, deleteErr
+		}
+		placementsRemoved = placementsRemoved || removed > 0
+	}
+	if len(dismissed) == 0 {
+		return nil, MutationResult{}, nil
+	}
+	normalized, err := normalizePlacements(ctx, q, fault)
+	if err != nil {
+		return nil, MutationResult{}, err
+	}
+	return dismissed, MutationResult{Changed: true, SessionsDirty: true, WorldDirty: placementsRemoved || normalized}, nil
 }
 
 // launchSubtree returns root plus its recursive launch descendants in

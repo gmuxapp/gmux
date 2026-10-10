@@ -383,6 +383,13 @@ func (d *fakeDurable) DismissSessionTree(ctx context.Context, root centralstore.
 	return d.dismissResult(root, at)
 }
 
+func (d *fakeDurable) DismissSessions(ctx context.Context, ids []centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.dismissCalls = append(d.dismissCalls, ids...)
+	return ids, centralstore.MutationResult{Changed: len(ids) > 0, SessionsDirty: len(ids) > 0, WorldDirty: len(ids) > 0}, nil
+}
+
 func (d *fakeDurable) RemoveSessionAtVersion(ctx context.Context, id centralstore.SessionID, observed centralstore.RowVersion) (centralstore.MutationResult, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -719,6 +726,9 @@ func (d *scheduledDurable) PlaceUnplacedSessions(context.Context, []centralstore
 	return centralstore.MutationResult{}, nil
 }
 func (d *scheduledDurable) DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
+	return nil, centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) DismissSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
 	return nil, centralstore.MutationResult{}, nil
 }
 func (d *scheduledDurable) RemoveSessionAtVersion(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error) {
