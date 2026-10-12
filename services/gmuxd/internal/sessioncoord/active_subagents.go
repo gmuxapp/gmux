@@ -129,65 +129,27 @@ func (b *activeSubagentBudget) removeChild(parent, child centralstore.SessionID)
 	}
 }
 
-// resolveRoot follows current parent/promotion facts. Missing parents make the
-// last present node a root, matching family presentation. Corrupt cycles are
-// collapsed onto their lexicographically smallest member so resolution is
-// bounded and deterministic instead of hanging or splitting one cycle across
-// unrelated budgets.
-func (b *activeSubagentBudget) resolveRoot(start centralstore.SessionID) centralstore.SessionID {
-	path := make([]centralstore.SessionID, 0, 8)
-	seen := make(map[centralstore.SessionID]int)
-	cur := start
-	for {
-		n, ok := b.nodes[cur]
-		if !ok {
-			if len(path) == 0 {
-				return ""
-			}
-			return path[len(path)-1]
-		}
-		if !n.hasParent {
-			return cur
-		}
-		seen[cur] = len(path)
-		path = append(path, cur)
-		if at, cycle := seen[n.parent]; cycle {
-			root := n.parent
-			for _, id := range path[at:] {
-				if id < root {
-					root = id
-				}
-			}
-			return root
-		}
-		if _, exists := b.nodes[n.parent]; !exists {
-			return cur
-		}
-		cur = n.parent
+// lineageLookup adapts the budget's in-memory node set to the shared
+// centralstore.Lineage, the single authoritative definition of root/depth.
+func (b *activeSubagentBudget) lineageLookup(id string) (parent string, hasParent, present bool) {
+	n, ok := b.nodes[centralstore.SessionID(id)]
+	if !ok {
+		return "", false, false
 	}
+	return string(n.parent), n.hasParent, true
+}
+
+// resolveRoot follows current parent/promotion facts via centralstore.Lineage.
+// Missing parents make the last present node a root; corrupt cycles collapse
+// onto their lexicographically smallest member. See centralstore.Lineage.
+func (b *activeSubagentBudget) resolveRoot(start centralstore.SessionID) centralstore.SessionID {
+	root, _ := centralstore.Lineage(b.lineageLookup, string(start))
+	return centralstore.SessionID(root)
 }
 
 func (b *activeSubagentBudget) resolvePlacement(start centralstore.SessionID) activeSubagentPlacement {
-	root := b.resolveRoot(start)
-	if root == "" {
-		return activeSubagentPlacement{}
-	}
-	depth := 0
-	cur := start
-	seen := make(map[centralstore.SessionID]bool)
-	for cur != root {
-		if seen[cur] {
-			return activeSubagentPlacement{root: root}
-		}
-		seen[cur] = true
-		n, ok := b.nodes[cur]
-		if !ok || !n.hasParent {
-			return activeSubagentPlacement{root: root}
-		}
-		cur = n.parent
-		depth++
-	}
-	return activeSubagentPlacement{root: root, depth: depth}
+	root, depth := centralstore.Lineage(b.lineageLookup, string(start))
+	return activeSubagentPlacement{root: centralstore.SessionID(root), depth: depth}
 }
 
 func (b *activeSubagentBudget) cap(depth int) int {

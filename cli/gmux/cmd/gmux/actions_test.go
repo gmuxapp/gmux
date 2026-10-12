@@ -487,15 +487,50 @@ func TestFetchSessionsRejectsAmbiguousPeerName(t *testing.T) {
 	}
 }
 
+// The daemon serves depth on /v1/sessions; ls --json must carry it through the
+// real CLI decode+re-encode path (fetchSessionsContext → cliSession → MarshalJSON),
+// including an explicit 0 for a local root and omission for an un-stamped peer row.
+func TestDepthRoundTripsThroughLSJSON(t *testing.T) {
+	startStubDaemon(t, nil).onSessions(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"data":[`+
+			`{"id":"root","adapter":"pi","alive":true,"depth":0},`+
+			`{"id":"child","adapter":"pi","alive":true,"parent_session_id":"root","depth":1},`+
+			`{"id":"peerrow","peer":"laptop","adapter":"pi","alive":true}]}`)
+	})
+	sessions, err := fetchSessions()
+	if err != nil {
+		t.Fatalf("fetchSessions: %v", err)
+	}
+	byID := map[string]cliSession{}
+	for _, s := range sessions {
+		byID[s.ID] = s
+	}
+
+	root, _ := json.Marshal(byID["root"])
+	if !strings.Contains(string(root), `"depth":0`) {
+		t.Errorf("root depth 0 lost through ls --json round-trip: %s", root)
+	}
+	child, _ := json.Marshal(byID["child"])
+	if !strings.Contains(string(child), `"depth":1`) {
+		t.Errorf("child depth 1 lost through ls --json round-trip: %s", child)
+	}
+	peer, _ := json.Marshal(byID["peerrow"])
+	if strings.Contains(string(peer), `"depth"`) {
+		t.Errorf("un-stamped peer row emitted a depth: %s", peer)
+	}
+}
+
 // This test pins existing fields and their types while deliberately allowing
 // additive keys in future 2.x releases.
 func TestListJSONSchemaIsStable(t *testing.T) {
 	exit := 0
+	depth := 2
 	full := cliSession{
 		ID: "1va8lvdv", Peer: "laptop", Cwd: "/work", Adapter: "pi", Alive: true,
 		Pid: 42, Title: "title", Slug: "slug", RunnerVersion: "2.0.0",
 		ParentSessionID: "parent", SocketPath: "/run/socket", Command: []string{"pi"},
 		StartedAt: "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z", ExitCode: &exit,
+		Depth:       &depth,
 		UnreadToken: "internal-token",
 	}
 	got := jsonKeys(t, full)
@@ -503,6 +538,7 @@ func TestListJSONSchemaIsStable(t *testing.T) {
 		"ref": '"', "id": '"', "peer": '"', "cwd": '"', "adapter": '"', "alive": 't',
 		"pid": '4', "title": '"', "slug": '"', "runner_version": '"', "parent_session_id": '"',
 		"socket_path": '"', "command": '[', "started_at": '"', "exited_at": '"', "exit_code": '0',
+		"depth": '2',
 	}
 	for key, firstByte := range wantTypes {
 		value, ok := got[key]
@@ -523,7 +559,7 @@ func TestListJSONSchemaIsStable(t *testing.T) {
 			t.Errorf("minimal session omits required key %q", key)
 		}
 	}
-	for _, key := range []string{"peer", "cwd", "pid", "title", "slug", "runner_version", "parent_session_id", "socket_path", "command", "started_at", "exited_at", "exit_code"} {
+	for _, key := range []string{"peer", "cwd", "pid", "title", "slug", "runner_version", "parent_session_id", "socket_path", "command", "started_at", "exited_at", "exit_code", "depth"} {
 		if _, ok := bare[key]; ok {
 			t.Errorf("optional key %q appears on a minimal session", key)
 		}
