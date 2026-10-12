@@ -37,13 +37,17 @@ type cliSession struct {
 	// ParentSessionID links a session to the one it was spawned from
 	// (e.g. `gmux edit` as $EDITOR inside a session). Must round-trip
 	// through `gmux ls --json` for scripts to see the relationship.
-	ParentSessionID string   `json:"parent_session_id,omitempty"`
-	UnreadToken     string   `json:"unread_token,omitempty"`
-	SocketPath      string   `json:"socket_path,omitempty"`
-	Command         []string `json:"command,omitempty"`
-	StartedAt       string   `json:"started_at,omitempty"`
-	ExitedAt        string   `json:"exited_at,omitempty"`
-	ExitCode        *int     `json:"exit_code,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// Depth is the daemon-computed root-relative lineage depth (root = 0). It
+	// round-trips through `gmux ls --json` like parent_session_id so scripts can
+	// read it; absent only on foreign peer rows the owning daemon does not stamp.
+	Depth       *int     `json:"depth,omitempty"`
+	UnreadToken string   `json:"unread_token,omitempty"`
+	SocketPath  string   `json:"socket_path,omitempty"`
+	Command     []string `json:"command,omitempty"`
+	StartedAt   string   `json:"started_at,omitempty"`
+	ExitedAt    string   `json:"exited_at,omitempty"`
+	ExitCode    *int     `json:"exit_code,omitempty"`
 }
 
 // MarshalJSON adds the authoritative, directly reusable session reference to

@@ -136,6 +136,12 @@ func (c *Converter) session(row central.SessionRow) Session {
 	if v.LaunchedFromSessionID != nil {
 		out.LaunchedFromSessionID = string(*v.LaunchedFromSessionID)
 	}
+	// Depth is computed by the durable projection over the full parent graph
+	// (centralstore.SessionView.Depth), so every local row carries a concrete
+	// value, including an explicit 0 for a root. Foreign peer rows are not
+	// converted here and stay nil (omitted on the wire).
+	d := row.Depth
+	out.Depth = &d
 	if v.TerminalCols != nil {
 		out.TerminalCols = *v.TerminalCols
 	}

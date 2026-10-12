@@ -68,6 +68,7 @@ type Session struct {
 	Remotes               map[string]string `json:"remotes,omitempty"`
 	ParentSessionID       string            `json:"parent_session_id,omitempty"`
 	LaunchedFromSessionID string            `json:"launched_from_session_id,omitempty"`
+	Depth                 *int              `json:"depth,omitempty"` // lineage depth (root=0) over the full durable graph, matching the budget; nil = foreign peer row
 	SemanticAgent         bool              `json:"semantic_agent,omitempty"`
 	Alive                 bool              `json:"alive"`
 	Pid                   int               `json:"pid,omitempty"`

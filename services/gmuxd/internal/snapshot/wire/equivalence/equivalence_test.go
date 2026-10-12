@@ -34,6 +34,12 @@ func fdExcluded(path string) bool {
 		return true
 	case strings.HasSuffix(path, ".project_index"):
 		return true
+	case strings.HasSuffix(path, ".depth"):
+		// Additive field computed by the new projection (centralstore.Lineage);
+		// the retired legacy composer predates it and emits no depth. The depth
+		// derivation itself is covered by the wire converter tests and pinned to
+		// the subagent budget by the centralstore lineage tests.
+		return true
 	case strings.HasSuffix(path, ".created_at"), strings.HasSuffix(path, ".started_at"),
 		strings.HasSuffix(path, ".exited_at"), strings.HasSuffix(path, ".last_output_at"):
 		return true

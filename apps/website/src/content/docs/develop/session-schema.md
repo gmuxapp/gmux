@@ -55,6 +55,7 @@ gmuxd exposes aggregated state to the browser via `GET /v1/events?session_stream
 | `peer` | — | ✓ (hub) | ✓ | ✓ host attribution |
 | `parent_session_id` | ✓ | ✓ | ✓ | ✓ family grouping, sidebar placement |
 | `launched_from_session_id` | — | ✓ stamped | ✓ | ✓ “Return to family” |
+| `depth` | — | ✓ derived | ✓ | — |
 | `workspace_root` | ✓ | ✓ | ✓ | ✓ project grouping |
 | `remotes` | ✓ | ✓ | ✓ | ✓ project grouping |
 | **Process state** |
@@ -116,6 +117,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | Field | Type | Description |
 |-------|------|-------------|
 | `parent_session_id` | string? | The session's *current* behavioral parent: family grouping, subagent budget depth, recursive dismissal, and notification suppression all follow this edge. Unlike the fields above it is mutable: `POST /v1/sessions/{id}/reparent` with `{"parent_session_id": "<id>"}` moves the session, and with `{"parent_session_id": null}` promotes it to a root (`gmux promote` / `gmux reparent` are thin wrappers over this endpoint). Local sessions only; cycles, self-parenting, and peer-owned targets are refused. |
+| `depth` | number | Root-relative position in the durable behavioral parent graph: `0` for a root, one greater than its parent otherwise. Computed by the **owning** daemon on every projection from the current `parent_session_id` edges (so a reparent/promote is reflected on the next snapshot with no separate bookkeeping) over the **full** durable graph — including dismissed-but-retained ancestors — using the same lineage rule (`centralstore.Lineage`) that seeds the active-subagent budget. The projected number is therefore **the same number the budget enforces and reservation receipts report**, not merely the visible-sidebar nesting; a live session reparented under a retained-dismissed ancestor counts that hop. A parent that is not a durable local row at all (a foreign/peer id) is dangling, making the node its own root at `0`. Absent on foreign network-peer rows **and** on Local-peer (devcontainer) projections — neither is stamped from this daemon's durable parent graph; `0` is emitted explicitly for a local root. |
 
 ### Process State (owned by gmux, authoritative)
 
@@ -266,6 +268,8 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "unread": false,
   "socket_path": "~/.local/state/gmux/run/sessions/16y0lfv7.sock",
   "slug": "fix-auth-bug",
+  "parent_session_id": "9a8b7c6d",
+  "depth": 1,
   "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
   "last_output_at": "2026-03-14T10:05:00Z",
   "runner_version": "2.0.0",
@@ -273,7 +277,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
 }
 ```
 
-Note the differences: `shell_title` and `adapter_title` are absent from the API response — `title` is the resolved value. `runner_version` and `binary_hash` ride the wire so the frontend can derive staleness against `/v1/health`. `last_output_at` is stamped by the daemon.
+Note the differences: `shell_title` and `adapter_title` are absent from the API response — `title` is the resolved value. `runner_version` and `binary_hash` ride the wire so the frontend can derive staleness against `/v1/health`. `last_output_at` is stamped by the daemon. `depth` is derived by the daemon from the parent graph, so the runner never reports it.
 
 ## Terminology (2.0)
 

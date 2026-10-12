@@ -30,6 +30,11 @@ type SessionPlacement struct {
 type SessionView struct {
 	Session
 	Placement *SessionPlacement
+	// Depth is the session's root-relative position in the durable parent
+	// graph, computed over ALL local rows (including dismissed-but-retained
+	// ancestors) via Lineage. It is therefore the same number the
+	// active-subagent budget enforces, not just the visible-subset position.
+	Depth int
 }
 
 // LocalPeerPlacementView is one durable parent-owned Local-peer placement
@@ -51,6 +56,52 @@ type StoreSnapshot struct {
 	Sessions            []SessionView
 	Projects            ProjectCatalog
 	LocalPeerPlacements []LocalPeerPlacementView
+}
+
+// lineageDepthMemo returns start's root-relative depth — identical to
+// centralstore.Lineage for acyclic or dangling graphs — memoizing resolved
+// depths in cache so walks from multiple visible sessions reuse shared ancestry
+// (amortized linear across a projection). If a walk meets a cycle — unreachable
+// through the API; the schema rejects it — it defers to centralstore.Lineage
+// for that session's exact cycle semantics instead of poisoning the cache.
+func lineageDepthMemo(lookup func(id string) (parent string, hasParent, present bool), start string, cache map[string]int) int {
+	if d, ok := cache[start]; ok {
+		return d
+	}
+	path := make([]string, 0, 8)
+	visiting := make(map[string]bool)
+	cur := start
+	base := 0
+	for {
+		if d, ok := cache[cur]; ok {
+			base = d
+			break
+		}
+		if visiting[cur] {
+			_, d := Lineage(lookup, start)
+			return d
+		}
+		p, hasParent, present := lookup(cur)
+		if !present || !hasParent {
+			cache[cur] = 0 // its own root
+			base = 0
+			break
+		}
+		if _, _, ok := lookup(p); !ok {
+			cache[cur] = 0 // parent absent: last present node is its own root
+			base = 0
+			break
+		}
+		visiting[cur] = true
+		path = append(path, cur)
+		cur = p
+	}
+	d := base
+	for i := len(path) - 1; i >= 0; i-- {
+		d++
+		cache[path[i]] = d
+	}
+	return cache[start]
 }
 
 // ReadSnapshot composes every requested payload input inside one read
@@ -106,16 +157,41 @@ func (s *Store) ReadSnapshot(ctx context.Context, query SnapshotQuery) (StoreSna
 				SiblingScope: p.scope, Position: int(p.pos),
 			}
 		}
-		out.Sessions = make([]SessionView, 0, len(rows))
+		// Hydrate every row (dismissed included) so lineage can count hops through
+		// dismissed-but-retained ancestors — the graph that seeds the active-subagent
+		// budget, so projected depth equals enforced depth. Depth is then resolved
+		// only for VISIBLE sessions and memoized across them: shared ancestry is
+		// walked once (a deep chain is linear, not quadratic) and fully-dismissed
+		// subtrees, which contribute no visible row, are never walked.
+		present := make(map[string]bool, len(rows))
+		parent := make(map[string]string, len(rows))
+		hasParent := make(map[string]bool, len(rows))
+		visible := make([]Session, 0, len(rows))
 		for _, r := range rows {
 			v, convErr := sessionFromDB(r)
 			if convErr != nil {
 				return StoreSnapshot{}, convErr
 			}
-			if v.DismissedAt != nil {
-				continue // dismissed means hidden: no wire visibility
+			id := string(v.ID)
+			present[id] = true
+			if v.ParentSessionID != nil {
+				parent[id] = string(*v.ParentSessionID)
+				hasParent[id] = true
 			}
-			out.Sessions = append(out.Sessions, SessionView{Session: v, Placement: placementBySession[v.ID]})
+			if v.DismissedAt == nil {
+				visible = append(visible, v)
+			}
+		}
+		lookup := func(id string) (string, bool, bool) {
+			return parent[id], hasParent[id], present[id]
+		}
+		depth := make(map[string]int, len(visible))
+		out.Sessions = make([]SessionView, 0, len(visible))
+		for _, v := range visible {
+			out.Sessions = append(out.Sessions, SessionView{
+				Session: v, Placement: placementBySession[v.ID],
+				Depth: lineageDepthMemo(lookup, string(v.ID), depth),
+			})
 		}
 	}
 
