@@ -436,34 +436,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					health.Peers = append([]peering.PeerInfo(nil), h.Peers...)
 				}
 			}
-			peers := health.Peers
-			if peers == nil {
-				peers = []peering.PeerInfo{}
-			}
-			launchers := health.Launchers
-			if launchers == nil {
-				launchers = []peering.LauncherDef{}
-			}
-			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
-			if health.SessionRecovery != nil {
-				data["session_recovery"] = health.SessionRecovery
-			}
-			if health.UpstreamAccess != nil {
-				data["upstream_access"] = health.UpstreamAccess
-			}
-			if health.TailscaleURL != "" {
-				data["tailscale_url"] = health.TailscaleURL
-			}
-			if health.Tailscale != nil {
-				data["tailscale"] = health.Tailscale
-			}
-			if health.UpdateAvailable != "" {
-				data["update_available"] = health.UpdateAvailable
-			}
-			if unixOnly {
-				data["auth_token"] = authToken
-			}
-			writeJSON(w, map[string]any{"ok": true, "data": data})
+			writeJSON(w, map[string]any{"ok": true, "data": healthWireData(health, conversationIndexHealth(convIndex), unixOnly, authToken)})
 		})
 		mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"adapters": []string{"pi", "shell"}, "transport": map[string]any{"kind": "websocket", "replay": true}}})

@@ -704,6 +704,46 @@ func peerURIsLoopback(rawURL string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// healthWireData projects a HealthInfo onto the /v1/health wire. The map is
+// built field by field (it predates HealthInfo, and key presence is part of the
+// contract), so every new HealthInfo field has to be published HERE too: a
+// field that exists only on the struct is invisible to the CLI and the browser.
+// TestHealthWireDataCarriesHealthInfoFields asserts the pairing — that is what
+// caught started_at shipping on HealthInfo and never reaching the wire.
+func healthWireData(health central.HealthInfo, convIndex map[string]any, unixOnly bool, authToken string) map[string]any {
+	peers := health.Peers
+	if peers == nil {
+		peers = []peering.PeerInfo{}
+	}
+	launchers := health.Launchers
+	if launchers == nil {
+		launchers = []peering.LauncherDef{}
+	}
+	data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": convIndex}
+	if health.StartedAt != "" {
+		data["started_at"] = health.StartedAt
+	}
+	if health.SessionRecovery != nil {
+		data["session_recovery"] = health.SessionRecovery
+	}
+	if health.UpstreamAccess != nil {
+		data["upstream_access"] = health.UpstreamAccess
+	}
+	if health.TailscaleURL != "" {
+		data["tailscale_url"] = health.TailscaleURL
+	}
+	if health.Tailscale != nil {
+		data["tailscale"] = health.Tailscale
+	}
+	if health.UpdateAvailable != "" {
+		data["update_available"] = health.UpdateAvailable
+	}
+	if unixOnly {
+		data["auth_token"] = authToken
+	}
+	return data
+}
+
 // upstreamAccessFor is the health-closure gate in one testable function: probe
 // the local tailscale node iff a peer link is down for a reason tailscale could
 // explain, and publish the diagnostic only when the probe produced one.
