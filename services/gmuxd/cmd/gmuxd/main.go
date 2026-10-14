@@ -647,7 +647,10 @@ func sinceDaemon(startedAt string) string {
 // Without this, a compromised tailscale CLI or a malicious peer can set the
 // window title, emit colours, move the cursor, or forge extra status lines with
 // a newline in `detail`/`last_error`. It is defence-in-depth, not a privilege
-// boundary: the daemon's socket is local-only.
+// boundary: the daemon's socket is local-only. Daemon-authored fields
+// (status, listen address, socket path — constants, operator config, and the
+// local XDG path) print as-is; everything that rides the health wire is
+// sanitised.
 //
 // Removed: CSI sequences (ESC [ … final), OSC / DCS / SOS / PM / APC sequences
 // (ESC ] … terminated by BEL or ST), two-char Fe escapes, and any remaining C0

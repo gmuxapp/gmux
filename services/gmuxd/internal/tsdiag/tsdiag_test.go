@@ -1,9 +1,11 @@
 package tsdiag
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -470,7 +472,7 @@ func TestProbe_WedgedLeaderDoesNotBlockWaiters(t *testing.T) {
 	start := time.Now()
 	got := p.Probe(context.Background()) // the waiter, context.Background()
 	elapsed := time.Since(start)
-	closeOnce()   // unblock the leader before asserting
+	closeOnce()  // unblock the leader before asserting
 	<-leaderDone // no goroutine outlives the test
 	if elapsed > p.budget()+500*time.Millisecond {
 		t.Fatalf("waiter blocked %s; must give up at its budget (%s)", elapsed, p.budget())
@@ -552,4 +554,88 @@ func TestFirstLine(t *testing.T) {
 	if n := utf8.RuneCountInString(multi); n != 201 {
 		t.Errorf("firstLine rune count = %d, want 201", n)
 	}
+}
+
+// TestLogProbe is F10: tsdiag used to log nothing at all, so a wedged probe was
+// invisible in the daemon log — the only place an operator can correlate a
+// health stall. Inconclusive and slow probes log unconditionally; state
+// transitions log at debug level (GMUX_TSDEBUG) so a healthy hub stays quiet.
+func TestLogProbe(t *testing.T) {
+	capture := func(t *testing.T, run func()) string {
+		t.Helper()
+		var buf syncBuffer
+		prev := log.Writer()
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(prev) })
+		run()
+		return buf.String()
+	}
+
+	t.Run("inconclusive probe is logged without the debug switch", func(t *testing.T) {
+		out := capture(t, func() {
+			logProbe(Status{State: StateProbeFailed, Detail: "unavailable (probe failed: signal: killed)"}, StateOK, true, 3*time.Second)
+		})
+		if !strings.Contains(out, "tsdiag:") || !strings.Contains(out, "probe failed: signal: killed") || !strings.Contains(out, "3s") {
+			t.Errorf("inconclusive probe must be logged with its duration and detail, got %q", out)
+		}
+	})
+
+	t.Run("slow probe is logged even when it produced a verdict", func(t *testing.T) {
+		out := capture(t, func() {
+			logProbe(Status{State: StateOK}, StateOK, true, probeTimeout)
+		})
+		if !strings.Contains(out, "budget") {
+			t.Errorf("a probe that hit its budget must be logged, got %q", out)
+		}
+	})
+
+	t.Run("fast healthy probe is silent", func(t *testing.T) {
+		out := capture(t, func() {
+			logProbe(Status{State: StateOK}, StateOK, true, time.Millisecond)
+		})
+		if out != "" {
+			t.Errorf("a fast, unchanged probe must not log, got %q", out)
+		}
+	})
+
+	t.Run("transitions are debug-only", func(t *testing.T) {
+		out := capture(t, func() {
+			logProbe(Status{State: StateKeyExpired, Detail: "EXPIRED"}, StateOK, true, time.Millisecond)
+		})
+		if out != "" {
+			t.Errorf("transitions must be silent without GMUX_TSDEBUG, got %q", out)
+		}
+		t.Setenv("GMUX_TSDEBUG", "1")
+		out = capture(t, func() {
+			logProbe(Status{State: StateKeyExpired, Detail: "EXPIRED"}, StateOK, true, time.Millisecond)
+		})
+		if !strings.Contains(out, "ok -> key_expired") {
+			t.Errorf("GMUX_TSDEBUG must log the classification transition, got %q", out)
+		}
+		out = capture(t, func() {
+			logProbe(Status{State: StateKeyExpired, Detail: "EXPIRED"}, StateKeyExpired, true, time.Millisecond)
+		})
+		if out != "" {
+			t.Errorf("an unchanged state must not repeat a transition line, got %q", out)
+		}
+	})
+}
+
+// syncBuffer is a goroutine-safe log sink (the peering package has its own copy
+// for its tests; tsdiag is a separate test binary).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
