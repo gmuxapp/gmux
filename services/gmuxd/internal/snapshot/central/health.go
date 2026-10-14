@@ -24,12 +24,29 @@ type HealthInfo struct {
 	Version string `json:"version"`
 	NodeID  string `json:"node_id"`
 	Status  string `json:"status"`
+	// StartedAt is when THIS daemon process booted (RFC3339 UTC). Peer link
+	// lifecycle (consecutive_failures / never_connected) is per-boot and
+	// deliberately not durable, so after a daemon restart — which gmux performs
+	// automatically on any version change — a long-connected peer reads "never
+	// connected". Publishing the boot instant makes the per-boot semantics
+	// legible next to the count instead of looking like a lifetime fact.
+	// Additive: absent on older daemons.
+	StartedAt string `json:"started_at,omitempty"`
 	// Hostname is the node identity (ADR 0007): the live tailscale name
 	// when connected, else the OS hostname.
 	Hostname     string             `json:"hostname"`
 	TailscaleURL string             `json:"tailscale_url,omitempty"`
 	Tailscale    *tsauth.DiagStatus `json:"tailscale,omitempty"`
-	Listen       string             `json:"listen"`
+	// UpstreamAccess is a read-only diagnosis of whether the LOCAL node can
+	// reach the tailnet it dials peers through — the layer beneath peer link
+	// failures. Set only when peers are configured and at least one is not
+	// currently connected, so a healthy hub and a plain-LAN box never pay for
+	// the probe. It is the answer to "is upstream access unavailable, and
+	// why?" (e.g. a local tailscale node-key expiry, which makes every peer
+	// dial fail with an opaque i/o timeout). gmux only reports it; it never
+	// acts on tailscale state. Additive: absent when not applicable.
+	UpstreamAccess *UpstreamAccess `json:"upstream_access,omitempty"`
+	Listen         string          `json:"listen"`
 	// UpdateAvailable carries the newer released version string, when one
 	// is known.
 	UpdateAvailable string             `json:"update_available,omitempty"`
@@ -74,6 +91,24 @@ type SessionRecovery struct {
 	Status    string `json:"status"`
 	Expected  int    `json:"expected"`
 	Recovered int    `json:"recovered"`
+}
+
+// UpstreamAccess is the wire projection of a local tailscale diagnosis
+// (internal/tsdiag). Kept as plain strings so the health wire contract does not
+// depend on the tsdiag package's types.
+type UpstreamAccess struct {
+	// State: ok | key_expired | tailscale_not_running | probe_failed |
+	// not_installed | unsupported | unknown.
+	//
+	// probe_failed is the INCONCLUSIVE outcome (exec failed, timed out, killed,
+	// output unparseable). It is deliberately not tailscale_not_running: a probe
+	// that produced no evidence is not evidence that tailscaled is down, and it
+	// carries no Hint, so the daemon can never render re-auth advice for it.
+	State        string `json:"state"`
+	Detail       string `json:"detail,omitempty"`
+	Hint         string `json:"hint,omitempty"`
+	BackendState string `json:"backend_state,omitempty"`
+	KeyExpiry    string `json:"key_expiry,omitempty"`
 }
 
 // SessionCounts is the health session summary. Per FD-6 it is derived from

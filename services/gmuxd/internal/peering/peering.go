@@ -155,6 +155,23 @@ type PeerInfo struct {
 	// survive the peer being renamed. Empty for offline peers we've
 	// never probed and for pre-ADR-0007 daemons.
 	NodeID string `json:"node_id,omitempty"`
+	// Link lifecycle, derived in the run loop (see Peer.LinkHealth). These
+	// let status/health tell apart a peer that is flapping (it has connected
+	// before) from one that is configured and has NEVER joined since daemon
+	// start — the signature of a local tailscale node-key expiry, where every
+	// peer dial fails identically and forever. Additive: absent on older
+	// daemons, ignored by older viewers.
+	//
+	//   consecutive_failures — failed connect attempts since the last
+	//     success (0 once connected / after any reconnect).
+	//   last_success          — RFC3339 time of the last successful connect;
+	//     empty when never connected.
+	//   never_connected       — true when no connect has succeeded since
+	//     daemon start. The crisp, visually-obvious "configured but never
+	//     joined" flag.
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+	LastSuccess         string `json:"last_success,omitempty"`
+	NeverConnected      bool   `json:"never_connected,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

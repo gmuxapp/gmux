@@ -257,6 +257,79 @@ func TestRunStatusShowsSessionsAndPeers(t *testing.T) {
 	}
 }
 
+// TestRunStatusShowsNeverConnectedPeerAndUpstreamAlert is the operator-facing
+// shape test for the tailscale-key-expiry diagnosis: a peer that has never
+// connected (the tailscale-key-expiry signature) is rendered as a visible
+// failure with a failure count, NOT a perpetual "connecting…"; a peer that
+// connected before is distinguished by its last-success line; and a local
+// tailscale key expiry surfaces a prominent upstream-access alert naming the
+// remediation. This is what makes the outage discoverable from `daemon status`
+// instead of the reconnect storm.
+func TestRunStatusShowsNeverConnectedPeerAndUpstreamAlert(t *testing.T) {
+	stateDir := t.TempDir()
+	sockDir := filepath.Join(stateDir, "gmux")
+	os.MkdirAll(sockDir, 0o700)
+	sockPath := filepath.Join(sockDir, "gmuxd.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{
+			"service": "gmuxd", "version": "1.0.0", "status": "ready", "listen": "127.0.0.1:8790",
+			"upstream_access": map[string]any{
+				"state":      "key_expired",
+				"detail":     "local tailscale node key EXPIRED — dials to peers cannot succeed",
+				"hint":       "run `tailscale up` to re-authenticate (gmux only reports this; it will not act on it)",
+				"key_expiry": "2026-05-05T10:00:00Z",
+			},
+			"peers": []map[string]any{
+				{"name": "spoke", "url": "https://100.96.12.34:8790", "status": "disconnected",
+					"session_count": 0, "last_error": "connection timed out",
+					"consecutive_failures": 7, "never_connected": true},
+				{"name": "laptop", "url": "https://laptop.ts.net", "status": "disconnected",
+					"session_count": 0, "last_error": "connection lost",
+					"consecutive_failures": 2, "last_success": "2026-10-14T09:00:00Z"},
+			},
+		}})
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	defer func() { srv.Close(); os.Remove(sockPath) }()
+	time.Sleep(50 * time.Millisecond)
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+
+	if !strings.Contains(out, "spoke (never connected (7 failed attempts): connection timed out)") {
+		t.Errorf("expected never-connected peer rendering with failure count, got:\n%s", out)
+	}
+	// The never-connected peer must render as a failure (X), not an open circle.
+	if !strings.Contains(out, "\u2717 spoke") {
+		t.Errorf("expected the never-connected peer to render as a failure (X mark), got:\n%s", out)
+	}
+	// A previously-connected peer is distinguishable via its last-success line.
+	if !strings.Contains(out, "laptop (connection lost (2 consecutive failures))") {
+		t.Errorf("expected flapping peer rendering with consecutive failures, got:\n%s", out)
+	}
+	if !strings.Contains(out, "last connected: 2026-10-14T09:00:00Z") {
+		t.Errorf("expected last-connected line for a previously-connected peer, got:\n%s", out)
+	}
+	// The tailscale-level outage surfaces as a prominent alert naming the fix.
+	if !strings.Contains(out, "upstream access: local tailscale node key EXPIRED") {
+		t.Errorf("expected upstream-access alert, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tailscale up") {
+		t.Errorf("expected remediation hint naming `tailscale up`, got:\n%s", out)
+	}
+}
+
 func TestRunAuthNoRunningDaemon(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
