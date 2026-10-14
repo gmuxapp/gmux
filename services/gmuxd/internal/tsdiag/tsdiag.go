@@ -142,6 +142,9 @@ type Prober struct {
 	lookPath func(string) (string, error)
 	ttl      time.Duration
 	now      func() time.Time
+	// waiter bounds a caller that joined someone else's in-flight probe. Zero
+	// selects waiterTimeout; tests shrink it to stay fast.
+	waiter time.Duration
 
 	mu       sync.Mutex
 	cached   Status
@@ -294,7 +297,12 @@ func (p *Prober) Probe(ctx context.Context) Status {
 
 // budget is the caller-side bound: the probe's wall-clock budget plus the
 // grace the exec layer allows for pipe drain.
-func (p *Prober) budget() time.Duration { return waiterTimeout }
+func (p *Prober) budget() time.Duration {
+	if p.waiter > 0 {
+		return p.waiter
+	}
+	return waiterTimeout
+}
 
 // ProbeBudget is the deadline a health/status caller should give Probe. The
 // probe is single-flight, so a caller may be a WAITER on someone else's probe:
@@ -353,10 +361,10 @@ func (p *Prober) runProbe(ctx context.Context) Status {
 			// tailscaled down from "CLI printed nothing".
 			return probeFailed("tailscale status returned no usable output", err)
 		}
-		if json.Valid(out) {
-			// Well-formed JSON that we could not decode (a field changed type,
-			// a future shape): tailscaled answered, so this is a contract break
-			// on OUR side, not an outage. Report it, advise nothing.
+		// Output that LOOKS like a netmap (a JSON object, possibly BOM-prefixed)
+		// means tailscaled answered and our decoder broke: a contract break on
+		// OUR side, not an outage. Only genuine CLI prose may advise.
+		if looksLikeJSON(out) {
 			return probeFailed(fmt.Sprintf("tailscale status JSON did not match the expected shape: %v", jsonErr), nil)
 		}
 		// The CLI ran, printed a real error, and exited: positive evidence it
@@ -431,6 +439,14 @@ func atExpiry(expiry string) string {
 		return ""
 	}
 	return fmt.Sprintf(" (%s)", expiry)
+}
+
+// looksLikeJSON reports whether the output is (prefixed by) a JSON object,
+// i.e. produced by the machine-readable status path rather than printed as a
+// human-readable CLI error.
+func looksLikeJSON(out []byte) bool {
+	s := strings.TrimLeft(strings.TrimPrefix(string(out), "\ufeff"), " \t\r\n")
+	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
 }
 
 // isExitStatus reports whether err is the "command ran and exited" error.

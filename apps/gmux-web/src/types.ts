@@ -267,9 +267,15 @@ export interface PeerInfo {
  * /v1/health `upstream_access`, present only when peers are configured and at
  * least one is not currently connected. The daemon only reports this; it never
  * acts on tailscale state (re-auth stays operator-level).
+ *
+ * `probe_failed` is the INCONCLUSIVE outcome: the probe timed out, was killed,
+ * ran nothing, or got output it could not parse. It is deliberately NOT
+ * `tailscale_not_running`, and it never carries `hint` — a probe that produced
+ * no evidence is not evidence that tailscaled is down, so a UI must not render
+ * re-auth advice for it. Treat it as "no diagnostic", like `unknown`.
  */
 export interface UpstreamAccess {
-  state: 'ok' | 'key_expired' | 'tailscale_not_running' | 'not_installed' | 'unsupported' | 'unknown'
+  state: 'ok' | 'key_expired' | 'tailscale_not_running' | 'probe_failed' | 'not_installed' | 'unsupported' | 'unknown'
   detail?: string
   hint?: string
   backend_state?: string
