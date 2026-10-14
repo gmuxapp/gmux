@@ -414,12 +414,21 @@ func runStatus(stdout, stderr io.Writer) int {
 				RemoteAlive int `json:"remote_alive"`
 				Dead        int `json:"dead"`
 			} `json:"sessions,omitempty"`
+			UpstreamAccess *struct {
+				State     string `json:"state"`
+				Detail    string `json:"detail,omitempty"`
+				Hint      string `json:"hint,omitempty"`
+				KeyExpiry string `json:"key_expiry,omitempty"`
+			} `json:"upstream_access,omitempty"`
 			Peers []struct {
-				Name         string `json:"name"`
-				URL          string `json:"url"`
-				Status       string `json:"status"`
-				SessionCount int    `json:"session_count"`
-				LastError    string `json:"last_error,omitempty"`
+				Name                string `json:"name"`
+				URL                 string `json:"url"`
+				Status              string `json:"status"`
+				SessionCount        int    `json:"session_count"`
+				LastError           string `json:"last_error,omitempty"`
+				ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+				LastSuccess         string `json:"last_success,omitempty"`
+				NeverConnected      bool   `json:"never_connected,omitempty"`
 			} `json:"peers,omitempty"`
 		} `json:"data"`
 	}
@@ -439,6 +448,20 @@ func runStatus(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", d.UpdateAvailable)
 	}
 
+	// Upstream-access alert: a peer-link outage explained by the local
+	// tailscale node (expired key / tailscaled down). Surface it prominently
+	// so the operator learns the *why* from status, not from the reconnect
+	// storm. gmux only reports this; it never re-authenticates.
+	if ua := d.UpstreamAccess; ua != nil {
+		switch ua.State {
+		case "key_expired", "tailscale_not_running":
+			_, _ = fmt.Fprintf(stdout, "\n\u26a0 upstream access: %s\n", ua.Detail)
+			if ua.Hint != "" {
+				_, _ = fmt.Fprintf(stdout, "  %s\n", ua.Hint)
+			}
+		}
+	}
+
 	// Sessions.
 	if s := d.Sessions; s != nil {
 		total := s.LocalAlive + s.RemoteAlive + s.Dead
@@ -454,22 +477,42 @@ func runStatus(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stdout, "\nPeers:\n")
 		for _, p := range d.Peers {
 			var detail string
+			dot := statusDot(p.Status)
 			switch p.Status {
 			case "connected":
 				detail = fmt.Sprintf("%d session%s", p.SessionCount, plural(p.SessionCount))
 			case "connecting":
-				detail = "connecting..."
+				// Configured and never joined is NOT a healthy "connecting" —
+				// render it as a failure (X) so it is obvious, not a perpetual
+				// open circle. This is the tailscale-key-expiry / dead-peer shape.
+				if p.NeverConnected {
+					dot = "\u2717"
+					detail = fmt.Sprintf("never connected (%d attempt%s)", p.ConsecutiveFailures, plural(p.ConsecutiveFailures))
+				} else {
+					detail = "connecting..."
+				}
 			case "offline":
 				detail = "offline"
 			default:
-				if p.LastError != "" {
-					detail = p.LastError
-				} else {
-					detail = "disconnected"
+				base := p.LastError
+				if base == "" {
+					base = "disconnected"
+				}
+				switch {
+				case p.NeverConnected:
+					dot = "\u2717"
+					detail = fmt.Sprintf("never connected (%d failed attempt%s): %s", p.ConsecutiveFailures, plural(p.ConsecutiveFailures), base)
+				case p.ConsecutiveFailures > 0:
+					detail = fmt.Sprintf("%s (%d consecutive failure%s)", base, p.ConsecutiveFailures, plural(p.ConsecutiveFailures))
+				default:
+					detail = base
 				}
 			}
-			_, _ = fmt.Fprintf(stdout, "  %s %s (%s)\n", statusDot(p.Status), p.Name, detail)
+			_, _ = fmt.Fprintf(stdout, "  %s %s (%s)\n", dot, p.Name, detail)
 			_, _ = fmt.Fprintf(stdout, "    %s\n", p.URL)
+			if p.LastSuccess != "" && p.Status != "connected" {
+				_, _ = fmt.Fprintf(stdout, "    last connected: %s\n", p.LastSuccess)
+			}
 		}
 	}
 

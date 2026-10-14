@@ -653,3 +653,21 @@ func freshHealthCounts(frames wire.Frames) (central.SessionCounts, bool) {
 	}
 	return counts, true
 }
+
+// peerLinksDown reports whether any configured NETWORK peer is not currently
+// connected, i.e. whether it is worth probing local tailscale to explain the
+// outage. Local peers (devcontainers reachable via the Docker daemon) are
+// excluded: their reachability is not a tailscale concern, so a down devcontainer
+// must not trigger the tailscale probe. A box with no peers, and a box whose
+// every network peer is connected, return false — the probe is skipped.
+func peerLinksDown(peers []peering.PeerInfo) bool {
+	for _, p := range peers {
+		if p.Local {
+			continue
+		}
+		if p.Status != "connected" {
+			return true
+		}
+	}
+	return false
+}

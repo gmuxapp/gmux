@@ -246,6 +246,34 @@ export interface PeerInfo {
    * for pre-ADR-0007 daemons.
    */
   node_id?: string
+  /**
+   * Link lifecycle, derived daemon-side from the reconnect loop. Lets the
+   * viewer tell a flapping peer (connected before) from one that is
+   * configured and has NEVER joined since daemon start — the signature of a
+   * local tailscale node-key expiry, where every peer dial fails identically.
+   * Additive: absent on older daemons.
+   */
+  /** Failed connect attempts since the last success (0 once connected). */
+  consecutive_failures?: number
+  /** RFC3339 time of the last successful connect; absent when never connected. */
+  last_success?: string
+  /** True when no connect has succeeded since daemon start ("never joined"). */
+  never_connected?: boolean
+}
+
+/**
+ * Read-only diagnosis of whether the LOCAL node can reach the tailnet it dials
+ * peers through — the layer beneath peer-link failures. Mirrors the daemon's
+ * /v1/health `upstream_access`, present only when peers are configured and at
+ * least one is not currently connected. The daemon only reports this; it never
+ * acts on tailscale state (re-auth stays operator-level).
+ */
+export interface UpstreamAccess {
+  state: 'ok' | 'key_expired' | 'tailscale_not_running' | 'not_installed' | 'unsupported' | 'unknown'
+  detail?: string
+  hint?: string
+  backend_state?: string
+  key_expiry?: string
 }
 
 /**

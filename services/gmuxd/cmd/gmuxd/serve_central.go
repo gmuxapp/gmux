@@ -46,6 +46,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiag"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
@@ -152,6 +153,11 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	}
 	launchConfig := discoverLaunchers()
 	updateChecker := update.New(version)
+	// tsProber reads the system tailscaled (the node peer dials go through)
+	// so health/status can explain a peer-link outage as a local tailscale
+	// key expiry. Read-only and internally cached; probed only when peers
+	// are down (see the health closure), so a healthy hub pays nothing.
+	tsProber := tsdiag.New()
 	peerTransport := tsauth.NewRoutedTransport()
 	stateDir := paths.StateDir()
 	convIndex := conversations.New()
@@ -289,6 +295,21 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if v := updateChecker.Available(); v != "" {
 			h.UpdateAvailable = v
 		}
+		// Explain a peer-link outage as a local tailscale problem when one is
+		// plausible: peers are configured and at least one non-local peer is
+		// not currently connected. Probing only under that gate means a
+		// healthy hub and a plain-LAN box with no tailscale never shell out.
+		if peerLinksDown(h.Peers) {
+			if s := tsProber.Probe(context.Background()); s.State != tsdiag.StateUnknown {
+				h.UpstreamAccess = &central.UpstreamAccess{
+					State:        string(s.State),
+					Detail:       s.Detail,
+					Hint:         s.Hint,
+					BackendState: s.BackendState,
+					KeyExpiry:    s.KeyExpiry,
+				}
+			}
+		}
 		return h
 	}
 
@@ -424,6 +445,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
 			if health.SessionRecovery != nil {
 				data["session_recovery"] = health.SessionRecovery
+			}
+			if health.UpstreamAccess != nil {
+				data["upstream_access"] = health.UpstreamAccess
 			}
 			if health.TailscaleURL != "" {
 				data["tailscale_url"] = health.TailscaleURL
