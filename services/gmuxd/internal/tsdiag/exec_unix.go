@@ -47,6 +47,30 @@ func execTailscaleStatus(ctx context.Context) ([]byte, error) {
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
+	// Best-effort process-group sweep, on EVERY return path.
+	//
+	// Cancel is the only place the group is killed, and Go does not guarantee
+	// it runs. When the DIRECT child exits before the deadline (the fork-and-exit
+	// shim: it forks a grandchild to hold the pipe, then exits itself), exec's
+	// watchCtx sees the process already gone, returns through its fast path, and
+	// NEVER calls Cancel — "If pipes are closed due to WaitDelay, no Cancel call
+	// has occurred" (exec.go). WaitDelay then closes the parent's pipes to
+	// unblock the read, which unblocks Run, but the SIGKILL that reaches the
+	// group never fires: the grandchild that inherited the pipe's write end is
+	// reparented to init (ppid=1) and leaks for its lifetime. The probe's own
+	// wall-clock budget stays bounded (Run returns at the grace), so this is
+	// purely a process leak — a few per wedged host, accumulating.
+	//
+	// Sweep the group ourselves. The direct child is its group's leader
+	// (Setpgid), so -pid targets the tree it left behind; the group id outlives
+	// the leader, so it reaches grandchildren that outlived the shim. ESRCH (no
+	// such group) is the healthy case — the group is already empty after a normal
+	// probe, and after Cancel's kill on the deadline path — so the error is
+	// ignored deliberately. cmd.Process is nil only if Start itself failed, in
+	// which case no group was ever created.
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	if buf.truncated {
 		// Keep the exec error (a truncated netmap is not a tailscaled
 		// verdict); the classification layer maps this to probe_failed.

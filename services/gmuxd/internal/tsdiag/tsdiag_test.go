@@ -208,65 +208,108 @@ func TestProbe_FakeTailscaleBinary(t *testing.T) {
 // grandchild's lifetime: measured 33.7s for a documented 3s probe, stalling
 // /v1/health, the browser's first world render, and the snapshot composer.
 //
-// Asserts both halves of the fix: the probe returns within ~probeTimeout, and
-// the whole process group is gone afterwards (no orphaned sleeps).
+// It pins BOTH shim shapes, because they exercise DIFFERENT kill paths:
+//   - fork-and-wait: the shim stays alive (`wait`) holding the pipe, so the
+//     deadline fires while the direct child is still running and exec's Cancel
+//     runs the process-group SIGKILL. Killing only the direct child would hang
+//     the read in the grandchild.
+//   - fork-and-exit: the shim forks a pipe-holding grandchild and EXITS itself,
+//     before the deadline. exec's watchCtx then sees the child already gone and
+//     NEVER calls Cancel ("If pipes are closed due to WaitDelay, no Cancel call
+//     has occurred"), so the group kill never fires from Cancel and WaitDelay
+//     merely closes the parent's pipes. Without the explicit post-Run group
+//     sweep, the grandchild is reparented to init (ppid=1) and leaks.
+//
+// Asserts, for each shape: the probe returns within ~probeTimeout, our own kill
+// is reported as probe_failed (never a tailscaled outage / `tailscale up`), and
+// ZERO spawned processes survive by PID after the probe (no orphaned sleeps).
 func TestProbe_ForkingTailscaleIsKilledAtDeadline(t *testing.T) {
 	unixOnly(t)
-	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "pids")
-	fake := filepath.Join(dir, "tailscale")
-	// Long enough that the fake's own lifetime (30s) is unambiguously longer
-	// than the probe budget, short enough that a failure leaks for seconds, not
-	// minutes. Records EVERY pid it spawns so the test kills only its own.
-	// Every spawned pid is recorded, so cleanup touches only this fake's own
-	// processes. The trailing `wait` keeps the shim alive (and its stdout, i.e.
-	// the pipe, open) while the grandchildren run — the exact shim shape that
-	// defeated a direct-child-only kill.
-	script := "#!/bin/sh\n" +
-		"echo $$ >> " + pidFile + "\n" +
-		"sleep 30 & echo $! >> " + pidFile + "\n" +
-		"sleep 30 & echo $! >> " + pidFile + "\n" +
-		"wait\n"
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	t.Cleanup(func() {
-		// Kill ONLY the pids this fake recorded for itself, never by name.
-		for _, pid := range readPIDs(t, pidFile) {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	})
-
-	start := time.Now()
-	got := New().Probe(context.Background())
-	elapsed := time.Since(start)
-
-	if elapsed > probeTimeout+probeGrace+500*time.Millisecond {
-		t.Fatalf("probe took %s; the documented budget is %s (wall clock, including a forking child)",
-			elapsed.Round(time.Millisecond), probeTimeout)
-	}
-	// Our kill must not be reported as a tailscaled outage (F2), and must not
-	// advise `tailscale up`.
-	if got.State != StateProbeFailed {
-		t.Fatalf("state = %q, want probe_failed (got %+v)", got.State, got)
-	}
-	if got.Hint != "" {
-		t.Errorf("inconclusive probe carries advice %q", got.Hint)
+	shapes := []struct {
+		name   string
+		script string // every `%s` is replaced by the pid-recording file path
+	}{
+		{
+			// The exec-style shim: it stays alive (its trailing `wait` keeps
+			// the shim and its stdout, i.e. the pipe, open) while the
+			// grandchildren run — the shape that defeated a direct-child-only
+			// kill, and the one Cancel's group kill handles at the deadline.
+			name: "fork_and_wait",
+			script: "#!/bin/sh\n" +
+				"echo $$ >> %s\n" +
+				"sleep 30 & echo $! >> %s\n" +
+				"sleep 30 & echo $! >> %s\n" +
+				"wait\n",
+		},
+		{
+			// The fork-AND-EXIT shim: it launches a grandchild that inherits
+			// stdout (the probe's pipe) and sleeps, then the shim exits
+			// IMMEDIATELY. The direct child is gone before the deadline, so
+			// Cancel never runs; only the explicit post-Run group sweep reaps
+			// the grandchild that holds the pipe.
+			name: "fork_and_exit",
+			script: "#!/bin/sh\n" +
+				"echo $$ >> %s\n" +
+				"sleep 20 & echo $! >> %s\n",
+		},
 	}
 
-	// The group kill must have reached the grandchild that held the pipe.
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		live := livePIDs(readPIDs(t, pidFile))
-		if len(live) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("probe left processes alive after its deadline: %v", live)
-		}
-		time.Sleep(20 * time.Millisecond)
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pidFile := filepath.Join(dir, "pids")
+			fake := filepath.Join(dir, "tailscale")
+			// Long enough that the fake's own lifetime is unambiguously longer
+			// than the probe budget, short enough that a failure leaks for
+			// seconds, not minutes. Records EVERY pid it spawns so cleanup
+			// touches only this fake's own processes. Replace every `%s` (the
+			// two shapes use a different number of them) with the pid file.
+			script := strings.ReplaceAll(shape.script, "%s", pidFile)
+			if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			t.Cleanup(func() {
+				// Kill ONLY the pids this fake recorded for itself, never by name.
+				for _, pid := range readPIDs(t, pidFile) {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			})
+
+			start := time.Now()
+			got := New().Probe(context.Background())
+			elapsed := time.Since(start)
+
+			if elapsed > probeTimeout+probeGrace+500*time.Millisecond {
+				t.Fatalf("probe took %s; the documented budget is %s (wall clock, including a forking child)",
+					elapsed.Round(time.Millisecond), probeTimeout)
+			}
+			// Our kill must not be reported as a tailscaled outage (F2), and
+			// must not advise `tailscale up`.
+			if got.State != StateProbeFailed {
+				t.Fatalf("state = %q, want probe_failed (got %+v)", got.State, got)
+			}
+			if got.Hint != "" {
+				t.Errorf("inconclusive probe carries advice %q", got.Hint)
+			}
+
+			// The group kill must have reached the grandchild that held the
+			// pipe, in BOTH shapes: for fork-and-exit that is precisely the
+			// sweep Cancel cannot provide.
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				live := livePIDs(readPIDs(t, pidFile))
+				if len(live) == 0 {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("probe left processes alive after its deadline: %v", live)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
 	}
 }
 
@@ -425,12 +468,14 @@ func TestProbe_InconclusiveCachesShorterThanPositive(t *testing.T) {
 			}
 			now = now.Add(time.Second)
 		}
-		// A 15s cache gives exactly 1 run in 10s; the 2s inconclusive cache
-		// re-probes at 0/3/6/9s (the boundary is inclusive). The assertion that
-		// matters is "many times, not once": a wedged probe is never advertised
-		// for a full TTL window.
-		if got := runs.Load(); got < 3 {
-			t.Fatalf("inconclusive probe ran %d times in 10s; want several (2s cache, not the 15s TTL)", got)
+		// A 15s cache gives exactly 1 run in 10s; a 0s cache re-probes every
+		// poll (10 runs). The 2s inconclusive cache re-probes at 0/3/6/9s (the
+		// boundary is inclusive), i.e. 4 runs. Bound BOTH directions: the lower
+		// bound proves it is not the 15s TTL, the upper bound proves it is not
+		// re-probing every poll. Together they pin the 2s cache, not merely
+		// "more than once".
+		if got := runs.Load(); got < 3 || got > 6 {
+			t.Fatalf("inconclusive probe ran %d times in 10s; want 3..6 (2s cache, not the 15s TTL and not a re-probe every poll)", got)
 		}
 	})
 }
