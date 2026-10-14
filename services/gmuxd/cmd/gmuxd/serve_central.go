@@ -46,7 +46,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiag"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
@@ -57,14 +56,6 @@ import (
 // daemon of the same version already owns the socket and no explicit
 // replacement was requested.
 var errIncumbentHealthy = errors.New("gmuxd: already running")
-
-// daemonStart is when this process booted. Peer link lifecycle counters
-// (consecutive_failures / never_connected) are per-boot by design, so this is
-// published on health: without it, a peer that connected for weeks reads
-// "never connected" after an automatic restart on a version bump, and the
-// operator cannot tell "never joined, ever" from "fine, then the daemon
-// restarted" — the exact distinction the tailscale-key-expiry signal turns on.
-var daemonStart = time.Now().UTC()
 
 // implicitIncumbentCheck is deliberately cheap and conservative. It runs
 // before any adapter discovery, indexing, state creation, or database access.
@@ -161,11 +152,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	}
 	launchConfig := discoverLaunchers()
 	updateChecker := update.New(version)
-	// tsProber reads the system tailscaled (the node peer dials go through)
-	// so health/status can explain a peer-link outage as a local tailscale
-	// key expiry. Read-only and internally cached; probed only when peers
-	// are down (see the health closure), so a healthy hub pays nothing.
-	tsProber := tsdiag.New()
 	peerTransport := tsauth.NewRoutedTransport()
 	stateDir := paths.StateDir()
 	convIndex := conversations.New()
@@ -288,7 +274,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if tsListener != nil {
 			tsFQDN = tsListener.FQDN()
 		}
-		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager), StartedAt: daemonStart.Format(time.RFC3339)}
+		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager)}
 		if boot != nil {
 			r := boot.Coordinator.RecoveryState()
 			h.SessionRecovery = &central.SessionRecovery{Status: r.Status, Expected: r.Expected, Recovered: r.Recovered}
@@ -303,15 +289,6 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if v := updateChecker.Available(); v != "" {
 			h.UpdateAvailable = v
 		}
-		// Explain a peer-link outage as a local tailscale problem when one is
-		// plausible (see upstreamAccessFor: the gate and the "inconclusive →
-		// publish nothing" rule live there, with their tests). The probe runs
-		// on the health handler AND the single world-composer goroutine, so the
-		// gate also bounds the blast radius of a wedged tailscale CLI: the probe
-		// context carries an explicit deadline and an inconclusive result
-		// leaves upstream_access null rather than stalling health, the browser's
-		// first world render, and every client's session updates.
-		h.UpstreamAccess = upstreamAccessFor(tsProber.Probe, h.Peers)
 		return h
 	}
 
@@ -436,7 +413,31 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					health.Peers = append([]peering.PeerInfo(nil), h.Peers...)
 				}
 			}
-			writeJSON(w, map[string]any{"ok": true, "data": healthWireData(health, conversationIndexHealth(convIndex), unixOnly, authToken)})
+			peers := health.Peers
+			if peers == nil {
+				peers = []peering.PeerInfo{}
+			}
+			launchers := health.Launchers
+			if launchers == nil {
+				launchers = []peering.LauncherDef{}
+			}
+			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": conversationIndexHealth(convIndex)}
+			if health.SessionRecovery != nil {
+				data["session_recovery"] = health.SessionRecovery
+			}
+			if health.TailscaleURL != "" {
+				data["tailscale_url"] = health.TailscaleURL
+			}
+			if health.Tailscale != nil {
+				data["tailscale"] = health.Tailscale
+			}
+			if health.UpdateAvailable != "" {
+				data["update_available"] = health.UpdateAvailable
+			}
+			if unixOnly {
+				data["auth_token"] = authToken
+			}
+			writeJSON(w, map[string]any{"ok": true, "data": data})
 		})
 		mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"adapters": []string{"pi", "shell"}, "transport": map[string]any{"kind": "websocket", "replay": true}}})
