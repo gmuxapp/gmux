@@ -58,6 +58,14 @@ import (
 // replacement was requested.
 var errIncumbentHealthy = errors.New("gmuxd: already running")
 
+// daemonStart is when this process booted. Peer link lifecycle counters
+// (consecutive_failures / never_connected) are per-boot by design, so this is
+// published on health: without it, a peer that connected for weeks reads
+// "never connected" after an automatic restart on a version bump, and the
+// operator cannot tell "never joined, ever" from "fine, then the daemon
+// restarted" — the exact distinction the tailscale-key-expiry signal turns on.
+var daemonStart = time.Now().UTC()
+
 // implicitIncumbentCheck is deliberately cheap and conservative. It runs
 // before any adapter discovery, indexing, state creation, or database access.
 // A connected/ambiguous socket with unreadable identity is still an owner and
@@ -280,7 +288,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if tsListener != nil {
 			tsFQDN = tsListener.FQDN()
 		}
-		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager)}
+		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager), StartedAt: daemonStart.Format(time.RFC3339)}
 		if boot != nil {
 			r := boot.Coordinator.RecoveryState()
 			h.SessionRecovery = &central.SessionRecovery{Status: r.Status, Expected: r.Expected, Recovered: r.Recovered}
@@ -296,20 +304,14 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			h.UpdateAvailable = v
 		}
 		// Explain a peer-link outage as a local tailscale problem when one is
-		// plausible: peers are configured and at least one non-local peer is
-		// not currently connected. Probing only under that gate means a
-		// healthy hub and a plain-LAN box with no tailscale never shell out.
-		if peerLinksDown(h.Peers) {
-			if s := tsProber.Probe(context.Background()); s.State != tsdiag.StateUnknown {
-				h.UpstreamAccess = &central.UpstreamAccess{
-					State:        string(s.State),
-					Detail:       s.Detail,
-					Hint:         s.Hint,
-					BackendState: s.BackendState,
-					KeyExpiry:    s.KeyExpiry,
-				}
-			}
-		}
+		// plausible (see upstreamAccessFor: the gate and the "inconclusive →
+		// publish nothing" rule live there, with their tests). The probe runs
+		// on the health handler AND the single world-composer goroutine, so the
+		// gate also bounds the blast radius of a wedged tailscale CLI: the probe
+		// context carries an explicit deadline and an inconclusive result
+		// leaves upstream_access null rather than stalling health, the browser's
+		// first world render, and every client's session updates.
+		h.UpstreamAccess = upstreamAccessFor(tsProber.Probe, h.Peers)
 		return h
 	}
 

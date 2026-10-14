@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
@@ -414,6 +415,7 @@ func runStatus(stdout, stderr io.Writer) int {
 				RemoteAlive int `json:"remote_alive"`
 				Dead        int `json:"dead"`
 			} `json:"sessions,omitempty"`
+			StartedAt      string `json:"started_at,omitempty"`
 			UpstreamAccess *struct {
 				State     string `json:"state"`
 				Detail    string `json:"detail,omitempty"`
@@ -438,27 +440,44 @@ func runStatus(stdout, stderr io.Writer) int {
 	}
 
 	d := health.Data
-	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", d.Version, d.Status)
+	// `safe` strips terminal control bytes from every externally-sourced string
+	// printed below (health wire, peer-supplied names/URLs/errors, tailscale CLI
+	// output). This is the last untrusted hop before an operator's terminal: a
+	// compromised tailscale binary or a hostile peer must not be able to set the
+	// window title, paint colours, forge lines, or move the cursor.
+	safe := sanitizeTerminal
+	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", safe(d.Version), d.Status)
 	_, _ = fmt.Fprintf(stdout, "  tcp:    %s\n", d.Listen)
 	_, _ = fmt.Fprintf(stdout, "  socket: %s\n", sock)
 	if d.TailscaleURL != "" {
-		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", d.TailscaleURL)
+		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", safe(d.TailscaleURL))
 	}
 	if d.UpdateAvailable != "" {
-		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", d.UpdateAvailable)
+		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", safe(d.UpdateAvailable))
 	}
 
 	// Upstream-access alert: a peer-link outage explained by the local
 	// tailscale node (expired key / tailscaled down). Surface it prominently
 	// so the operator learns the *why* from status, not from the reconnect
 	// storm. gmux only reports this; it never re-authenticates.
+	//
+	// Advisory output is for POSITIVE classifications only. An inconclusive
+	// probe (probe_failed: timed out, killed, unparseable output) is printed as
+	// a plain diagnostic line with no \u26a0 and no hint — telling an operator to
+	// "start tailscaled and log in: tailscale up" because OUR probe was wedged
+	// invites a disruptive re-auth of a node that may be perfectly healthy.
 	if ua := d.UpstreamAccess; ua != nil {
 		switch ua.State {
 		case "key_expired", "tailscale_not_running":
-			_, _ = fmt.Fprintf(stdout, "\n\u26a0 upstream access: %s\n", ua.Detail)
-			if ua.Hint != "" {
-				_, _ = fmt.Fprintf(stdout, "  %s\n", ua.Hint)
+			_, _ = fmt.Fprintf(stdout, "\n\u26a0 upstream access: %s\n", safe(ua.Detail))
+			if ua.KeyExpiry != "" {
+				_, _ = fmt.Fprintf(stdout, "  key expiry: %s\n", safe(ua.KeyExpiry))
 			}
+			if ua.Hint != "" {
+				_, _ = fmt.Fprintf(stdout, "  %s\n", safe(ua.Hint))
+			}
+		case "probe_failed":
+			_, _ = fmt.Fprintf(stdout, "\n  upstream access: %s\n", safe(ua.Detail))
 		}
 	}
 
@@ -485,33 +504,42 @@ func runStatus(stdout, stderr io.Writer) int {
 				// Configured and never joined is NOT a healthy "connecting" —
 				// render it as a failure (X) so it is obvious, not a perpetual
 				// open circle. This is the tailscale-key-expiry / dead-peer shape.
+				// A peer on its very first dial has no failure to report yet: say
+				// "first attempt" instead of "0 attempts", which reads as a bug.
 				if p.NeverConnected {
-					dot = "\u2717"
-					detail = fmt.Sprintf("never connected (%d attempt%s)", p.ConsecutiveFailures, plural(p.ConsecutiveFailures))
+					if p.ConsecutiveFailures == 0 {
+						detail = "connecting\u2026 (first attempt)"
+					} else {
+						dot = "\u2717"
+						detail = fmt.Sprintf("never connected (%d attempt%s%s)", p.ConsecutiveFailures, plural(p.ConsecutiveFailures), sinceDaemon(d.StartedAt))
+					}
 				} else {
 					detail = "connecting..."
 				}
 			case "offline":
 				detail = "offline"
 			default:
-				base := p.LastError
+				base := safe(p.LastError)
 				if base == "" {
 					base = "disconnected"
 				}
 				switch {
+				case p.NeverConnected && p.ConsecutiveFailures == 0:
+					dot = "\u2717"
+					detail = fmt.Sprintf("never connected (first attempt, no failures yet): %s", base)
 				case p.NeverConnected:
 					dot = "\u2717"
-					detail = fmt.Sprintf("never connected (%d failed attempt%s): %s", p.ConsecutiveFailures, plural(p.ConsecutiveFailures), base)
+					detail = fmt.Sprintf("never connected (%d failed attempt%s%s): %s", p.ConsecutiveFailures, plural(p.ConsecutiveFailures), sinceDaemon(d.StartedAt), base)
 				case p.ConsecutiveFailures > 0:
 					detail = fmt.Sprintf("%s (%d consecutive failure%s)", base, p.ConsecutiveFailures, plural(p.ConsecutiveFailures))
 				default:
 					detail = base
 				}
 			}
-			_, _ = fmt.Fprintf(stdout, "  %s %s (%s)\n", dot, p.Name, detail)
-			_, _ = fmt.Fprintf(stdout, "    %s\n", p.URL)
+			_, _ = fmt.Fprintf(stdout, "  %s %s (%s)\n", dot, safe(p.Name), safe(detail))
+			_, _ = fmt.Fprintf(stdout, "    %s\n", safe(p.URL))
 			if p.LastSuccess != "" && p.Status != "connected" {
-				_, _ = fmt.Fprintf(stdout, "    last connected: %s\n", p.LastSuccess)
+				_, _ = fmt.Fprintf(stdout, "    last connected: %s\n", safe(p.LastSuccess))
 			}
 		}
 	}
@@ -592,6 +620,107 @@ func currentPeers(mgr *peering.Manager) []peering.PeerInfo {
 		return mgr.PeerStatus()
 	}
 	return nil
+}
+
+// sinceDaemon renders " (since <hh:mm>)" from the daemon's boot time, so the
+// per-boot semantics of the never-connected counter are visible in the line
+// itself. Returns "" when the daemon did not publish a start time (older
+// daemon) or it does not parse.
+func sinceDaemon(startedAt string) string {
+	if startedAt == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(", since %s", t.Local().Format("15:04"))
+}
+
+// sanitizeTerminal strips terminal control sequences and control characters
+// from a string that came from OUTSIDE this process before it reaches an
+// operator's terminal.
+//
+// Every field on `daemon status` is externally sourced: the peer name, URL and
+// last_error ride the health wire from a (possibly hostile) spoke, and the
+// upstream-access detail is the first output line of the `tailscale` binary.
+// Without this, a compromised tailscale CLI or a malicious peer can set the
+// window title, emit colours, move the cursor, or forge extra status lines with
+// a newline in `detail`/`last_error`. It is defence-in-depth, not a privilege
+// boundary: the daemon's socket is local-only.
+//
+// Removed: CSI sequences (ESC [ … final), OSC / DCS / SOS / PM / APC sequences
+// (ESC ] … terminated by BEL or ST), two-char Fe escapes, and any remaining C0
+// control (except nothing — newlines are flattened too, since the caller prints
+// one line per field), DEL, and C1 controls.
+func sanitizeTerminal(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == 0x1b { // ESC: drop the whole escape sequence (CSI/OSC/DCS/Fe).
+			i = skipEscapeSequence(s, i)
+			continue
+		}
+		if c < 0x20 || c == 0x7f { // C0 control / DEL
+			i++
+			if c == '\n' || c == '\r' || c == '\t' {
+				// Line/field separators become spaces: a wire-sourced value
+				// must not be able to forge extra status lines.
+				b.WriteString(" ")
+			}
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if size == 1 && r == utf8.RuneError {
+			continue // invalid UTF-8 byte
+		}
+		if r >= 0x80 && r <= 0x9f {
+			continue // C1 control (the 8-bit form of the C0 set)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// skipEscapeSequence returns the index just past the escape sequence starting
+// at s[i] == ESC. Unterminated sequences run to the end of the string (the
+// rest is dropped, which is the safe direction: a truncated OSC must not leak
+// its payload as literal text).
+func skipEscapeSequence(s string, i int) int {
+	j := i + 1 // past ESC
+	if j >= len(s) {
+		return j
+	}
+	switch s[j] {
+	case '[': // CSI: parameter/intermediate bytes, then one final byte 0x40-0x7E.
+		j++
+		for j < len(s) {
+			if c := s[j]; c >= 0x40 && c <= 0x7e {
+				return j + 1
+			}
+			j++
+		}
+		return j
+	case ']', 'P', 'X', '^', '_': // OSC / DCS / SOS / PM / APC: end at BEL or ST.
+		j++
+		for j < len(s) {
+			if s[j] == 0x07 {
+				return j + 1
+			}
+			if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+				return j + 2
+			}
+			j++
+		}
+		return j
+	default: // Fe / two-char escape.
+		return j + 1
+	}
 }
 
 func statusDot(status string) string {

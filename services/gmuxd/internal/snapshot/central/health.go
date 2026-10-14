@@ -24,6 +24,14 @@ type HealthInfo struct {
 	Version string `json:"version"`
 	NodeID  string `json:"node_id"`
 	Status  string `json:"status"`
+	// StartedAt is when THIS daemon process booted (RFC3339 UTC). Peer link
+	// lifecycle (consecutive_failures / never_connected) is per-boot and
+	// deliberately not durable, so after a daemon restart — which gmux performs
+	// automatically on any version change — a long-connected peer reads "never
+	// connected". Publishing the boot instant makes the per-boot semantics
+	// legible next to the count instead of looking like a lifetime fact.
+	// Additive: absent on older daemons.
+	StartedAt string `json:"started_at,omitempty"`
 	// Hostname is the node identity (ADR 0007): the live tailscale name
 	// when connected, else the OS hostname.
 	Hostname     string             `json:"hostname"`
@@ -89,8 +97,13 @@ type SessionRecovery struct {
 // (internal/tsdiag). Kept as plain strings so the health wire contract does not
 // depend on the tsdiag package's types.
 type UpstreamAccess struct {
-	// State: ok | key_expired | tailscale_not_running | not_installed |
-	// unsupported | unknown.
+	// State: ok | key_expired | tailscale_not_running | probe_failed |
+	// not_installed | unsupported | unknown.
+	//
+	// probe_failed is the INCONCLUSIVE outcome (exec failed, timed out, killed,
+	// output unparseable). It is deliberately not tailscale_not_running: a probe
+	// that produced no evidence is not evidence that tailscaled is down, and it
+	// carries no Hint, so the daemon can never render re-auth advice for it.
 	State        string `json:"state"`
 	Detail       string `json:"detail,omitempty"`
 	Hint         string `json:"hint,omitempty"`
