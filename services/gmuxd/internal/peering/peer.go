@@ -89,28 +89,7 @@ type Peer struct {
 	// event (e.g. a browser client connecting) can pull a just-online
 	// peer in faster than the backoff schedule.
 	wake chan struct{}
-
-	// Link lifecycle, tracked in the run loop so status can distinguish a
-	// peer that is flapping (connected before, keeps dropping) from one
-	// that is configured and has NEVER connected since daemon start — the
-	// shape of a local tailscale key expiry, where every peer dial fails
-	// identically and forever. All three are guarded by mu and derived
-	// from state the run loop already traverses; nothing here is durable.
-	//
-	//   consecutiveFailures — failed connect attempts since the last
-	//     success (reset to 0 on connect). Saturates at maxLinkFailures.
-	//   everConnected       — true once the first connect succeeds; the
-	//     authoritative "never joined" signal (its negation).
-	//   lastSuccess         — wall time of the most recent connect.
-	consecutiveFailures int
-	everConnected       bool
-	lastSuccess         time.Time
 }
-
-// maxLinkFailures caps the consecutive-failure counter. The count is a display
-// signal, not a control value, so it saturates at a large round number rather
-// than risking an overflow that would render as a negative on the wire.
-const maxLinkFailures = 1 << 30
 
 func newPeer(cfg config.PeerConfig, sinkArg any, onStatus func(string, Status), opts ...PeerOption) *Peer {
 	sink := projectionSink(sinkArg)
@@ -164,51 +143,6 @@ func (p *Peer) LastError() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.lastError
-}
-
-// recordSuccess marks a successful connection: it sets everConnected, stamps
-// lastSuccess, and clears the consecutive-failure run. Called from the run
-// loop's onConnected callback, once per established connection.
-func (p *Peer) recordSuccess(now time.Time) {
-	p.mu.Lock()
-	p.everConnected = true
-	p.lastSuccess = now
-	p.consecutiveFailures = 0
-	p.mu.Unlock()
-}
-
-// recordFailure increments the consecutive-failure run for a connect attempt
-// that never reached onConnected. Success resets the run; failures accumulate
-// so a peer that has never joined shows a growing count instead of a bare
-// "connecting…".
-func (p *Peer) recordFailure() {
-	p.mu.Lock()
-	if p.consecutiveFailures < maxLinkFailures {
-		p.consecutiveFailures++
-	}
-	p.mu.Unlock()
-}
-
-// LinkHealth returns the peer's link lifecycle: consecutive failed connect
-// attempts since the last success, whether it has EVER connected since daemon
-// start, and the time of the last successful connect (zero if never).
-func (p *Peer) LinkHealth() (consecutiveFailures int, everConnected bool, lastSuccess time.Time) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.consecutiveFailures, p.everConnected, p.lastSuccess
-}
-
-// applyLinkHealth fills the link-lifecycle fields of a PeerInfo from this
-// peer's LinkHealth, in one place so every PeerInfo producer (manager
-// PeerStatus, world projection) emits identical shapes. lastSuccess is
-// RFC3339 UTC, empty when the peer has never connected.
-func (p *Peer) applyLinkHealth(info *PeerInfo) {
-	cf, ever, ls := p.LinkHealth()
-	info.ConsecutiveFailures = cf
-	info.NeverConnected = !ever
-	if ever && !ls.IsZero() {
-		info.LastSuccess = ls.UTC().Format(time.RFC3339)
-	}
 }
 
 // SessionOmissions returns the omission accounting of the last committed
@@ -473,10 +407,7 @@ func (p *Peer) run(ctx context.Context) {
 
 		p.setStatus(StatusConnecting)
 		wasConnected := false
-		err := p.subscribe(ctx, func() {
-			wasConnected = true
-			p.recordSuccess(time.Now())
-		})
+		err := p.subscribe(ctx, func() { wasConnected = true })
 
 		// A disconnect prunes this peer's projection
 		// (Manager.onStatus -> removePeerSessions), so nothing stale
@@ -484,16 +415,6 @@ func (p *Peer) run(ctx context.Context) {
 		// successful connect is always treated as a first delivery
 		// (no previous projection, so the no-op gate in
 		// managerProjectionSink.ReplacePeerSessions cannot suppress it).
-
-		// An attempt that never reached onConnected is a link failure:
-		// count it (never_connected is its negation; the count grows for a
-		// peer that is down, blackholed, or unreachable behind an expired
-		// local tailscale key). A drop of an established connection is NOT
-		// counted here — wasConnected is true, and success already reset
-		// the run; the peer is reachable and reconnects on the fast path.
-		if !wasConnected && ctx.Err() == nil {
-			p.recordFailure()
-		}
 
 		if err != nil && ctx.Err() == nil {
 			p.mu.Lock()

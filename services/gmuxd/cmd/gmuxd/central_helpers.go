@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +17,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionstream"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiag"
 )
 
 var errInvalidProjectJSON = errors.New("invalid project JSON")
@@ -656,122 +652,4 @@ func freshHealthCounts(frames wire.Frames) (central.SessionCounts, bool) {
 		}
 	}
 	return counts, true
-}
-
-// peerLinksDown reports whether any configured NETWORK peer is not currently
-// connected, i.e. whether it is worth probing local tailscale to explain the
-// outage. Local peers (devcontainers reachable via the Docker daemon) are
-// excluded: their reachability is not a tailscale concern, so a down devcontainer
-// must not trigger the tailscale probe. Loopback peers (the standard "second
-// daemon on this laptop" peer at http://localhost:8791) are excluded for the
-// same reason: a loopback socket is refused by the OS, not by tailscale, so
-// arming the probe for it churns a subprocess every TTL window, forever, for a
-// state that has nothing to do with the tailnet. A box with no peers, and a box
-// whose every network peer is connected, return false — the probe is skipped.
-func peerLinksDown(peers []peering.PeerInfo) bool {
-	for _, p := range peers {
-		if p.Local || peerURIsLoopback(p.URL) {
-			continue
-		}
-		if p.Status != "connected" {
-			return true
-		}
-	}
-	return false
-}
-
-// peerURIsLoopback reports whether a peer URL names this machine: the literal
-// "localhost" (and its .localhost suffix form), any 127.0.0.0/8 address, and
-// the IPv6 loopback ::1. Reachability of those is a local-socket fact; the
-// tailscale probe can add nothing to the diagnosis.
-func peerURIsLoopback(rawURL string) bool {
-	if rawURL == "" {
-		return false
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname() // strips the port and IPv6 brackets
-	if host == "" {
-		return false
-	}
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// healthWireData projects a HealthInfo onto the /v1/health wire. The map is
-// built field by field (it predates HealthInfo, and key presence is part of the
-// contract), so every new HealthInfo field has to be published HERE too: a
-// field that exists only on the struct is invisible to the CLI and the browser.
-// TestHealthWireDataCarriesHealthInfoFields asserts the pairing — that is what
-// caught started_at shipping on HealthInfo and never reaching the wire.
-func healthWireData(health central.HealthInfo, convIndex map[string]any, unixOnly bool, authToken string) map[string]any {
-	peers := health.Peers
-	if peers == nil {
-		peers = []peering.PeerInfo{}
-	}
-	launchers := health.Launchers
-	if launchers == nil {
-		launchers = []peering.LauncherDef{}
-	}
-	data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers, "conversation_index": convIndex}
-	if health.StartedAt != "" {
-		data["started_at"] = health.StartedAt
-	}
-	if health.SessionRecovery != nil {
-		data["session_recovery"] = health.SessionRecovery
-	}
-	if health.UpstreamAccess != nil {
-		data["upstream_access"] = health.UpstreamAccess
-	}
-	if health.TailscaleURL != "" {
-		data["tailscale_url"] = health.TailscaleURL
-	}
-	if health.Tailscale != nil {
-		data["tailscale"] = health.Tailscale
-	}
-	if health.UpdateAvailable != "" {
-		data["update_available"] = health.UpdateAvailable
-	}
-	if unixOnly {
-		data["auth_token"] = authToken
-	}
-	return data
-}
-
-// upstreamAccessFor is the health-closure gate in one testable function: probe
-// the local tailscale node iff a peer link is down for a reason tailscale could
-// explain, and publish the diagnostic only when the probe produced one.
-//
-// Two properties the daemon's contract depends on, and that only exist here so
-// they can be tested:
-//
-//   - the probe is NEVER called when no gate-opening peer link is down, so a
-//     healthy hub and a plain-LAN box pay nothing for the shell-out (a peer
-//     that is connected, local, or loopback never opens the gate); and
-//   - an inconclusive probe (StateUnknown: a wedged probe, or a waiter whose
-//     bound expired) leaves upstream_access null, so health degrades to its
-//     pre-PR shape instead of serving a diagnostic the daemon has no evidence
-//     for.
-func upstreamAccessFor(probe func(context.Context) tsdiag.Status, peers []peering.PeerInfo) *central.UpstreamAccess {
-	if probe == nil || !peerLinksDown(peers) {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), tsdiag.ProbeBudget())
-	defer cancel()
-	if s := probe(ctx); s.State != tsdiag.StateUnknown {
-		return &central.UpstreamAccess{
-			State:        string(s.State),
-			Detail:       s.Detail,
-			Hint:         s.Hint,
-			BackendState: s.BackendState,
-			KeyExpiry:    s.KeyExpiry,
-		}
-	}
-	return nil
 }

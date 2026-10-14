@@ -20,7 +20,6 @@ func (m *Manager) WorldProjection() WorldProjection {
 		}
 		i := PeerInfo{Name: name, URL: mp.peer.Config.URL, Status: mp.peer.Status().String(), SessionCount: alive, LastError: mp.peer.LastError(), Local: mp.peer.Config.Local, Source: mp.peer.Config.Source}
 		i.SessionsOmitted, i.SessionsOmittedCodes = mp.peer.SessionOmissions()
-		mp.peer.applyLinkHealth(&i)
 		if h, ok := mp.peer.CachedHealth(); ok {
 			i.Version = h.Version
 			i.DefaultLauncher = h.DefaultLauncher

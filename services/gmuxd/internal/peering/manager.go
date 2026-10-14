@@ -327,7 +327,6 @@ func (m *Manager) PeerStatus() []PeerInfo {
 			Source:       mp.peer.Config.Source,
 		}
 		info.SessionsOmitted, info.SessionsOmittedCodes = mp.peer.SessionOmissions()
-		mp.peer.applyLinkHealth(&info)
 		if h, ok := mp.peer.CachedHealth(); ok {
 			info.Version = h.Version
 			info.DefaultLauncher = h.DefaultLauncher
