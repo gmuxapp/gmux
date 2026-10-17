@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 )
@@ -414,4 +417,243 @@ func TestRemoteSetup_ShowsExplanation(t *testing.T) {
 
 func defaultConfig() config.Config {
 	return config.Config{Port: 8790}
+}
+
+// The poll loop stops only on a settled state. `starting` and `unavailable` are
+// transient — the latter a single failed status read, not a finished startup —
+// so a one-off blip must not end `gmux remote` with an error while the node
+// would report active on the next read.
+func TestSelfReachTerminal(t *testing.T) {
+	terminal := []string{"reachable", "key_expired", "needs_login", "https_disabled", "stopped", "disabled"}
+	for _, s := range terminal {
+		if !selfReachTerminal(s) {
+			t.Errorf("%s: selfReachTerminal = false, want true", s)
+		}
+	}
+	for _, s := range []string{"starting", "unavailable"} {
+		if selfReachTerminal(s) {
+			t.Errorf("%s: selfReachTerminal = true, want false (transient — keep polling)", s)
+		}
+	}
+}
+
+// A login URL published after the health-probe timeout (5s) must still be
+// delivered: the login request uses a client whose timeout exceeds the daemon's
+// login window. Reproduced at test scale — a daemon that answers the login POST
+// after 1s is canceled by a 500ms client (the old behavior) but served by the
+// login client, so the CLI prints the URL, not the auth-key fallback.
+func TestRequestRemoteLoginSurvivesLateURL(t *testing.T) {
+	const url = "https://login.tailscale.com/a/late"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(1 * time.Second) // the daemon's login window is bounded; control is slow
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"auth_url":"` + url + `"}}`))
+	}))
+	defer srv.Close()
+
+	short := &http.Client{Timeout: 500 * time.Millisecond}
+	if _, err := requestRemoteLoginAt(srv.URL, short); err == nil {
+		t.Fatal("a 500ms client should cancel a 1s login request (reproduces the pre-fix timeout)")
+	}
+
+	// The login client's timeout (remoteLoginTimeout) is the fix: a long
+	// enough client delivers the late URL. Use a scaled client (2s > 1s) to
+	// keep the test fast while exercising the same code path.
+	long := &http.Client{Timeout: 2 * time.Second}
+	got, err := requestRemoteLoginAt(srv.URL, long)
+	if err != nil {
+		t.Fatalf("login request: %v", err)
+	}
+	if got != url {
+		t.Fatalf("URL = %q, want %q", got, url)
+	}
+}
+
+// The CLI's login client timeout must exceed the daemon's login window so a URL
+// the daemon produces late is delivered, not canceled into the fallback. This
+// pins the invariant Greptile flagged (unixipc.Client is 5s; daemon window is 12s).
+func TestRemoteLoginTimeoutExceedsDaemonLoginWindow(t *testing.T) {
+	if remoteLoginTimeout <= 12*time.Second {
+		t.Errorf("remoteLoginTimeout = %s, want > the daemon's 12s login window", remoteLoginTimeout)
+	}
+}
+
+// ── Self-reach-driven display (tailscale_self): the fix for #546's follow-up ─
+//
+// A node that was previously connected and whose key has since expired keeps
+// its FQDN, so the raw `connected` flag stays true. These drive the fix:
+// `gmux remote` must NOT print "Remote access is active" for an expired node,
+// and must print a working login URL — the same mapping the status line uses.
+
+// Expired key, previously had an FQDN, no AuthURL yet → the login is triggered
+// and the URL it produces is printed. "Remote access is active" must not appear.
+func TestDisplayStatus_KeyExpiredTriggersLogin(t *testing.T) {
+	var stdout bytes.Buffer
+	var triggered int
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		TS:     &tsHealth{FQDN: "gmux.tailnet.ts.net", Connected: true, HTTPS: true, MagicDNS: true}, // the lying leftover state
+		Self:   &selfReach{State: "key_expired"},                                                     // no AuthURL published
+		login: func() (string, error) {
+			triggered++
+			return "https://login.tailscale.com/a/fresh", nil
+		},
+	}
+	code := displayStatus(h, &stdout)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if triggered != 1 {
+		t.Errorf("login trigger calls = %d, want 1", triggered)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "https://login.tailscale.com/a/fresh") {
+		t.Errorf("missing login URL in:\n%s", out)
+	}
+	if strings.Contains(out, "Remote access is active") {
+		t.Errorf("must not claim active for an expired key:\n%s", out)
+	}
+}
+
+// Expired key that already publishes a login URL → print it, do not trigger a
+// second login.
+func TestDisplayStatus_KeyExpiredWithAuthURL(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		Self:   &selfReach{State: "key_expired", AuthURL: "https://login.tailscale.com/a/abc123"},
+		login: func() (string, error) {
+			t.Fatal("login must not be triggered when a URL is already published")
+			return "", nil
+		},
+	}
+	code := displayStatus(h, &stdout)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "https://login.tailscale.com/a/abc123") {
+		t.Errorf("missing login URL in:\n%s", out)
+	}
+	if strings.Contains(out, "Remote access is active") {
+		t.Errorf("must not claim active for an expired key:\n%s", out)
+	}
+}
+
+// The healthy case must stay "active": reachable → the remote URL and the
+// active line, exactly as before the fix.
+func TestDisplayStatus_ReachableStaysActive(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		TS:     &tsHealth{FQDN: "gmux.tailnet.ts.net", Connected: true, HTTPS: true, MagicDNS: true},
+		Self:   &selfReach{State: "reachable", URL: "https://gmux.tailnet.ts.net"},
+	}
+	code := displayStatus(h, &stdout)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Remote access is active") {
+		t.Errorf("reachable must say active:\n%s", out)
+	}
+	if !strings.Contains(out, "https://gmux.tailnet.ts.net") {
+		t.Errorf("missing remote URL:\n%s", out)
+	}
+	if strings.Contains(out, "login") {
+		t.Errorf("reachable must not ask for login:\n%s", out)
+	}
+}
+
+// When the daemon cannot produce a login URL at all (no tsnet node, login
+// yields nothing), print the supported recovery step — TS_AUTHKEY — and NOT a
+// login URL. This is the fallback the status line's "run 'gmux remote' to
+// re-authenticate" resolves to, so the promise matches what is delivered.
+func TestDisplayStatus_KeyExpiredNoURLFallback(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		Self:   &selfReach{State: "key_expired"},
+		login:  func() (string, error) { return "", nil }, // daemon has no URL
+	}
+	code := displayStatus(h, &stdout)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "TS_AUTHKEY") {
+		t.Errorf("must give the TS_AUTHKEY recovery step:\n%s", out)
+	}
+	if strings.Contains(out, "login.tailscale.com/a/") {
+		t.Errorf("must not promise a login URL it does not have:\n%s", out)
+	}
+	if strings.Contains(out, "Remote access is active") {
+		t.Errorf("must not claim active:\n%s", out)
+	}
+}
+
+// The mock daemon: a node that was connected and whose key expired publishes no
+// URL until a login is triggered; after the POST it reports key_expired with a
+// fresh AuthURL. This proves requestRemoteLogin + fetchTailscaleHealthAt drive
+// the flow end to end (the CLI half of the fix). A real key expiry cannot be
+// produced locally, so the daemon is a mock LocalAPI behind a health endpoint.
+func TestRemoteLoginFlowAgainstMockDaemon(t *testing.T) {
+	const freshURL = "https://login.tailscale.com/a/triggered"
+	var loginTriggered bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/remote/login":
+			loginTriggered = true
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"auth_url":"` + freshURL + `"}}`))
+		case r.URL.Path == "/v1/health":
+			// Before the trigger: key_expired, no URL. After: URL present.
+			self := `{"state":"key_expired","line":"NOT reachable"}`
+			if loginTriggered {
+				self = `{"state":"key_expired","line":"NOT reachable","auth_url":"` + freshURL + `"}`
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"listen":"127.0.0.1:8790","tailscale":{"connected":true,"fqdn":"gmux.tailnet.ts.net"},"tailscale_self":` + self + `}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	// Pre-trigger: the node reports key_expired with no URL, and Connected=true
+	// (the lying leftover FQDN). The command must not treat it as active.
+	h, err := fetchTailscaleHealthAt(srv.URL, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Self == nil || h.Self.State != "key_expired" {
+		t.Fatalf("pre-trigger self = %+v, want key_expired", h.Self)
+	}
+	if h.Self.AuthURL != "" {
+		t.Fatalf("pre-trigger AuthURL = %q, want empty", h.Self.AuthURL)
+	}
+
+	// Trigger login on the daemon's node and read the URL it produces.
+	url, err := requestRemoteLoginAt(srv.URL, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != freshURL {
+		t.Fatalf("login URL = %q, want %q", url, freshURL)
+	}
+
+	// The end-to-end display, fed the post-trigger health, prints the URL and
+	// not "active".
+	after, err := fetchTailscaleHealthAt(srv.URL, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.login = func() (string, error) { return requestRemoteLoginAt(srv.URL, srv.Client()) }
+	var stdout bytes.Buffer
+	if code := displayStatus(after, &stdout); code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), freshURL) || strings.Contains(stdout.String(), "Remote access is active") {
+		t.Errorf("output =\n%s", stdout.String())
+	}
 }

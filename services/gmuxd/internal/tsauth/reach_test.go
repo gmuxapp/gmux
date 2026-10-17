@@ -36,7 +36,7 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 			enabled:     true,
 			diag:        DiagStatus{BackendState: "NeedsLogin", AuthURL: "https://login.tailscale.com/a/abc123", Expired: true, KeyExpiry: expired},
 			wantState:   ReachKeyExpired,
-			wantLine:    "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' and open the login URL it prints: https://login.tailscale.com/a/abc123",
+			wantLine:    "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' to re-authenticate: https://login.tailscale.com/a/abc123",
 			wantAuthURL: "https://login.tailscale.com/a/abc123",
 		},
 		{
@@ -44,21 +44,21 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 			enabled:   true,
 			diag:      DiagStatus{FQDN: "gmux-lab.tailnet.ts.net", HTTPS: true, BackendState: "Running", Connected: true, Expired: true, KeyExpiry: expired},
 			wantState: ReachKeyExpired,
-			wantLine:  "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' and open the login URL it prints",
+			wantLine:  "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' to re-authenticate",
 		},
 		{
 			name:      "expiry already passed before tailscale flags it",
 			enabled:   true,
 			diag:      DiagStatus{BackendState: "NeedsLogin", KeyExpiry: expired},
 			wantState: ReachKeyExpired,
-			wantLine:  "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' and open the login URL it prints",
+			wantLine:  "NOT reachable — node key expired 2026-10-15 12:00 UTC; run 'gmux remote' to re-authenticate",
 		},
 		{
 			name:      "expired flag without a usable timestamp",
 			enabled:   true,
 			diag:      DiagStatus{BackendState: "NeedsLogin", Expired: true, KeyExpiry: "not-a-time"},
 			wantState: ReachKeyExpired,
-			wantLine:  "NOT reachable — node key expired; run 'gmux remote' and open the login URL it prints",
+			wantLine:  "NOT reachable — node key expired; run 'gmux remote' to re-authenticate",
 		},
 		{
 			name:      "a future expiry is not a failure",
@@ -73,7 +73,7 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 			enabled:     true,
 			diag:        DiagStatus{BackendState: "NeedsLogin", AuthURL: "https://login.tailscale.com/a/first"},
 			wantState:   ReachNeedsLogin,
-			wantLine:    "NOT reachable — the node needs login (state NeedsLogin); run 'gmux remote' and open the login URL it prints: https://login.tailscale.com/a/first",
+			wantLine:    "NOT reachable — the node needs login (state NeedsLogin); run 'gmux remote' to re-authenticate: https://login.tailscale.com/a/first",
 			wantAuthURL: "https://login.tailscale.com/a/first",
 		},
 		{
@@ -81,7 +81,7 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 			enabled:   true,
 			diag:      DiagStatus{BackendState: "NoState"},
 			wantState: ReachNeedsLogin,
-			wantLine:  "NOT reachable — the node needs login (state NoState); run 'gmux remote' and open the login URL it prints",
+			wantLine:  "NOT reachable — the node needs login (state NoState); run 'gmux remote' to re-authenticate",
 		},
 		{
 			name:      "starting",
@@ -126,7 +126,7 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 			enabled:   true,
 			diag:      DiagStatus{BackendState: "Stopped"},
 			wantState: ReachStopped,
-			wantLine:  "NOT reachable — the tailscale node is stopped; run 'gmux remote' and open the login URL it prints",
+			wantLine:  "NOT reachable — the tailscale node is stopped; run 'gmux remote' to re-authenticate",
 		},
 		{
 			// A failed read is unknown, not healthy: a stale FQDN must not
@@ -173,6 +173,23 @@ func TestSelfReachFromDiag_StateToLine(t *testing.T) {
 				t.Errorf("Line %q must not advise the system 'tailscale up'", got.Line)
 			}
 		})
+	}
+}
+
+// NeedsLogin is the predicate `gmux remote` uses to decide "active" vs "re-auth
+// needed". It must be true for exactly the states the status line tells the
+// user to re-authenticate for (key expiry, needs login, stopped), so the CLI
+// and the line never diverge — the whole point of reusing this mapping.
+func TestSelfReachNeedsLogin(t *testing.T) {
+	for _, s := range []string{ReachKeyExpired, ReachNeedsLogin, ReachStopped} {
+		if !(SelfReach{State: s}).NeedsLogin() {
+			t.Errorf("%s: NeedsLogin() = false, want true", s)
+		}
+	}
+	for _, s := range []string{ReachReachable, ReachStarting, ReachNoHTTPS, ReachUnavailable, ReachDisabled} {
+		if (SelfReach{State: s}).NeedsLogin() {
+			t.Errorf("%s: NeedsLogin() = true, want false", s)
+		}
 	}
 }
 

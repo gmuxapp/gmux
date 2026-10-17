@@ -16,6 +16,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
@@ -197,6 +198,18 @@ func remoteStatus(stdout, stderr io.Writer) int {
 type tailscaleHealth struct {
 	Listen string
 	TS     *tsHealth
+	// Self is the daemon's own tailnet-reachability classification
+	// (tailscale_self). It is the SINGLE truth `gmux remote` decides on: the
+	// exact mapping `daemon status` prints, so the command and the status line
+	// can never disagree. When present, the active/login decision uses it and
+	// ignores tsHealth.Connected, which lies after a key expiry (the listener
+	// keeps its FQDN, so `connected` stays true).
+	Self *selfReach
+	// login triggers an interactive login on the daemon's node and returns the
+	// URL control publishes. Set by remotePoll from the daemon's login endpoint;
+	// nil on an older daemon that has no endpoint, where an empty URL falls back
+	// to the printed recovery step.
+	login func() (string, error)
 }
 
 type tsHealth struct {
@@ -208,9 +221,33 @@ type tsHealth struct {
 	Connected    bool   `json:"connected"`
 }
 
-// fetchTailscaleHealth fetches the tailscale status from the daemon.
-func fetchTailscaleHealth(client *http.Client) (*tailscaleHealth, error) {
-	resp, err := client.Get("http://localhost/v1/health")
+// selfReach mirrors tsauth.SelfReach on /v1/health. State is wire contract
+// (tsauth.Reach* constants), which is what the display switches on.
+type selfReach struct {
+	State   string `json:"state"`
+	Line    string `json:"line"`
+	URL     string `json:"url"`
+	AuthURL string `json:"auth_url"`
+}
+
+// needsLogin mirrors tsauth.SelfReach.NeedsLogin over the decoded wire shape.
+func (s *selfReach) needsLogin() bool {
+	switch s.State {
+	case tsauth.ReachKeyExpired, tsauth.ReachNeedsLogin, tsauth.ReachStopped:
+		return true
+	}
+	return false
+}
+
+const (
+	healthURLPath      = "http://localhost/v1/health"
+	remoteLoginURLPath = "http://localhost/v1/remote/login"
+)
+
+// fetchTailscaleHealthAt fetches the tailscale status from a daemon at baseURL
+// ("http://localhost" over the unix socket; an httptest URL in tests).
+func fetchTailscaleHealthAt(baseURL string, client *http.Client) (*tailscaleHealth, error) {
+	resp, err := client.Get(baseURL + "/v1/health")
 	if err != nil {
 		return nil, err
 	}
@@ -219,8 +256,9 @@ func fetchTailscaleHealth(client *http.Client) (*tailscaleHealth, error) {
 	var health struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Listen    string    `json:"listen"`
-			Tailscale *tsHealth `json:"tailscale"`
+			Listen        string     `json:"listen"`
+			Tailscale     *tsHealth  `json:"tailscale"`
+			TailscaleSelf *selfReach `json:"tailscale_self"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
@@ -232,7 +270,58 @@ func fetchTailscaleHealth(client *http.Client) (*tailscaleHealth, error) {
 	return &tailscaleHealth{
 		Listen: health.Data.Listen,
 		TS:     health.Data.Tailscale,
+		Self:   health.Data.TailscaleSelf,
 	}, nil
+}
+
+// fetchTailscaleHealth fetches the tailscale status from the local daemon.
+func fetchTailscaleHealth(client *http.Client) (*tailscaleHealth, error) {
+	return fetchTailscaleHealthAt("http://localhost", client) // healthURLPath
+}
+
+// requestRemoteLogin asks the daemon to start an interactive login on its own
+// tsnet node and returns the login URL it produces. An expired key on a
+// previously-connected node publishes no URL on its own, so the login must be
+// triggered; this is the daemon-side StartLoginInteractive path (see
+// tsauth.RequestLogin). Returns "" (no error) when the daemon has no tsnet
+// node, in which case the caller prints the supported fallback.
+func requestRemoteLogin(client *http.Client) (string, error) {
+	return requestRemoteLoginAt("http://localhost", client) // remoteLoginURLPath
+}
+
+// remoteLoginTimeout bounds the CLI's login-trigger request. It must exceed the
+// daemon's full login window (tsauth.RequestLogin polls for a fresh AuthURL for
+// loginAuthURLTimeout+2s = 12s); the default unixipc.Client 5s timeout would
+// cancel a request the daemon can still complete, dropping to the auth-key
+// fallback instead of printing the URL. Health probes keep the short timeout.
+const remoteLoginTimeout = 15 * time.Second
+
+// requestRemoteLoginAt is requestRemoteLogin against a daemon at baseURL (an
+// httptest URL in tests).
+func requestRemoteLoginAt(baseURL string, client *http.Client) (string, error) {
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/remote/login", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			AuthURL string `json:"auth_url"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("unexpected response")
+	}
+	if !out.OK {
+		return "", fmt.Errorf("login request failed")
+	}
+	return out.Data.AuthURL, nil
 }
 
 // remotePoll polls the daemon's health endpoint until tailscale reaches
@@ -244,9 +333,13 @@ func remotePoll(stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "Connecting to Tailscale... ")
 
-	// Poll until tailscale reaches a definitive state.
-	// The daemon needs time to start tsnet, contact the control server,
-	// and either get an auth URL or establish the connection.
+	// Poll until the daemon reports a definitive self-reach state. A key expiry
+	// is definitive (state key_expired) even though the listener keeps its FQDN,
+	// so the poll stops and the login flow runs. `starting` and `unavailable` are
+	// transient (the latter is a single failed status read, not a finished
+	// startup) so polling continues; a not-yet-present self blob also keeps
+	// polling. On an older daemon with no tailscale_self, fall back to the
+	// pre-classification condition.
 	var result *tailscaleHealth
 	deadline := time.Now().Add(30 * time.Second)
 	tick := time.NewTicker(1 * time.Second)
@@ -256,6 +349,19 @@ func remotePoll(stdout, stderr io.Writer) int {
 		h, err := fetchTailscaleHealth(client)
 		if err != nil {
 			// Daemon might have just restarted; keep trying.
+			<-tick.C
+			continue
+		}
+		if h.Self != nil {
+			result = h
+			// Poll stops on a definitive state. `starting` is transient; so is
+			// `unavailable` — a single failed LocalAPI read is not a finished
+			// startup — so keep polling and let the 30s window absorb a blip.
+			// The last state is retained, so a deadline that ends on `unavailable`
+			// still reports it.
+			if selfReachTerminal(h.Self.State) {
+				break
+			}
 			<-tick.C
 			continue
 		}
@@ -288,11 +394,162 @@ func remotePoll(stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// Wire the daemon's login trigger so displayStatus can produce a URL for a
+	// needs-login node that does not already publish one (an expired key on a
+	// previously-connected node). Use a client whose timeout exceeds the
+	// daemon's login window, so a URL the daemon produces late is delivered
+	// rather than canceled into the auth-key fallback.
+	loginClient := unixipc.Client(sock)
+	loginClient.Timeout = remoteLoginTimeout
+	result.login = func() (string, error) { return requestRemoteLogin(loginClient) }
+
 	return displayStatus(result, stdout)
 }
 
-// displayStatus renders the tailscale connection status.
+// selfReachTerminal reports a self-reach state `gmux remote` stops polling on:
+// a settled answer it can act on. `starting` is transient (node coming up) and
+// `unavailable` is a single failed status read, not a finished startup — a blip
+// the 30s polling window should absorb, not a terminal verdict. Everything else
+// (reachable, key_expired, needs_login, https_disabled, stopped, disabled) is
+// definitive.
+func selfReachTerminal(state string) bool {
+	switch state {
+	case tsauth.ReachStarting, tsauth.ReachUnavailable:
+		return false
+	}
+	return true
+}
+
+// displayStatus renders the tailscale connection status. The daemon's own
+// self-reach classification (tailscale_self) is the single truth `gmux remote`
+// acts on — the same mapping `daemon status` prints — so the command's active/
+// login decision and the status line can never diverge. A raw `connected` flag
+// lies after a key expiry (the listener keeps its FQDN), so it is not trusted
+// when a self-reach state is available. An older daemon with no tailscale_self
+// falls back to the pre-classification rendering.
 func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
+	if h.Self != nil {
+		return displaySelfReach(h, stdout)
+	}
+	return displayLegacyDiag(h, stdout)
+}
+
+// displaySelfReach renders the connection status from the daemon's
+// self-reach classification. The active/login decision is driven by the state
+// (tsauth.Reach*), reused from the mapping that produced the status line.
+func displaySelfReach(h *tailscaleHealth, stdout io.Writer) int {
+	switch h.Self.State {
+	case tsauth.ReachReachable:
+		fmt.Fprintf(stdout, "  local:  http://%s\n", h.Listen)
+		if h.Self.URL != "" {
+			fmt.Fprintf(stdout, "  remote: %s\n", h.Self.URL)
+		}
+		fmt.Fprintln(stdout)
+		if h.TS != nil && !h.TS.MagicDNS {
+			fmt.Fprintln(stdout, "  ✗ MagicDNS is not enabled in your tailnet")
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "Enable it in your Tailscale admin console:")
+			fmt.Fprintln(stdout, "  https://login.tailscale.com/admin/dns")
+			fmt.Fprintln(stdout)
+			fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Remote access is active.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
+
+	case tsauth.ReachNoHTTPS:
+		fmt.Fprintln(stdout, "Tailscale is logged in but the connection isn't coming up.")
+		fmt.Fprintln(stdout, "The cause: HTTPS is not enabled in your tailnet, which gmuxd")
+		fmt.Fprintln(stdout, "needs to serve remote access.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Enable HTTPS (and MagicDNS) in your Tailscale admin console:")
+		fmt.Fprintln(stdout, "  https://login.tailscale.com/admin/dns")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Then run `gmux remote` again.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 1
+
+	case tsauth.ReachStarting:
+		fmt.Fprintln(stdout, "Tailscale is still connecting. This can take a minute on first setup.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Try again shortly:")
+		fmt.Fprintln(stdout, "  gmux remote")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
+
+	case tsauth.ReachUnavailable:
+		fmt.Fprintln(stdout, h.Self.Line)
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Check the daemon and try again:")
+		fmt.Fprintln(stdout, "  gmux daemon status")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 1
+
+	default:
+		// key_expired / needs_login / stopped: re-authenticate. Use the URL the
+		// node already publishes, else trigger a login on it and use the URL
+		// that produces. Only when no URL can be produced is the supported
+		// fallback printed — never a URL we do not have.
+		if h.Self.needsLogin() {
+			return displayLoginRequired(h, stdout)
+		}
+		// A state `gmux remote` was not built to render (a newer daemon): show
+		// the line the daemon produced verbatim, plus the docs pointer.
+		fmt.Fprintln(stdout, h.Self.Line)
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
+	}
+}
+
+// displayLoginRequired prints the re-authentication step for a node that needs
+// login. It prefers a URL the node already publishes; an expired key on a
+// previously-connected node publishes none, so it triggers a login on the
+// daemon's node (the StartLoginInteractive path) and uses the URL control
+// returns. When no URL can be produced, it prints the tsnet-supported recovery
+// step (restart with TS_AUTHKEY) — the status line promises only "run 'gmux
+// remote' to re-authenticate", which is exactly this output, not a literal URL.
+func displayLoginRequired(h *tailscaleHealth, stdout io.Writer) int {
+	authURL := h.Self.AuthURL
+	if authURL == "" && h.login != nil {
+		if url, err := h.login(); err == nil {
+			authURL = url
+		}
+	}
+	if authURL != "" {
+		label := "To complete setup, log in to Tailscale:"
+		if h.Self.State == tsauth.ReachKeyExpired {
+			label = "To re-authenticate this node, log in to Tailscale:"
+		}
+		fmt.Fprintln(stdout, label)
+		fmt.Fprintf(stdout, "  %s\n", authURL)
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "After logging in, run `gmux remote` again to check the connection.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
+	}
+
+	fmt.Fprintln(stdout, "Tailscale did not offer a login URL for this node, and")
+	fmt.Fprintln(stdout, "triggering a login produced none.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Re-authenticate the node with a Tailscale auth key by restarting")
+	fmt.Fprintln(stdout, "the daemon with TS_AUTHKEY set (this is tsnet's own recovery path):")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "  TS_AUTHKEY=<your-key> gmux daemon restart")
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+	return 1
+}
+
+// displayLegacyDiag renders the connection status from the raw tailscale
+// diagnostics blob, for daemons that predate the tailscale_self field.
+func displayLegacyDiag(h *tailscaleHealth, stdout io.Writer) int {
 	ts := h.TS
 
 	// Daemon is reachable but hasn't started Tailscale yet.

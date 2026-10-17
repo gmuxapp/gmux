@@ -286,8 +286,13 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			// over the tailnet, and if not, why (key expiry included).
 			self := tsauth.SelfReachFromDiag(d, true, time.Now())
 			h.TailscaleSelf = &self
-			if d.Connected && d.HTTPS && d.FQDN != "" {
-				h.TailscaleURL = "https://" + d.FQDN
+			// The URL is published only when the mapping says the node is
+			// actually reachable. `Connected` is the listener's own flag and
+			// stays true after a key expiry (the FQDN is retained), so gating
+			// the URL on it would advertise a blackholed node as reachable —
+			// the same leftover-FQDN bug `gmux remote` had. Reuse the mapping.
+			if self.State == tsauth.ReachReachable {
+				h.TailscaleURL = self.URL
 			}
 		} else {
 			// No listener yet: the unix health server starts before startup
@@ -452,6 +457,27 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": data})
 		})
+		// Start an interactive login on gmuxd's OWN tsnet node and return the
+		// URL. This is the recovery path `gmux remote` uses when the node's key
+		// expired: the CLI has no LocalClient, so the login must be triggered
+		// by the node's owner. Unix-socket only: it mutates node auth state and
+		// is the local operator's recovery step, never a remote capability. With
+		// no tsnet node it reports an empty URL, and `gmux remote` prints the
+		// supported fallback (restart with TS_AUTHKEY).
+		if unixOnly {
+			mux.HandleFunc("POST /v1/remote/login", func(w http.ResponseWriter, r *http.Request) {
+				if tsListener == nil {
+					writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": ""}})
+					return
+				}
+				authURL, err := tsListener.RequestLogin(r.Context())
+				if err != nil {
+					writeError(w, http.StatusServiceUnavailable, "login_failed", err.Error())
+					return
+				}
+				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": authURL}})
+			})
+		}
 		mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"adapters": []string{"pi", "shell"}, "transport": map[string]any{"kind": "websocket", "replay": true}}})
 		})
