@@ -532,6 +532,12 @@ func TestStopRepairsFailedSynthesis(t *testing.T) {
 	if err := coord.Stop(context.Background(), id); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+	// The drain synthesizes the failed exit in its own goroutine. reportError
+	// for that synthesis runs after the registry removal that closes the entry's
+	// dead channel — the signal Stop's death wait observes — so Stop returning
+	// does not imply the report has landed. Close joins every drain worker, so
+	// the "must have been reported" assertion below races nothing.
+	coord.Close()
 	mu.Lock()
 	defer mu.Unlock()
 	if len(repaired) != 1 || *repaired[0].Facts.ExitedAt.Set != ts(950) || repaired[0].ObservedVersion != 1 {
