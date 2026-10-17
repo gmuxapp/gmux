@@ -282,9 +282,19 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if tsListener != nil {
 			d := tsListener.Diag()
 			h.Tailscale = &d
+			// One classification of the same reading: is THIS host reachable
+			// over the tailnet, and if not, why (key expiry included).
+			self := tsauth.SelfReachFromDiag(d, true, time.Now())
+			h.TailscaleSelf = &self
 			if d.Connected && d.HTTPS && d.FQDN != "" {
 				h.TailscaleURL = "https://" + d.FQDN
 			}
+		} else {
+			// No listener yet: the unix health server starts before startup
+			// convergence creates it, so a nil listener with tailscale enabled
+			// means starting, not disabled.
+			self := tsauth.SelfReachNoListener(cfg.Tailscale.Enabled)
+			h.TailscaleSelf = &self
 		}
 		if v := updateChecker.Available(); v != "" {
 			h.UpdateAvailable = v
@@ -430,6 +440,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			if health.Tailscale != nil {
 				data["tailscale"] = health.Tailscale
+			}
+			if health.TailscaleSelf != nil {
+				data["tailscale_self"] = health.TailscaleSelf
 			}
 			if health.UpdateAvailable != "" {
 				data["update_available"] = health.UpdateAvailable

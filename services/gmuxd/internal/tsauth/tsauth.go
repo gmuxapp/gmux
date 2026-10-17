@@ -55,7 +55,24 @@ type DiagStatus struct {
 	BackendState string `json:"backend_state,omitempty"`
 	// Connected is true when the listener is fully operational.
 	Connected bool `json:"connected"`
+	// Expired reports the node's own key as expired (self node, not a peer).
+	// This is the signature of the "reachable yesterday, blackholed today"
+	// failure: the tailnet stops routing to this node until it re-auths.
+	Expired bool `json:"expired,omitempty"`
+	// KeyExpiry is the self node key expiry as RFC3339 — the moment it
+	// expired when Expired, otherwise the moment it will expire. Empty when
+	// the node identity is not known yet.
+	KeyExpiry string `json:"key_expiry,omitempty"`
+	// StatusError is set when the LocalAPI status read itself failed
+	// (timeout, socket gone). The node's state is then unknown, which is a
+	// different answer from "not logged in".
+	StatusError string `json:"status_error,omitempty"`
 }
+
+// diagStatusTimeout bounds the on-demand LocalAPI read in Diag. Health and
+// `daemon status` call Diag per request; a wedged LocalAPI socket must never
+// stall them.
+const diagStatusTimeout = 2 * time.Second
 
 // Listener manages a tsnet server and its HTTPS listener.
 type Listener struct {
@@ -99,8 +116,9 @@ func (l *Listener) Diag() DiagStatus {
 	if l.lc == nil {
 		return ds
 	}
-	status, err := l.lc.Status(context.Background())
+	status, err := statusWithTimeout(context.Background(), l.lc, diagStatusTimeout)
 	if err != nil {
+		ds.StatusError = err.Error()
 		return ds
 	}
 	if status.AuthURL != "" {
@@ -108,6 +126,12 @@ func (l *Listener) Diag() DiagStatus {
 	}
 	ds.BackendState = status.BackendState
 	ds.HTTPS = len(status.CertDomains) > 0
+	if status.Self != nil {
+		ds.Expired = status.Self.Expired
+		if status.Self.KeyExpiry != nil && !status.Self.KeyExpiry.IsZero() {
+			ds.KeyExpiry = status.Self.KeyExpiry.UTC().Format(time.RFC3339)
+		}
+	}
 	if status.CurrentTailnet != nil {
 		ds.MagicDNS = status.CurrentTailnet.MagicDNSSuffix != ""
 	} else {
