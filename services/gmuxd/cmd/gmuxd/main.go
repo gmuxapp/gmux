@@ -404,10 +404,13 @@ func runStatus(stdout, stderr io.Writer) int {
 	var health struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Version         string `json:"version"`
-			Status          string `json:"status"`
-			Listen          string `json:"listen"`
-			TailscaleURL    string `json:"tailscale_url,omitempty"`
+			Version       string `json:"version"`
+			Status        string `json:"status"`
+			Listen        string `json:"listen"`
+			TailscaleURL  string `json:"tailscale_url,omitempty"`
+			TailscaleSelf *struct {
+				Line string `json:"line"`
+			} `json:"tailscale_self,omitempty"`
 			UpdateAvailable string `json:"update_available,omitempty"`
 			Sessions        *struct {
 				LocalAlive  int `json:"local_alive"`
@@ -432,7 +435,12 @@ func runStatus(stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", d.Version, d.Status)
 	_, _ = fmt.Fprintf(stdout, "  tcp:    %s\n", d.Listen)
 	_, _ = fmt.Fprintf(stdout, "  socket: %s\n", sock)
-	if d.TailscaleURL != "" {
+	// This host's own tailnet reachability, in one line: the URL when it works,
+	// the reason (node key expiry, needs login, ...) when it does not. An old
+	// daemon that reports no tailscale state at all prints nothing, as before.
+	if d.TailscaleSelf != nil && d.TailscaleSelf.Line != "" {
+		_, _ = fmt.Fprintf(stdout, "  tailscale: %s\n", d.TailscaleSelf.Line)
+	} else if d.TailscaleURL != "" {
 		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", d.TailscaleURL)
 	}
 	if d.UpdateAvailable != "" {

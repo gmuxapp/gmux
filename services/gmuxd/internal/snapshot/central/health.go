@@ -29,7 +29,11 @@ type HealthInfo struct {
 	Hostname     string             `json:"hostname"`
 	TailscaleURL string             `json:"tailscale_url,omitempty"`
 	Tailscale    *tsauth.DiagStatus `json:"tailscale,omitempty"`
-	Listen       string             `json:"listen"`
+	// TailscaleSelf is this host's own tailnet reachability as one line, for
+	// `daemon status` and health consumers. Derived from Tailscale on read;
+	// present whenever the daemon answers health (disabled included).
+	TailscaleSelf *tsauth.SelfReach `json:"tailscale_self,omitempty"`
+	Listen        string            `json:"listen"`
 	// UpdateAvailable carries the newer released version string, when one
 	// is known.
 	UpdateAvailable string             `json:"update_available,omitempty"`
