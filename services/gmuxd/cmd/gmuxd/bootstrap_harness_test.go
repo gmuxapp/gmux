@@ -165,9 +165,13 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	dir := t.TempDir()
 	fleet := newHarnessFleet(2)
 	s, first := openHarness(t, dir, fleet, nil)
-	// This test validates restart boundaries, not the tiny timeout behavior
-	// covered above. Leave enough scheduling budget for loaded/race CI hosts.
-	first.cfg.RunnerBudget, first.cfg.ConvergeDeadline = 300*time.Millisecond, time.Second
+	// This test validates restart boundaries, not the deadline path (covered
+	// deterministically by TestHarnessGlobalDeadlineJoinsWorkersAndWithholdsReadiness-
+	// ForNoncompliantTransport, which blocks the transport explicitly). Nothing
+	// here asserts on timing, so it runs on the production budget (0 → the
+	// bootstrap defaults) rather than a tight wall-clock budget a loaded/race CI
+	// host can outrun, which made a compliant Register look deadline-violating.
+	first.cfg.RunnerBudget, first.cfg.ConvergeDeadline = 0, 0
 	firstCtx, stopFirst := context.WithCancel(context.Background())
 	if _, err := first.Converge(firstCtx); err != nil {
 		t.Fatal(err)
@@ -205,7 +209,7 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	}
 
 	s, third := openHarness(t, dir, fleet2, nil)
-	third.cfg.RunnerBudget, third.cfg.ConvergeDeadline = 300*time.Millisecond, time.Second
+	third.cfg.RunnerBudget, third.cfg.ConvergeDeadline = 0, 0 // production defaults; see above
 	defer s.Close()
 	if _, err := third.Converge(context.Background()); err != nil {
 		t.Fatal(err)
