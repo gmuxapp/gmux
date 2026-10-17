@@ -49,13 +49,32 @@ const (
 	ReachDisabled = "disabled"
 )
 
+// NeedsLogin reports the states that require re-authenticating this host's own
+// node. It is the single source of truth shared by the status line and
+// `gmux remote`, so the command's active/login decision and the line's promise
+// cannot diverge: for these states `gmux remote` starts an interactive login on
+// the node and prints the resulting URL (or the fallback when none is
+// available). `reachable`, `starting`, `https_disabled`, `unavailable` and
+// `disabled` are not re-auth problems.
+func (s SelfReach) NeedsLogin() bool {
+	switch s.State {
+	case ReachKeyExpired, ReachNeedsLogin, ReachStopped:
+		return true
+	}
+	return false
+}
+
 // reAuthHint names the re-auth path for gmuxd's OWN node. A `tailscale up`
 // hint would be wrong: this node is an embedded tsnet node with its own state
-// dir and LocalAPI, so the system tailscale CLI does not own it. tsnet's own
-// guidance is to restart with TS_AUTHKEY set or open the login URL, and
-// gmuxd's user-facing route to that URL is `gmux remote`, which reads the
-// daemon's health and prints it.
-const reAuthHint = "run 'gmux remote' and open the login URL it prints"
+// dir and LocalAPI, so the system tailscale CLI does not own it. gmuxd's
+// user-facing route to re-authentication is `gmux remote`, which (on a node
+// that needs login) calls the daemon's login endpoint to start an interactive
+// login on this node and prints the URL it produces; when the node cannot
+// produce one, the same command prints the tsnet-supported fallback (restart
+// with TS_AUTHKEY). The base hint therefore promises only that `gmux remote`
+// re-authenticates, never a literal URL — the URL is appended below only when
+// control has already published one.
+const reAuthHint = "run 'gmux remote' to re-authenticate"
 
 // keyExpiryLineFormat renders the expiry time inside a status line; the JSON
 // field keeps machine-readable RFC3339.
