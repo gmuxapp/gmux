@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -131,6 +132,49 @@ func convergeTailnetPeerTransport(ctx context.Context, transport *tsauth.RoutedT
 	}
 }
 
+// remoteLoginNode is the part of a tsnet Listener the login endpoint needs:
+// read the current self-reach state, and trigger a login only when the state
+// says one is needed. *tsauth.Listener satisfies it.
+type remoteLoginNode interface {
+	Diag() tsauth.DiagStatus
+	RequestLogin(context.Context) (string, error)
+}
+
+// remoteLoginHandler serves POST /v1/remote/login. Starting an interactive
+// login cancels the node's live session, so it must only ever run on a node
+// that genuinely needs login. The guard is the SAME mapping the CLI and
+// `daemon status` use — tsauth.SelfReachFromDiag(...).NeedsLogin() — so the
+// endpoint and the status line cannot disagree about who needs re-auth. On a
+// healthy (or transient/unknown) node it answers 409 with the current state and
+// line and never touches tailscale; only a needs-login state proceeds.
+func remoteLoginHandler(node func() remoteLoginNode, now func() time.Time) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Resolve at request time: the node is created by startup convergence
+		// after this route is registered.
+		n := node()
+		// No tsnet node at all: nothing to log in. Report "no URL" so the CLI
+		// falls back to its supported recovery step (restart with TS_AUTHKEY).
+		if n == nil {
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": ""}})
+			return
+		}
+		self := tsauth.SelfReachFromDiag(n.Diag(), true, now())
+		if !self.NeedsLogin() {
+			// Refuse without touching tailscale: a healthy node's session must
+			// not be canceled by a stray local POST.
+			writeError(w, http.StatusConflict, "login_not_needed",
+				fmt.Sprintf("remote login is only for a node that needs login (current state: %s); %s", self.State, self.Line))
+			return
+		}
+		authURL, err := n.RequestLogin(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "login_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": authURL}})
+	}
+}
+
 func serveCentral(stderr io.Writer, replace bool) int {
 	// This must remain the first operation. A candidate that will yield must do
 	// no bootstrap work against the incumbent it was spawned to replace.
@@ -243,7 +287,11 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	// corpora — and must block neither takeover ordering nor first requests.
 
 	var peerManager *peering.Manager
-	var tsListener *tsauth.Listener
+	// tsListener is installed by startup convergence, AFTER the listeners and
+	// their handlers are registered. Handlers and the health adapter must read
+	// it at REQUEST time, not capture it at registration: an atomic pointer keeps
+	// that handoff race-free (the unix socket serves before tsnet starts).
+	var tsListener atomic.Pointer[tsauth.Listener]
 	var notifier *centralNotifyRouter
 	fanout := newSSEFanout()
 	presenceTable := presence.New(presence.Callbacks{
@@ -271,16 +319,16 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	peerAdapter.health = func() central.HealthInfo {
 		osHost, _ := os.Hostname()
 		tsFQDN := ""
-		if tsListener != nil {
-			tsFQDN = tsListener.FQDN()
+		if l := tsListener.Load(); l != nil {
+			tsFQDN = l.FQDN()
 		}
 		h := central.HealthInfo{Service: "gmuxd", Version: version, NodeID: nodeID, Status: "ready", Hostname: identity.Resolve(tsFQDN, osHost), Listen: tcpAddr, RunnerHash: discovery.ExpectedRunnerHash, DefaultLauncher: launchConfig.DefaultLauncher, Launchers: append([]peering.LauncherDef(nil), peerLaunchers...), Peers: currentPeers(peerManager)}
 		if boot != nil {
 			r := boot.Coordinator.RecoveryState()
 			h.SessionRecovery = &central.SessionRecovery{Status: r.Status, Expected: r.Expected, Recovered: r.Recovered}
 		}
-		if tsListener != nil {
-			d := tsListener.Diag()
+		if l := tsListener.Load(); l != nil {
+			d := l.Diag()
 			h.Tailscale = &d
 			// One classification of the same reading: is THIS host reachable
 			// over the tailnet, and if not, why (key expiry included).
@@ -457,26 +505,25 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": data})
 		})
-		// Start an interactive login on gmuxd's OWN tsnet node and return the
-		// URL. This is the recovery path `gmux remote` uses when the node's key
-		// expired: the CLI has no LocalClient, so the login must be triggered
-		// by the node's owner. Unix-socket only: it mutates node auth state and
-		// is the local operator's recovery step, never a remote capability. With
-		// no tsnet node it reports an empty URL, and `gmux remote` prints the
-		// supported fallback (restart with TS_AUTHKEY).
 		if unixOnly {
-			mux.HandleFunc("POST /v1/remote/login", func(w http.ResponseWriter, r *http.Request) {
-				if tsListener == nil {
-					writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": ""}})
-					return
+			// Start an interactive login on gmuxd's OWN tsnet node and return the
+			// URL. This is the recovery path `gmux remote` uses when the node's
+			// key expired: the CLI has no LocalClient, so the login must be
+			// triggered by the node's owner. Unix-socket only: it mutates node
+			// auth state and is the local operator's recovery step, never a remote
+			// capability. The handler refuses unless the node actually needs login
+			// (starting a login cancels a live session), reusing the same
+			// SelfReachFromDiag mapping as the CLI and `daemon status`.
+			// Resolve the listener at REQUEST time: the unix mux is registered
+			// before startup convergence creates the tsnet listener, so a node
+			// captured here would stay nil forever and the endpoint would never
+			// reach tailscale.
+			mux.HandleFunc("POST /v1/remote/login", remoteLoginHandler(func() remoteLoginNode {
+				if l := tsListener.Load(); l != nil {
+					return l
 				}
-				authURL, err := tsListener.RequestLogin(r.Context())
-				if err != nil {
-					writeError(w, http.StatusServiceUnavailable, "login_failed", err.Error())
-					return
-				}
-				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"auth_url": authURL}})
-			})
+				return nil
+			}, time.Now))
 		}
 		mux.HandleFunc("/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"adapters": []string{"pi", "shell"}, "transport": map[string]any{"kind": "websocket", "replay": true}}})
@@ -1149,8 +1196,9 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		if tsSeed == "" {
 			tsSeed = tsauth.SeedFromHostname(hostname)
 		}
-		tsListener = tsauth.Start(tsauth.Config{Hostname: tsSeed, Allow: cfg.Tailscale.Allow}, stateDir, authedHandler)
-		defer tsListener.Shutdown()
+		ts := tsauth.Start(tsauth.Config{Hostname: tsSeed, Allow: cfg.Tailscale.Allow}, stateDir, authedHandler)
+		tsListener.Store(ts)
+		defer ts.Shutdown()
 		go func(l *tsauth.Listener) {
 			select {
 			case <-l.Ready():
@@ -1160,7 +1208,7 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			convergeTailnetPeerTransport(daemonCtx, peerTransport, l.MagicDNSSuffix(), l.Transport(), l.LocalClient(), peerManager.ReconnectAll, ticker.C)
-		}(tsListener)
+		}(ts)
 	}
 	shutdownCh := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
