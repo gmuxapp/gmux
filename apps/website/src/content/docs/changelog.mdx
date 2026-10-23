@@ -38,6 +38,26 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.2.0 - 2026-10-23
+
+- **Scrolling works in fullscreen pi.** pi 1.0 runs fullscreen and handles the mouse wheel itself; gmux now restores its mouse modes when you open, switch to, or reload a session, so the wheel scrolls the transcript instead of cycling prompt history ([#538](https://github.com/gmuxapp/gmux/pull/538)).
+- **Less data on mobile.** The session stream, scrollback replay, JSON responses and the web bundle are gzip-compressed over the network (session list ~6.5× smaller, scrollback ~20×). Disable with `[http] compression = false` or `GMUXD_HTTP_COMPRESS=0` ([#533](https://github.com/gmuxapp/gmux/pull/533)).
+- **pi 1.0 compatibility.** `pi mcp …` and `pi -v` run as plain commands instead of starting an agent session ([#539](https://github.com/gmuxapp/gmux/pull/539)).
+
+### Upgrade notes
+
+- Sessions that were already running keep their old runner until restarted. To get the scrolling fix in an existing fullscreen pi session, kill and resume it (or start a new one).
+
+### Features
+- expose session lineage depth on the session wire ([#542](https://github.com/gmuxapp/gmux/pull/542))
+- **(daemon)** surface peer-link health and local tailscale key expiry ([#544](https://github.com/gmuxapp/gmux/pull/544))
+- **(daemon)** surface tailscale self-reachability in daemon status ([#546](https://github.com/gmuxapp/gmux/pull/546))
+
+### Fixes
+- **(remote)** recover an expired tsnet node key, gate remote on real reachability ([#548](https://github.com/gmuxapp/gmux/pull/548))
+- **(remote)** refuse POST /v1/remote/login unless the node needs login ([#549](https://github.com/gmuxapp/gmux/pull/549))
+
+---
 ## v2.1.2 - 2026-10-06
 
 - **Scrolling works in fullscreen pi.** pi 1.0 runs fullscreen and handles the mouse wheel itself; gmux now restores its mouse modes when you open, switch to, or reload a session, so the wheel scrolls the transcript instead of cycling prompt history ([#538](https://github.com/gmuxapp/gmux/pull/538)).
